@@ -1037,14 +1037,289 @@
                 grid-template-columns: 1fr;
                 gap: 12px;
             }
-            .page-header {
-                flex-direction: column;
-                align-items: flex-start;
-                gap: 12px;
-            }
             .page-header .btn, .page-header select {
                 width: 100%;
             }
+        }
+
+        /* Category Picker Modal Styles */
+        .category-picker-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: rgba(0, 0, 0, 0.4);
+            backdrop-filter: blur(4px);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1100;
+            animation: fadeIn 0.2s ease-out;
+        }
+
+        .category-picker-container {
+            background-color: var(--card-bg);
+            border-radius: var(--radius-card);
+            box-shadow: var(--shadow-lg);
+            width: 100%;
+            max-width: 560px;
+            height: 80vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            animation: slideUp 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        .category-picker-header {
+            padding: 20px 24px 12px;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .category-picker-search-container {
+            padding: 12px 24px;
+            border-bottom: 1px solid var(--border-color);
+            background-color: #F9FAFB;
+        }
+
+        .category-picker-search-input {
+            width: 100%;
+            padding: 10px 14px;
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-btn);
+            outline: none;
+            font-size: 0.95rem;
+            transition: var(--transition);
+        }
+
+        .category-picker-search-input:focus {
+            border-color: var(--primary);
+            box-shadow: 0 0 0 2px var(--primary-light);
+            background-color: #FFFFFF;
+        }
+
+        .category-picker-body {
+            flex: 1;
+            overflow-y: auto;
+            padding: 24px;
+            display: flex;
+            flex-direction: column;
+            gap: 24px;
+        }
+
+        .category-group {
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 20px;
+        }
+
+        .category-group:last-child {
+            border-bottom: none;
+            padding-bottom: 0;
+        }
+
+        .category-group-header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 16px;
+            cursor: pointer;
+        }
+
+        .category-group-radio {
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            border: 2px solid var(--text-light);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: var(--transition);
+        }
+
+        .category-group-radio.selected {
+            border-color: var(--primary);
+            background-color: var(--primary);
+        }
+
+        .category-group-radio-inner {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background-color: #FFFFFF;
+            display: none;
+        }
+
+        .category-group-radio.selected .category-group-radio-inner {
+            display: block;
+        }
+
+        .category-group-info {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .category-group-title {
+            font-weight: 600;
+            font-size: 1.05rem;
+            color: var(--text-main);
+        }
+
+        .category-group-desc {
+            font-size: 0.8rem;
+            color: var(--text-muted);
+        }
+
+        .subcategory-grid {
+            display: grid;
+            grid-template-columns: repeat(5, 1fr);
+            gap: 12px;
+            padding-left: 32px;
+        }
+
+        .subcategory-button {
+            background: none;
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 12px 6px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            cursor: pointer;
+            transition: var(--transition);
+            text-align: center;
+        }
+
+        .subcategory-button:hover {
+            background-color: var(--bg-color);
+            border-color: var(--text-light);
+            transform: translateY(-1px);
+        }
+
+        .subcategory-button.selected {
+            border-color: var(--primary);
+            background-color: var(--primary-light);
+        }
+
+        .subcategory-emoji-container {
+            width: 42px;
+            height: 42px;
+            border-radius: 50%;
+            background-color: #EEECFB;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.4rem;
+            transition: var(--transition);
+        }
+
+        .subcategory-button:hover .subcategory-emoji-container {
+            background-color: #FFFFFF;
+        }
+
+        .subcategory-button.selected .subcategory-emoji-container {
+            background-color: var(--primary);
+            color: #FFFFFF;
+        }
+
+        .subcategory-label {
+            font-size: 0.75rem;
+            font-weight: 500;
+            color: var(--text-muted);
+            word-break: break-word;
+            line-height: 1.2;
+        }
+
+        .subcategory-button.selected .subcategory-label {
+            color: var(--primary-hover);
+            font-weight: 600;
+        }
+
+        .category-list-item-row {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            padding: 12px;
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            cursor: pointer;
+            transition: var(--transition);
+        }
+
+        .category-list-item-row:hover {
+            background-color: var(--bg-color);
+            border-color: var(--text-light);
+        }
+
+        .category-list-item-row.selected {
+            border-color: var(--primary);
+            background-color: var(--primary-light);
+        }
+
+        .category-list-item-emoji-circle {
+            width: 44px;
+            height: 44px;
+            border-radius: 12px;
+            background-color: #EEECFB;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.5rem;
+        }
+
+        .category-list-item-row.selected .category-list-item-emoji-circle {
+            background-color: var(--primary);
+            color: #FFFFFF;
+        }
+
+        .category-select-trigger {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            width: 100%;
+            padding: 10px 14px;
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-btn);
+            background-color: #FFFFFF;
+            cursor: pointer;
+            font-size: 0.95rem;
+            color: var(--text-main);
+            transition: var(--transition);
+            outline: none;
+            text-align: left;
+        }
+
+        .category-select-trigger:hover {
+            border-color: var(--text-light);
+            background-color: var(--bg-color);
+        }
+
+        .category-select-trigger:focus {
+            border-color: var(--primary);
+            box-shadow: 0 0 0 2px var(--primary-light);
+        }
+
+        .category-trigger-content {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .category-trigger-emoji {
+            font-size: 1.2rem;
+        }
+
+        .category-trigger-label {
+            font-weight: 500;
+        }
+
+        .category-trigger-arrow {
+            color: var(--text-muted);
+            font-size: 0.8rem;
         }
     </style>
 </head>
@@ -1053,6 +1328,247 @@
 
     <!-- React App Definition (Babel JSX compile) -->
     <script type="text/babel">
+
+        const DEFAULT_CATEGORIES = [
+            // Food & Drinks
+            "Food & Drinks - Beverages 🥤",
+            "Food & Drinks - Date 👩‍❤️‍👨",
+            "Food & Drinks - Pizza 🍕",
+            "Food & Drinks - Tiffin 🍱",
+            "Food & Drinks - Others ⚙️",
+            
+            // Transport
+            "Transport - Uber 🚗",
+            "Transport - Rapido 🏍️",
+            "Transport - Auto 🛺",
+            "Transport - Cab 🚕",
+            "Transport - Train 🚄",
+            
+            // Shopping
+            "Shopping - Clothes 👕",
+            "Shopping - Footwear 👟",
+            "Shopping - Electronics 💻",
+            "Shopping - Festival 🎆",
+            "Shopping - Video games 🎮",
+            
+            // Groceries
+            "Groceries - Staples 🌾",
+            "Groceries - Vegetables 🥦",
+            "Groceries - Fruits 🍌",
+            "Groceries - Meat 🥩",
+            "Groceries - Eggs 🥚",
+            
+            // Home
+            "Home - Essentials 🧻",
+            "Home - Toiletries 🧴",
+            "Home - Decor 🖼️",
+            "Home - Cleaning 🧹",
+            "Home - Upkeep 🛠️",
+            
+            // Entertainment
+            "Entertainment - Movies 🎬",
+            "Entertainment - Shows 🎤",
+            "Entertainment - Bowling 🎳",
+            "Entertainment - Others ⚙️",
+            
+            // Events
+            "Events - Party 🥳",
+            "Events - Spiritual 🪔",
+            "Events - Wedding 💍",
+            "Events - Others ⚙️",
+            
+            // Tax
+            "Tax - Income Tax 💸",
+            "Tax - GST 📈",
+            "Tax - Property Tax 🏠",
+            "Tax - Others ⚙️",
+            
+            // Investment
+            "Investment - Mutual Funds 📈",
+            "Investment - Stocks 📊",
+            "Investment - IPO 🚀",
+            "Investment - PPF 🐖",
+            "Investment - NPS 👵",
+            
+            // Support
+            "Support - Parents 👴👵",
+            "Support - Spouse 💑",
+            "Support - Mom 👩",
+            "Support - Dad 👨",
+            "Support - Pocket Money 🪙",
+            
+            // Insurance
+            "Insurance - Health 🏥",
+            "Insurance - Vehicle 🚗",
+            "Insurance - Life 🛡️",
+            "Insurance - Electronics 📱",
+            "Insurance - Others ⚙️",
+            
+            // Subscription
+            "Subscription - Fold 🔄",
+            "Subscription - Software 💾",
+            "Subscription - News 📰",
+            "Subscription - Netflix 🎥",
+            "Subscription - Prime 📦",
+            
+            // EMI
+            "EMI - Electronics 🔌",
+            "EMI - House 🏠",
+            "EMI - Vehicle 🚗",
+            "EMI - Education 🎓",
+            "EMI - Others ⚙️",
+            
+            // Credit Bill
+            "Credit Bill - Credit card 💳",
+            "Credit Bill - Simpl ⚡",
+            "Credit Bill - Slice 🍰",
+            "Credit Bill - Lazypay ⏳",
+            "Credit Bill - Amazon Pay ➗",
+            
+            // Travel
+            "Travel - Activities 🎡",
+            "Travel - Camping ⛺",
+            "Travel - Hotel 🏨",
+            "Travel - Commute 🚌",
+            "Travel - Meals 🍽️",
+            
+            // Medical
+            "Medical - Medicines 💊",
+            "Medical - Hospital 🏥",
+            "Medical - Clinic 🩺",
+            "Medical - Dentist 🦷",
+            "Medical - Lab test 🧪",
+            
+            // Personal
+            "Personal - Self-care 🧴",
+            "Personal - Grooming ✂️",
+            "Personal - Hobbies 🎨",
+            "Personal - Vices 🚬",
+            "Personal - Therapy 🛋️",
+            
+            // Fitness
+            "Fitness - Gym 🏋️",
+            "Fitness - Badminton 🏸",
+            "Fitness - Football ⚽",
+            "Fitness - Cricket 🏏",
+            "Fitness - Classes 🧘",
+            
+            // Services
+            "Services - Laundry 🧺",
+            "Services - Tailor 🪡",
+            "Services - Courier 📦",
+            "Services - Carpenter 🪚",
+            "Services - Plumber 🔧",
+            
+            // Bill
+            "Bill - Phone 📱",
+            "Bill - Rent 🏠",
+            "Bill - Water 💧",
+            "Bill - Electricity ⚡",
+            "Bill - Gas 🔥",
+            
+            // Top-up
+            "Top-up - UPI Lite ⚡",
+            "Top-up - Paytm 📱",
+            "Top-up - Amazon 📦",
+            "Top-up - PhonePe 🟣",
+            "Top-up - Wallet 👛",
+            
+            // Children
+            "Children - Nutrition 🍎",
+            "Children - Necessities 🍼",
+            "Children - Toys 🧸",
+            "Children - Medical 🩺",
+            "Children - Care 💗",
+            
+            // Pet Care
+            "Pet Care - Food 🥩",
+            "Pet Care - Toys 🥎",
+            "Pet Care - Grooming 🚿",
+            "Pet Care - Vet 🩺",
+            "Pet Care - Others ⚙️",
+            
+            // Business
+            "Business - Salary 💵",
+            "Business - Inventory 📦",
+            "Business - Rent 🏢",
+            "Business - Logistics 🚚",
+            "Business - Software 💻",
+            
+            // Misc.
+            "Misc. - Tip 🪙",
+            "Misc. - Verification ⏱️",
+            "Misc. - Forex 💱",
+            "Misc. - Deposit 🏦",
+            "Misc. - Gift Card 🎁",
+            
+            // Single subcategories
+            "Self Transfer - Self Transfer 🔄",
+            "Savings - Savings 🐖",
+            "Gift - Gift 🎁",
+            "Lent - Lent 🤝",
+            "Donation - Donation 🤲",
+            "Hidden Charges - Hidden Charges 🕵️",
+            "Cash Withdrawal - Cash Withdrawal 🏧",
+            "Return - Return 🔙",
+            
+            // Others
+            "Others - General ⚙️"
+        ];
+
+        const CATEGORY_DESCRIPTIONS = {
+            "Business": "24/7 over 9 to 5",
+            "Misc.": "Everything else",
+            "Self Transfer": "Transfer between personal Bank accounts",
+            "Savings": "For goals and dreams",
+            "Gift": "Money gifted or spent buying gifts :)",
+            "Lent": "Money lent with expectation of return",
+            "Donation": "Contributions to charities and NGOs",
+            "Hidden Charges": "Banks' hidden subscription charges",
+            "Cash Withdrawal": "Cash taken out from ATM or Bank",
+            "Return": "Borrowed money is returned",
+            "Top-up": "Money added to online wallets",
+            "Children": "It takes a village to raise a child, & a ton of cash",
+            "Pet Care": "Money spent taking care of your snugglebug",
+            "Fitness": "Things to keep your biological machinery in tune",
+            "Services": "Professional tasks provided for a fee",
+            "Bill": "Rent, Wi-fi, electricity and other bills",
+            "Travel": "Exploration, fun and vacations!",
+            "Medical": "Medicines, Doctor consultation etc.",
+            "Personal": "Money spent on & for yourself",
+            "Subscription": "Recurring payment to online services",
+            "EMI": "Repayment of Loan",
+            "Credit Bill": "Credit Card & BNPL services settlement",
+            "Investment": "Money put towards investment",
+            "Support": "Financial support for loved ones",
+            "Insurance": "Payment towards insurance premiums",
+            "Tax": "Income tax, property tax, e.t.c",
+            "Food & Drinks": "Eating out, Swiggy, Zomato etc.",
+            "Transport": "Uber, Ola and other modes of transport",
+            "Shopping": "Clothes, shoes, furniture etc.",
+            "Groceries": "Kitchen and other household supplies",
+            "Home": "Household related expenses",
+            "Entertainment": "Movies, Concerts and other recreations",
+            "Events": "Being social while putting a dent in your bank account",
+            "Others": "General fallback category"
+        };
+
+        const renderCategoryOptions = (categoriesList) => {
+            const groups = {};
+            categoriesList.forEach(c => {
+                const parent = c.includes(" - ") ? c.split(" - ")[0] : "Others";
+                const subAndEmoji = c.includes(" - ") ? c.split(" - ")[1] : c;
+                if (!groups[parent]) groups[parent] = [];
+                groups[parent].push({ full: c, label: subAndEmoji });
+            });
+            return Object.keys(groups).map(parent => (
+                <optgroup key={parent} label={parent}>
+                    {groups[parent].map(item => (
+                        <option key={item.full} value={item.full}>{item.label}</option>
+                    ))}
+                </optgroup>
+            ));
+        };
 
         // --- global currency helper utilities ---
         const formatCurrencyVal = (val, currencyCode = "INR") => {
@@ -1341,11 +1857,8 @@
             // Set default settings if not exists
             const defaultSettings = {
                 currency: "INR",
-                categories: [
-                    "Housing", "Groceries", "Shopping", "Dining", "Transportation", 
-                    "Utilities", "Subscriptions", "Insurance", "Health", "Entertainment", 
-                    "Income", "Needs review", "Other"
-                ],
+                dateFormat: "24/Jun/2002 Sun",
+                categories: DEFAULT_CATEGORIES,
                 accounts: ["Main Checking", "Everyday Visa", "Rewards Card", "Cash"],
                 selectedPeriod: "all-time",
                 netWorthConfigured: false,
@@ -1367,6 +1880,111 @@
                     settings[key] = defaultSettings[key];
                 }
             });
+
+            // Migrate categories if needed
+            const oldDefaults = ["Housing", "Groceries", "Shopping", "Dining", "Transportation", "Utilities", "Subscriptions", "Insurance", "Health", "Entertainment", "Income", "Needs review", "Other"];
+            const isOld = !settings.categories || settings.categories.length === 0 || 
+                          settings.categories.every(c => oldDefaults.includes(c)) ||
+                          !settings.categories.some(c => c.includes(" - "));
+            
+            if (isOld) {
+                settings.categories = DEFAULT_CATEGORIES;
+                saveSettingInDB("categories", DEFAULT_CATEGORIES);
+                
+                // Migrate transactions
+                const CATEGORY_MIGRATION_MAP = {
+                    "Housing": "Home - Essentials 🧻",
+                    "Groceries": "Groceries - Staples 🌾",
+                    "Shopping": "Shopping - Clothes 👕",
+                    "Dining": "Food & Drinks - Others ⚙️",
+                    "Transportation": "Transport - Uber 🚗",
+                    "Utilities": "Bill - Electricity ⚡",
+                    "Subscriptions": "Subscription - Software 💾",
+                    "Insurance": "Insurance - Others ⚙️",
+                    "Health": "Medical - Medicines 💊",
+                    "Entertainment": "Entertainment - Movies 🎬",
+                    "Income": "Business - Salary 💵",
+                    "Needs review": "Misc. - Verification ⏱️",
+                    "Other": "Others - General ⚙️"
+                };
+
+                let txsUpdated = false;
+                const migratedTransactions = transactions.map(t => {
+                    if (CATEGORY_MIGRATION_MAP[t.category]) {
+                        txsUpdated = true;
+                        return { ...t, category: CATEGORY_MIGRATION_MAP[t.category] };
+                    }
+                    if (t.category && !t.category.includes(" - ")) {
+                        txsUpdated = true;
+                        return { ...t, category: `Others - ${t.category} ⚙️` };
+                    }
+                    return t;
+                });
+
+                if (txsUpdated) {
+                    const updateTxsInDB = async () => {
+                        const dbConn = await initDB();
+                        const updateTx = dbConn.transaction("transactions", "readwrite");
+                        const store = updateTx.objectStore("transactions");
+                        migratedTransactions.forEach(t => {
+                            store.put(t);
+                        });
+                    };
+                    updateTxsInDB();
+                    transactions.length = 0;
+                    transactions.push(...migratedTransactions);
+                }
+
+                // Migrate budgets
+                let budgetsUpdated = false;
+                const migratedBudgets = (settings.budgets || []).map(b => {
+                    if (CATEGORY_MIGRATION_MAP[b.category]) {
+                        budgetsUpdated = true;
+                        return { ...b, category: CATEGORY_MIGRATION_MAP[b.category] };
+                    }
+                    if (b.category && !b.category.includes(" - ")) {
+                        budgetsUpdated = true;
+                        return { ...b, category: `Others - ${b.category} ⚙️` };
+                    }
+                    return b;
+                });
+                if (budgetsUpdated) {
+                    settings.budgets = migratedBudgets;
+                    saveSettingInDB("budgets", migratedBudgets);
+                }
+
+                // Migrate rules
+                let rulesUpdated = false;
+                const migratedRules = rules.map(r => {
+                    let changed = false;
+                    let newThen = r.thenText;
+                    if (CATEGORY_MIGRATION_MAP[r.thenText]) {
+                        changed = true;
+                        newThen = CATEGORY_MIGRATION_MAP[r.thenText];
+                    } else if (r.thenText && !r.thenText.includes(" - ")) {
+                        changed = true;
+                        newThen = `Others - ${r.thenText} ⚙️`;
+                    }
+                    if (changed) {
+                        rulesUpdated = true;
+                        return { ...r, thenText: newThen };
+                    }
+                    return r;
+                });
+                if (rulesUpdated) {
+                    const updateRulesInDB = async () => {
+                        const dbConn = await initDB();
+                        const updateTx = dbConn.transaction("rules", "readwrite");
+                        const store = updateTx.objectStore("rules");
+                        migratedRules.forEach(r => {
+                            store.put(r);
+                        });
+                    };
+                    updateRulesInDB();
+                    rules.length = 0;
+                    rules.push(...migratedRules);
+                }
+            }
 
             // Sort transactions: newest first, capped to 5000
             const sortedTransactions = [...transactions].sort((a, b) => new Date(b.date) - new Date(a.date)).slice(0, 5000);
@@ -1572,7 +2190,7 @@
                     
                     const emptySettings = [
                         { key: "currency", value: JSON.stringify("INR") },
-                        { key: "categories", value: JSON.stringify(["Housing", "Groceries", "Shopping", "Dining", "Transportation", "Utilities", "Subscriptions", "Insurance", "Health", "Entertainment", "Income", "Needs review", "Other"]) },
+                        { key: "categories", value: JSON.stringify(DEFAULT_CATEGORIES) },
                         { key: "accounts", value: JSON.stringify(["Main Checking", "Everyday Visa", "Rewards Card", "Cash"]) },
                         { key: "selectedPeriod", value: JSON.stringify("all-time") },
                         { key: "netWorthConfigured", value: JSON.stringify(false) },
@@ -1604,6 +2222,52 @@
 
 
         // --- Normalization & Processing Utilities ---
+
+        // Format dates according to selected style
+        const formatDate = (dateStr, formatStyle = "24/Jun/2002 Sun") => {
+            if (!dateStr) return "";
+            let date;
+            const parts = String(dateStr).split(/[-/]/);
+            if (parts.length === 3 && parts[0].length === 4) {
+                const year = parseInt(parts[0], 10);
+                const month = parseInt(parts[1], 10) - 1;
+                const day = parseInt(parts[2], 10);
+                date = new Date(year, month, day);
+            } else {
+                date = new Date(dateStr);
+            }
+
+            if (isNaN(date.getTime())) return dateStr;
+
+            const monthsShort = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+            const weekdaysShort = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+            const d = String(date.getDate()).padStart(2, '0');
+            const m = String(date.getMonth() + 1).padStart(2, '0');
+            const mmm = monthsShort[date.getMonth()];
+            const yyyy = date.getFullYear();
+            const yy = String(yyyy).slice(-2);
+            const ddd = weekdaysShort[date.getDay()];
+
+            switch (formatStyle) {
+                case "24/Jun/2002 Sun":
+                    return `${d}/${mmm}/${yyyy} ${ddd}`;
+                case "MM/DD/YY":
+                    return `${m}/${d}/${yy}`;
+                case "DD/MM/YYYY":
+                    return `${d}/${m}/${yyyy}`;
+                case "YYYY-MM-DD":
+                    return `${yyyy}-${m}-${d}`;
+                case "MM/DD/YYYY":
+                    return `${m}/${d}/${yyyy}`;
+                case "DD-MM-YYYY":
+                    return `${d}-${m}-${yyyy}`;
+                case "MMM DD, YYYY":
+                    return `${mmm} ${d}, ${yyyy}`;
+                default:
+                    return `${d}/${mmm}/${yyyy} ${ddd}`;
+            }
+        };
 
         // Generates the transaction duplicate detection fingerprint
         const generateFingerprint = (t) => {
@@ -2096,15 +2760,20 @@
             const handleAddTransactions = async (newItems) => {
                 const processed = newItems.map(t => {
                     const now = new Date().toISOString();
+                    // narration is the primary description; merchant mirrors it for fingerprinting/rules
+                    const narrationVal = t.narration || t.merchant || "Unknown";
                     const item = {
                         id: t.id || crypto.randomUUID(),
                         date: t.date || now.split('T')[0],
-                        merchant: t.merchant || "Unknown",
+                        narration: narrationVal,
+                        merchant: narrationVal,
+                        refId: t.refId || "",
                         category: t.category || "Needs review",
                         amount: Math.abs(Number(t.amount || 0)),
                         type: t.type || "expense",
                         account: t.account || "Main Checking",
                         tags: Array.isArray(t.tags) ? t.tags : (t.tags ? JSON.parse(t.tags) : []),
+                        notes: t.notes || "",
                         receipt: t.receipt ? 1 : 0,
                         source: t.source || "manual",
                         createdAt: t.createdAt || now,
@@ -2935,7 +3604,7 @@
                                         <tbody>
                                             {recentTx.map(t => (
                                                 <tr key={t.id}>
-                                                    <td>{t.date}</td>
+                                                    <td>{formatDate(t.date, settings.dateFormat)}</td>
                                                     <td style={{ fontWeight: 500 }}>{t.merchant}</td>
                                                     <td>
                                                         <span className="badge" style={{ backgroundColor: '#F3F4F6', color: 'var(--text-main)' }}>
@@ -3223,6 +3892,7 @@
             const [categoryFilter, setCategoryFilter] = React.useState("all");
             const [accountFilter, setAccountFilter] = React.useState("all");
             const [txToDelete, setTxToDelete] = React.useState(null);
+            const [txToEdit, setTxToEdit] = React.useState(null);
 
             // Modal Toggles
             const [activeTagTx, setActiveTagTx] = React.useState(null); // stores active transaction being tagged
@@ -3233,9 +3903,12 @@
 
             // Filters implementation
             const filtered = transactions.filter(t => {
-                const matchesSearch = t.merchant.toLowerCase().includes(search.toLowerCase()) ||
-                                      t.category.toLowerCase().includes(search.toLowerCase()) ||
-                                      t.tags.some(tag => tag.toLowerCase().includes(search.toLowerCase()));
+                const q = search.toLowerCase();
+                const matchesSearch = t.merchant.toLowerCase().includes(q) ||
+                                      t.category.toLowerCase().includes(q) ||
+                                      (t.narration || "").toLowerCase().includes(q) ||
+                                      (t.notes || "").toLowerCase().includes(q) ||
+                                      t.tags.some(tag => tag.toLowerCase().includes(q));
 
                 const matchesType = typeFilter === "all" ? true : t.type === typeFilter;
                 const matchesCategory = categoryFilter === "all" ? true : t.category === categoryFilter;
@@ -3309,7 +3982,7 @@
                             <span className="filter-label">Category</span>
                             <select className="form-control" value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)}>
                                 <option value="all">All Categories</option>
-                                {categories.map(c => <option key={c} value={c}>{c}</option>)}
+                                {renderCategoryOptions(categories)}
                             </select>
                         </div>
 
@@ -3335,46 +4008,47 @@
                             <table className="table">
                                 <thead>
                                     <tr>
-                                        <th>Date</th>
-                                        <th>Merchant</th>
-                                        <th>Category</th>
-                                        <th>Account</th>
-                                        <th>Tags</th>
-                                        <th>Amount</th>
-                                        <th style={{ width: '60px' }}></th>
+                                        <th style={{ width: '110px' }}>Date</th>
+                                        <th>Narration</th>
+                                        <th style={{ width: '160px' }}>Category</th>
+                                        <th style={{ width: '130px' }}>Account</th>
+                                        <th style={{ width: '160px' }}>Tags</th>
+                                        <th style={{ width: '110px' }}>Amount</th>
+                                        <th style={{ width: '120px' }}>Notes</th>
+                                        <th style={{ width: '80px' }}></th>
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    {filtered.map(t => (
+                                    {filtered.map(t => {
+                                        // Parse category → parent & sub
+                                        const catParts = t.category && t.category.includes(" - ") ? t.category.split(" - ") : [t.category, ""];
+                                        const catParent = catParts[0];
+                                        const catSub = catParts.slice(1).join(" - ");
+                                        return (
                                         <tr key={t.id}>
-                                            <td>{t.date}</td>
-                                            <td style={{ fontWeight: 600 }}>
-                                                {t.merchant}
-                                                {t.receipt === 1 && (
-                                                    <span title="Receipt attached" style={{ marginLeft: '6px', color: 'var(--primary)', cursor: 'pointer' }}>
-                                                        📎
-                                                    </span>
-                                                )}
+                                            <td style={{ fontSize: '0.82rem', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{formatDate(t.date, settings.dateFormat)}</td>
+                                            <td>
+                                                <div style={{ fontWeight: 500, fontSize: '0.88rem' }}>
+                                                    {t.narration || t.merchant}
+                                                    {t.receipt === 1 && (
+                                                        <span title="Receipt attached" style={{ marginLeft: '6px', color: 'var(--primary)', cursor: 'pointer' }}>📎</span>
+                                                    )}
+                                                </div>
                                             </td>
                                             
-                                            {/* Inline category editor cell (Section 7.1) */}
+                                            {/* Category display: parent + sub on next line */}
                                             <td>
-                                                <select 
-                                                    className="select-cell-inline"
-                                                    value={t.category}
-                                                    onChange={(e) => onPatch(t.id, { category: e.target.value })}
-                                                >
-                                                    {categories.map(cat => (
-                                                        <option key={cat} value={cat}>{cat}</option>
-                                                    ))}
-                                                </select>
+                                                <div style={{ fontWeight: 500, fontSize: '0.82rem' }}>{catParent}</div>
+                                                {catSub && (
+                                                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '2px' }}>{catSub}</div>
+                                                )}
                                             </td>
 
-                                            <td>{t.account}</td>
+                                            <td style={{ fontSize: '0.82rem' }}>{t.account}</td>
                                             
                                             {/* Inline tags rendering with pills and add button (Section 7.2) */}
                                             <td>
-                                                <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center' }}>
+                                                <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '3px' }}>
                                                     {t.tags.map(tag => (
                                                         <span key={tag} className="tag-pill">
                                                             {tag}
@@ -3391,23 +4065,38 @@
                                                 </div>
                                             </td>
 
-                                            <td style={{ fontWeight: 600, color: t.type === "income" ? "var(--success)" : "var(--text-main)" }}>
+                                            <td style={{ fontWeight: 600, color: t.type === "income" ? "var(--success)" : "var(--text-main)", whiteSpace: 'nowrap' }}>
                                                 {t.type === "income" ? "+" : "-"}{formatCurrency(t.amount)}
                                             </td>
+
+                                            <td style={{ fontSize: '0.78rem', color: 'var(--text-muted)', maxWidth: '110px' }}>
+                                                <span title={t.notes || ""}>{t.notes ? (t.notes.length > 40 ? t.notes.slice(0, 40) + "…" : t.notes) : "—"}</span>
+                                            </td>
                                             
-                                            {/* Delete action */}
+                                            {/* Edit & Delete actions */}
                                             <td>
-                                                <button 
-                                                    className="btn btn-secondary btn-sm"
-                                                    style={{ border: 'none', color: 'var(--danger)' }}
-                                                    onClick={() => setTxToDelete(t)}
-                                                    title="Delete row"
-                                                >
-                                                    <Icon name="trash" />
-                                                </button>
+                                                <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+                                                    <button 
+                                                        className="btn btn-secondary btn-sm"
+                                                        style={{ border: 'none', color: 'var(--primary)', padding: '4px 6px' }}
+                                                        onClick={() => setTxToEdit(t)}
+                                                        title="Edit transaction"
+                                                    >
+                                                        ✏️
+                                                    </button>
+                                                    <button 
+                                                        className="btn btn-secondary btn-sm"
+                                                        style={{ border: 'none', color: 'var(--danger)', padding: '4px 6px' }}
+                                                        onClick={() => setTxToDelete(t)}
+                                                        title="Delete row"
+                                                    >
+                                                        <Icon name="trash" />
+                                                    </button>
+                                                </div>
                                             </td>
                                         </tr>
-                                    ))}
+                                        );
+                                    })}
                                 </tbody>
                             </table>
                         </div>
@@ -3422,6 +4111,20 @@
                             onSave={async (updatedTags) => {
                                 await onPatch(activeTagTx.id, { tags: updatedTags });
                                 setActiveTagTx(null);
+                            }}
+                        />
+                    )}
+
+                    {/* Edit Transaction Modal */}
+                    {txToEdit && (
+                        <EditTransactionModal
+                            tx={txToEdit}
+                            settings={settings}
+                            tags={tags}
+                            onClose={() => setTxToEdit(null)}
+                            onSave={async (patch) => {
+                                await onPatch(txToEdit.id, patch);
+                                setTxToEdit(null);
                             }}
                         />
                     )}
@@ -4039,7 +4742,7 @@
                                         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '14px', alignItems: 'flex-start' }}>
                                             <div>
                                                 <h4 style={{ fontWeight: 600, fontSize: '1.05rem', color: 'var(--text-main)' }}>{g.name}</h4>
-                                                {g.dueDate && <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Target Date: {g.dueDate}</span>}
+                                                {g.dueDate && <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Target Date: {formatDate(g.dueDate, settings.dateFormat)}</span>}
                                             </div>
                                             <button 
                                                 className="btn btn-secondary btn-sm"
@@ -4094,6 +4797,7 @@
                         <CreateGoalModal 
                             onClose={() => setShowCreateModal(false)}
                             onSave={handleCreateGoal}
+                            settings={settings}
                         />
                     )}
                 </div>
@@ -4420,7 +5124,10 @@
             const [liabilities, setLiabilities] = React.useState(settings.liabilitiesTotal || 0);
 
             // Lists management
-            const [newCategory, setNewCategory] = React.useState("");
+            const [selectedParentCategory, setSelectedParentCategory] = React.useState("");
+            const [customParentCategory, setCustomParentCategory] = React.useState("");
+            const [newSubcategoryName, setNewSubcategoryName] = React.useState("");
+            const [newSubcategoryEmoji, setNewSubcategoryEmoji] = React.useState("");
             const [newAccount, setNewAccount] = React.useState("");
 
             const [wipeConfirmation, setWipeConfirmation] = React.useState("");
@@ -4429,6 +5136,22 @@
             const categories = settings.categories || [];
             const accounts = settings.accounts || [];
             const dismissedCount = (settings.dismissedPatterns || []).length;
+
+            const parentCategories = React.useMemo(() => {
+                const parents = new Set();
+                categories.forEach(c => {
+                    if (c.includes(" - ")) {
+                        parents.add(c.split(" - ")[0]);
+                    }
+                });
+                return Array.from(parents);
+            }, [categories]);
+
+            React.useEffect(() => {
+                if (parentCategories.length > 0 && !selectedParentCategory) {
+                    setSelectedParentCategory(parentCategories[0]);
+                }
+            }, [parentCategories]);
 
             const handleSaveNetWorth = async (e) => {
                 e.preventDefault();
@@ -4439,17 +5162,34 @@
             };
 
             const handleAddCategory = async () => {
-                const name = newCategory.trim();
-                if (!name) return;
-                
-                if (categories.some(c => c.toLowerCase() === name.toLowerCase())) {
-                    showToast("Category name already exists", "error");
+                const parent = selectedParentCategory === "NEW" ? customParentCategory.trim() : (selectedParentCategory || "").trim();
+                const sub = newSubcategoryName.trim();
+                const emoji = newSubcategoryEmoji.trim() || "⚙️";
+
+                if (!parent) {
+                    showToast("Main Category name cannot be empty", "error");
+                    return;
+                }
+                if (!sub) {
+                    showToast("Subcategory name cannot be empty", "error");
                     return;
                 }
 
-                await updateSetting("categories", [...categories, name]);
-                setNewCategory("");
-                showToast(`Category "${name}" added`);
+                const fullName = `${parent} - ${sub} ${emoji}`;
+
+                if (categories.some(c => c.toLowerCase() === fullName.toLowerCase())) {
+                    showToast("Category and Subcategory mapping already exists", "error");
+                    return;
+                }
+
+                await updateSetting("categories", [...categories, fullName]);
+                setNewSubcategoryName("");
+                setNewSubcategoryEmoji("");
+                if (selectedParentCategory === "NEW") {
+                    setCustomParentCategory("");
+                    setSelectedParentCategory(parent);
+                }
+                showToast(`Subcategory "${sub}" added to "${parent}"`);
             };
 
             const handleRemoveCategory = async (cat) => {
@@ -4500,6 +5240,17 @@
                     showToast("Must type DELETE exactly", "error");
                 }
             };
+            const groupedCategories = React.useMemo(() => {
+                const groups = {};
+                categories.forEach(c => {
+                    const parent = c.includes(" - ") ? c.split(" - ")[0] : "Others";
+                    const subAndEmoji = c.includes(" - ") ? c.split(" - ")[1] : c;
+                    
+                    if (!groups[parent]) groups[parent] = [];
+                    groups[parent].push({ full: c, label: subAndEmoji });
+                });
+                return groups;
+            }, [categories]);
 
             return (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
@@ -4513,26 +5264,49 @@
                     {/* Section 1: Preference Settings */}
                     <div className="section-card">
                         <div className="section-card-title">Preference Settings</div>
-                        <div className="form-field" style={{ maxWidth: '320px' }}>
-                            <label style={{ display: 'block', marginBottom: '8px', fontWeight: 500 }}>System Currency</label>
-                            <select 
-                                className="form-control" 
-                                value={settings.currency || "INR"} 
-                                onChange={async (e) => {
-                                    const val = e.target.value;
-                                    await updateSetting("currency", val);
-                                    showToast(`Currency updated to ${val}`);
-                                }}
-                                style={{ width: '100%' }}
-                            >
-                                <option value="INR">Indian Rupee (₹)</option>
-                                <option value="USD">US Dollar ($)</option>
-                                <option value="EUR">Euro (€)</option>
-                                <option value="GBP">British Pound (£)</option>
-                                <option value="JPY">Japanese Yen (¥)</option>
-                                <option value="CAD">Canadian Dollar ($)</option>
-                                <option value="AUD">Australian Dollar ($)</option>
-                            </select>
+                        <div className="form-row" style={{ maxWidth: '640px' }}>
+                            <div className="form-field">
+                                <label style={{ display: 'block', marginBottom: '8px', fontWeight: 500 }}>System Currency</label>
+                                <select 
+                                    className="form-control" 
+                                    value={settings.currency || "INR"} 
+                                    onChange={async (e) => {
+                                        const val = e.target.value;
+                                        await updateSetting("currency", val);
+                                        showToast(`Currency updated to ${val}`);
+                                    }}
+                                    style={{ width: '100%' }}
+                                >
+                                    <option value="INR">Indian Rupee (₹)</option>
+                                    <option value="USD">US Dollar ($)</option>
+                                    <option value="EUR">Euro (€)</option>
+                                    <option value="GBP">British Pound (£)</option>
+                                    <option value="JPY">Japanese Yen (¥)</option>
+                                    <option value="CAD">Canadian Dollar ($)</option>
+                                    <option value="AUD">Australian Dollar ($)</option>
+                                </select>
+                            </div>
+                            <div className="form-field">
+                                <label style={{ display: 'block', marginBottom: '8px', fontWeight: 500 }}>Date Format</label>
+                                <select 
+                                    className="form-control" 
+                                    value={settings.dateFormat || "24/Jun/2002 Sun"} 
+                                    onChange={async (e) => {
+                                        const val = e.target.value;
+                                        await updateSetting("dateFormat", val);
+                                        showToast(`Date format updated`);
+                                    }}
+                                    style={{ width: '100%' }}
+                                >
+                                    <option value="24/Jun/2002 Sun">24/Jun/2002 Sun (Default)</option>
+                                    <option value="MM/DD/YY">MM/DD/YY (06/24/02)</option>
+                                    <option value="DD/MM/YYYY">DD/MM/YYYY (24/06/2002)</option>
+                                    <option value="YYYY-MM-DD">YYYY-MM-DD (2002-06-24)</option>
+                                    <option value="MM/DD/YYYY">MM/DD/YYYY (06/24/2002)</option>
+                                    <option value="DD-MM-YYYY">DD-MM-YYYY (24-06-2002)</option>
+                                    <option value="MMM DD, YYYY">MMM DD, YYYY (Jun 24, 2002)</option>
+                                </select>
+                            </div>
                         </div>
                     </div>
 
@@ -4575,28 +5349,77 @@
                         {/* Manage Categories */}
                         <div className="section-card">
                             <div className="section-card-title">Categories Setup</div>
-                            <div className="flex-row-gap" style={{ marginBottom: '16px' }}>
-                                <input 
-                                    type="text" 
-                                    className="form-control" 
-                                    placeholder="Add new category" 
-                                    value={newCategory} 
-                                    onChange={(e) => setNewCategory(e.target.value)} 
-                                    style={{ flex: 1 }}
-                                />
-                                <button className="btn btn-primary" onClick={handleAddCategory}>Add</button>
+                            
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '16px' }}>
+                                <div style={{ display: 'flex', gap: '8px' }}>
+                                    <select 
+                                        className="form-control" 
+                                        style={{ flex: 1 }}
+                                        value={selectedParentCategory}
+                                        onChange={(e) => setSelectedParentCategory(e.target.value)}
+                                    >
+                                        {parentCategories.map(p => (
+                                            <option key={p} value={p}>{p}</option>
+                                        ))}
+                                        <option value="NEW">+ Create New Main Category...</option>
+                                    </select>
+                                    
+                                    <input 
+                                        type="text" 
+                                        className="form-control" 
+                                        placeholder="Subcategory Name" 
+                                        value={newSubcategoryName} 
+                                        onChange={(e) => setNewSubcategoryName(e.target.value)}
+                                        style={{ flex: 1 }}
+                                    />
+                                </div>
+
+                                {selectedParentCategory === "NEW" && (
+                                    <input 
+                                        type="text" 
+                                        className="form-control" 
+                                        placeholder="New Main Category Name" 
+                                        value={customParentCategory} 
+                                        onChange={(e) => setCustomParentCategory(e.target.value)}
+                                    />
+                                )}
+
+                                <div style={{ display: 'flex', gap: '8px' }}>
+                                    <input 
+                                        type="text" 
+                                        className="form-control" 
+                                        placeholder="Emoji (e.g. 🍔)" 
+                                        value={newSubcategoryEmoji} 
+                                        onChange={(e) => setNewSubcategoryEmoji(e.target.value)}
+                                        style={{ width: '120px' }}
+                                    />
+                                    <button className="btn btn-primary" onClick={handleAddCategory} style={{ flex: 1 }}>
+                                        Add Subcategory
+                                    </button>
+                                </div>
                             </div>
-                            <div style={{ maxHeight: '240px', overflowY: 'auto' }}>
-                                {categories.map(c => (
-                                    <div key={c} className="settings-list-item">
-                                        <span style={{ fontWeight: 500 }}>{c}</span>
-                                        <button 
-                                            className="btn btn-secondary btn-sm"
-                                            style={{ border: 'none', color: 'var(--danger)', padding: 0 }}
-                                            onClick={() => handleRemoveCategory(c)}
-                                        >
-                                            <Icon name="trash" />
-                                        </button>
+
+                            <div style={{ maxHeight: '240px', overflowY: 'auto', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '12px' }}>
+                                {Object.keys(groupedCategories).map(parent => (
+                                    <div key={parent} style={{ marginBottom: '16px' }}>
+                                        <div style={{ fontWeight: 600, fontSize: '0.9rem', color: 'var(--text-main)', borderBottom: '1px solid var(--border-color)', paddingBottom: '4px', marginBottom: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                            <span>{parent}</span>
+                                            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{groupedCategories[parent].length} items</span>
+                                        </div>
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                            {groupedCategories[parent].map(item => (
+                                                <div key={item.full} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 8px', backgroundColor: '#F9FAFB', borderRadius: '6px', fontSize: '0.85rem' }}>
+                                                    <span>{item.label}</span>
+                                                    <button 
+                                                        className="btn btn-secondary btn-sm"
+                                                        style={{ border: 'none', color: 'var(--danger)', padding: 0, background: 'none' }}
+                                                        onClick={() => handleRemoveCategory(item.full)}
+                                                    >
+                                                        <Icon name="trash" />
+                                                    </button>
+                                                </div>
+                                            ))}
+                                        </div>
                                     </div>
                                 ))}
                             </div>
@@ -4695,15 +5518,334 @@
         };
 
 
+        // --- COMPONENT: CategoryPickerModal ---
+        const CategoryPickerModal = ({ categories, selected, onSelect, onClose }) => {
+            const [search, setSearch] = React.useState("");
+
+            // Group categories by parent
+            const grouped = React.useMemo(() => {
+                const groups = {};
+                categories.forEach(c => {
+                    const parent = c.includes(" - ") ? c.split(" - ")[0] : "Others";
+                    const subAndEmoji = c.includes(" - ") ? c.split(" - ")[1] : c;
+                    
+                    // Extract label and emoji
+                    const emojiMatch = subAndEmoji.match(/[\uD800-\uDBFF][\uDC00-\uDFFF]|\p{Emoji}/u);
+                    const emoji = emojiMatch ? emojiMatch[0] : "⚙️";
+                    const label = subAndEmoji.replace(emoji, "").trim();
+
+                    if (!groups[parent]) {
+                        groups[parent] = {
+                            name: parent,
+                            description: CATEGORY_DESCRIPTIONS[parent] || "",
+                            items: []
+                        };
+                    }
+                    groups[parent].items.push({
+                        full: c,
+                        label: label,
+                        emoji: emoji
+                    });
+                });
+                return groups;
+            }, [categories]);
+
+            // Filter groups and items based on search query
+            const filteredGroups = React.useMemo(() => {
+                const query = search.toLowerCase().trim();
+                if (!query) return Object.values(grouped);
+
+                const result = [];
+                Object.values(grouped).forEach(g => {
+                    const isParentMatch = g.name.toLowerCase().includes(query) || g.description.toLowerCase().includes(query);
+                    const matchingItems = g.items.filter(item => item.label.toLowerCase().includes(query));
+
+                    if (isParentMatch) {
+                        result.push(g);
+                    } else if (matchingItems.length > 0) {
+                        result.push({
+                            ...g,
+                            items: matchingItems
+                        });
+                    }
+                });
+                return result;
+            }, [grouped, search]);
+
+            // Helper to check if parent is selected
+            const getSelectedSubForParent = (parentName) => {
+                if (selected && selected.startsWith(parentName + " - ")) {
+                    return selected;
+                }
+                return null;
+            };
+
+            return (
+                <div className="category-picker-overlay" onClick={onClose}>
+                    <div className="category-picker-container" onClick={(e) => e.stopPropagation()}>
+                        <div className="category-picker-header">
+                            <h3 className="modal-title">Select Category</h3>
+                            <button type="button" className="modal-close-btn" onClick={onClose}>
+                                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                                </svg>
+                            </button>
+                        </div>
+                        <div className="category-picker-search-container">
+                            <input 
+                                type="text"
+                                className="category-picker-search-input"
+                                placeholder='Search categories...'
+                                value={search}
+                                onChange={(e) => setSearch(e.target.value)}
+                                autoFocus
+                            />
+                        </div>
+                        <div className="category-picker-body">
+                            {filteredGroups.length === 0 ? (
+                                <div style={{ textAlign: 'center', padding: '40px 0', color: 'var(--text-muted)' }}>
+                                    No matching categories found.
+                                </div>
+                            ) : (
+                                filteredGroups.map(g => {
+                                    const hasSubcategories = g.items.length > 1 || (g.items.length === 1 && g.items[0].label !== g.name);
+                                    
+                                    if (hasSubcategories) {
+                                        const isParentSelected = selected === g.name || (selected && selected.startsWith(g.name + " - "));
+                                        
+                                        return (
+                                            <div key={g.name} className="category-group">
+                                                <div 
+                                                    className="category-group-header"
+                                                    onClick={() => {
+                                                        const othersItem = g.items.find(item => item.label.toLowerCase() === "others") || g.items[0];
+                                                        onSelect(othersItem.full);
+                                                    }}
+                                                >
+                                                    <div className={`category-group-radio ${isParentSelected ? 'selected' : ''}`}>
+                                                        <div className="category-group-radio-inner"></div>
+                                                    </div>
+                                                    <div className="category-group-info">
+                                                        <span className="category-group-title">{g.name}</span>
+                                                        <span className="category-group-desc">{g.description}</span>
+                                                    </div>
+                                                </div>
+                                                <div className="subcategory-grid">
+                                                    {g.items.map(item => {
+                                                        const isSel = selected === item.full;
+                                                        return (
+                                                            <button 
+                                                                key={item.full}
+                                                                type="button"
+                                                                className={`subcategory-button ${isSel ? 'selected' : ''}`}
+                                                                onClick={() => onSelect(item.full)}
+                                                            >
+                                                                <div className="subcategory-emoji-container">
+                                                                    {item.emoji}
+                                                                </div>
+                                                                <span className="subcategory-label">{item.label}</span>
+                                                            </button>
+                                                        );
+                                                    })}
+                                                </div>
+                                            </div>
+                                        );
+                                    } else {
+                                        const item = g.items[0];
+                                        const isSel = selected === item.full || selected === g.name;
+                                        
+                                        return (
+                                            <div 
+                                                key={g.name} 
+                                                className={`category-list-item-row ${isSel ? 'selected' : ''}`}
+                                                onClick={() => onSelect(item.full)}
+                                            >
+                                                <div className={`category-group-radio ${isSel ? 'selected' : ''}`}>
+                                                    <div className="category-group-radio-inner"></div>
+                                                </div>
+                                                <div className="category-list-item-emoji-circle">
+                                                    {item.emoji}
+                                                </div>
+                                                <div className="category-group-info" style={{ flex: 1 }}>
+                                                    <span className="category-group-title">{g.name}</span>
+                                                    <span className="category-group-desc">{g.description}</span>
+                                                </div>
+                                            </div>
+                                        );
+                                    }
+                                })
+                            )}
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        // --- MODAL COMPONENT: Edit Transaction ---
+        const EditTransactionModal = ({ tx, onClose, onSave, settings, tags }) => {
+            const [type, setType] = React.useState(tx.type || "expense");
+            const [amount, setAmount] = React.useState(String(tx.amount || ""));
+            const [narration, setNarration] = React.useState(tx.narration || tx.merchant || "");
+            const [refId, setRefId] = React.useState(tx.refId || "");
+            const [date, setDate] = React.useState(tx.date || "");
+            const [category, setCategory] = React.useState(tx.category || "");
+            const [account, setAccount] = React.useState(tx.account || "");
+            const [selectedTags, setSelectedTags] = React.useState(tx.tags || []);
+            const [notes, setNotes] = React.useState(tx.notes || "");
+            const [showCategoryPicker, setShowCategoryPicker] = React.useState(false);
+
+            const toggleTag = (tagName) => {
+                if (selectedTags.includes(tagName)) {
+                    setSelectedTags(selectedTags.filter(t => t !== tagName));
+                } else {
+                    setSelectedTags([...selectedTags, tagName]);
+                }
+            };
+
+            const handleSubmit = (e) => {
+                e.preventDefault();
+                if (!amount || isNaN(amount) || parseFloat(amount) <= 0 || !narration) return;
+
+                onSave({
+                    type,
+                    amount: parseFloat(amount),
+                    narration,
+                    merchant: narration, // keep merchant in sync for fingerprinting/rules
+                    refId,
+                    date,
+                    category,
+                    account,
+                    tags: selectedTags,
+                    notes
+                });
+            };
+
+            return (
+                <div className="modal-overlay">
+                    <div className="modal-container">
+                        <div className="modal-header">
+                            <h3 className="modal-title">Edit Transaction</h3>
+                            <button className="modal-close-btn" onClick={onClose}>
+                                <Icon name="close" />
+                            </button>
+                        </div>
+                        <form onSubmit={handleSubmit}>
+                            <div className="modal-body">
+                                <div className="form-grid">
+
+                                    {/* Type Selection */}
+                                    <div className="segmented-control">
+                                        <button type="button" className={`segmented-btn ${type === "expense" ? "active expense" : ""}`} onClick={() => setType("expense")}>Expense</button>
+                                        <button type="button" className={`segmented-btn ${type === "income" ? "active income" : ""}`} onClick={() => setType("income")}>Income</button>
+                                    </div>
+
+                                    {/* Amount & Date */}
+                                    <div className="form-row">
+                                        <div className="form-field">
+                                            <label>Amount ({getCurrencySymbol(settings?.currency || "INR")})</label>
+                                            <input type="number" step="0.01" className="form-control" placeholder="0.00" value={amount} onChange={(e) => setAmount(e.target.value)} required />
+                                        </div>
+                                        <div className="form-field">
+                                            <label>Date</label>
+                                            <input type="date" className="form-control" value={date} onChange={(e) => setDate(e.target.value)} required />
+                                        </div>
+                                    </div>
+
+                                    {/* Narration (primary description) */}
+                                    <div className="form-field">
+                                        <label>Narration</label>
+                                        <input type="text" className="form-control" placeholder="e.g. UPI THANNERU VENKATA NA..." value={narration} onChange={(e) => setNarration(e.target.value)} required />
+                                    </div>
+
+                                    {/* Ref ID (shown in form, hidden in ledger) */}
+                                    <div className="form-field">
+                                        <label>Ref ID <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>(hidden in ledger)</span></label>
+                                        <input type="text" className="form-control" placeholder="e.g. TXN1234567" value={refId} onChange={(e) => setRefId(e.target.value)} />
+                                    </div>
+
+                                    {/* Category & Account */}
+                                    <div className="form-row">
+                                        <div className="form-field">
+                                            <label>Category</label>
+                                            <button type="button" className="category-select-trigger" onClick={() => setShowCategoryPicker(true)}>
+                                                <div className="category-trigger-content">
+                                                    {(() => {
+                                                        const parent = category.includes(" - ") ? category.split(" - ")[0] : "";
+                                                        const subAndEmoji = category.includes(" - ") ? category.split(" - ")[1] : category;
+                                                        const emojiMatch = subAndEmoji.match(/[\uD800-\uDBFF][\uDC00-\uDFFF]|\p{Emoji}/u);
+                                                        const emoji = emojiMatch ? emojiMatch[0] : "⚙️";
+                                                        const label = subAndEmoji.replace(emoji, "").trim();
+                                                        return (<><span className="category-trigger-emoji">{emoji}</span><span className="category-trigger-label">{parent ? `${parent} › ${label}` : label}</span></>);
+                                                    })()}
+                                                </div>
+                                                <span className="category-trigger-arrow">▼</span>
+                                            </button>
+                                        </div>
+                                        <div className="form-field">
+                                            <label>Account</label>
+                                            <select className="form-control" value={account} onChange={(e) => setAccount(e.target.value)}>
+                                                {settings.accounts?.map(a => <option key={a} value={a}>{a}</option>)}
+                                            </select>
+                                        </div>
+                                    </div>
+
+                                    {/* Tags */}
+                                    <div className="form-field">
+                                        <label>Tags</label>
+                                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', maxHeight: '80px', overflowY: 'auto', padding: '6px', border: '1px solid var(--border-color)', borderRadius: '6px' }}>
+                                            {tags.length === 0 ? (
+                                                <span style={{ fontSize: '0.8rem', color: 'var(--text-light)' }}>No tags declared</span>
+                                            ) : (
+                                                tags.map(t => (
+                                                    <span key={t.name} onClick={() => toggleTag(t.name)} style={{ cursor: 'pointer', padding: '2px 8px', borderRadius: '4px', fontSize: '0.75rem', fontWeight: 500, backgroundColor: selectedTags.includes(t.name) ? 'var(--primary)' : 'var(--bg-color)', color: selectedTags.includes(t.name) ? '#FFFFFF' : 'var(--text-main)', border: '1px solid var(--border-color)' }}>
+                                                        {t.name}
+                                                    </span>
+                                                ))
+                                            )}
+                                        </div>
+                                    </div>
+
+                                    {/* Notes */}
+                                    <div className="form-field">
+                                        <label>Notes</label>
+                                        <textarea className="form-control" placeholder="Additional notes or context..." value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} style={{ resize: 'vertical', minHeight: '60px' }} />
+                                    </div>
+
+                                </div>
+                            </div>
+                            <div className="modal-footer">
+                                <button type="button" className="btn btn-secondary" onClick={onClose}>Cancel</button>
+                                <button type="submit" className="btn btn-primary">Save Changes</button>
+                            </div>
+                        </form>
+
+                        {showCategoryPicker && (
+                            <CategoryPickerModal
+                                categories={settings.categories || []}
+                                selected={category}
+                                onSelect={(cat) => { setCategory(cat); setShowCategoryPicker(false); }}
+                                onClose={() => setShowCategoryPicker(false)}
+                            />
+                        )}
+                    </div>
+                </div>
+            );
+        };
+
+
         // --- MODAL COMPONENT: Manual Add entry Form ---
         const AddEntryModal = ({ onClose, onSave, settings, tags, onAddTag }) => {
             const [type, setType] = React.useState("expense");
             const [amount, setAmount] = React.useState("");
-            const [merchant, setMerchant] = React.useState("");
+            const [narration, setNarration] = React.useState("");
+            const [refId, setRefId] = React.useState("");
             const [date, setDate] = React.useState(new Date().toISOString().split('T')[0]);
             const [category, setCategory] = React.useState(settings.categories?.[0] || "Needs review");
             const [account, setAccount] = React.useState(settings.accounts?.[0] || "Main Checking");
             const [selectedTags, setSelectedTags] = React.useState([]);
+            const [notes, setNotes] = React.useState("");
+            const [showCategoryPicker, setShowCategoryPicker] = React.useState(false);
 
             // Tag creations
             const [newTagName, setNewTagName] = React.useState("");
@@ -4732,16 +5874,19 @@
 
             const handleSubmit = (e) => {
                 e.preventDefault();
-                if (!amount || isNaN(amount) || parseFloat(amount) <= 0 || !merchant) return;
+                if (!amount || isNaN(amount) || parseFloat(amount) <= 0 || !narration) return;
 
                 onSave({
                     type,
                     amount: parseFloat(amount),
-                    merchant,
+                    narration,
+                    merchant: narration, // keep merchant in sync for fingerprinting/rules
+                    refId,
                     date,
                     category,
                     account,
                     tags: selectedTags,
+                    notes,
                     source: "manual"
                 });
             };
@@ -4780,7 +5925,7 @@
                                     {/* Amount & Date */}
                                     <div className="form-row">
                                         <div className="form-field">
-                                            <label>Amount ($)</label>
+                                            <label>Amount ({getCurrencySymbol(settings?.currency || "INR")})</label>
                                             <input 
                                                 type="number" 
                                                 step="0.01" 
@@ -4803,16 +5948,28 @@
                                         </div>
                                     </div>
 
-                                    {/* Merchant */}
+                                    {/* Narration (primary description) */}
                                     <div className="form-field">
-                                        <label>Merchant / Payee</label>
+                                        <label>Narration</label>
                                         <input 
                                             type="text" 
                                             className="form-control" 
-                                            placeholder="e.g. Netflix, Trader Joe's"
-                                            value={merchant}
-                                            onChange={(e) => setMerchant(e.target.value)}
+                                            placeholder="e.g. UPI THANNERU VENKATA NA..."
+                                            value={narration}
+                                            onChange={(e) => setNarration(e.target.value)}
                                             required 
+                                        />
+                                    </div>
+
+                                    {/* Ref ID */}
+                                    <div className="form-field">
+                                        <label>Ref ID <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>(hidden in ledger)</span></label>
+                                        <input 
+                                            type="text" 
+                                            className="form-control" 
+                                            placeholder="e.g. TXN1234567"
+                                            value={refId}
+                                            onChange={(e) => setRefId(e.target.value)}
                                         />
                                     </div>
 
@@ -4820,9 +5977,30 @@
                                     <div className="form-row">
                                         <div className="form-field">
                                             <label>Category</label>
-                                            <select className="form-control" value={category} onChange={(e) => setCategory(e.target.value)}>
-                                                {settings.categories?.map(c => <option key={c} value={c}>{c}</option>)}
-                                            </select>
+                                            <button 
+                                                type="button" 
+                                                className="category-select-trigger"
+                                                onClick={() => setShowCategoryPicker(true)}
+                                            >
+                                                <div className="category-trigger-content">
+                                                    {(() => {
+                                                        const parent = category.includes(" - ") ? category.split(" - ")[0] : "";
+                                                        const subAndEmoji = category.includes(" - ") ? category.split(" - ")[1] : category;
+                                                        const emojiMatch = subAndEmoji.match(/[\uD800-\uDBFF][\uDC00-\uDFFF]|\p{Emoji}/u);
+                                                        const emoji = emojiMatch ? emojiMatch[0] : "⚙️";
+                                                        const label = subAndEmoji.replace(emoji, "").trim();
+                                                        return (
+                                                            <>
+                                                                <span className="category-trigger-emoji">{emoji}</span>
+                                                                <span className="category-trigger-label">
+                                                                    {parent ? `${parent} › ${label}` : label}
+                                                                </span>
+                                                            </>
+                                                        );
+                                                    })()}
+                                                </div>
+                                                <span className="category-trigger-arrow">▼</span>
+                                            </button>
                                         </div>
                                         <div className="form-field">
                                             <label>Account</label>
@@ -4873,6 +6051,19 @@
                                         </div>
                                     </div>
 
+                                    {/* Notes */}
+                                    <div className="form-field">
+                                        <label>Notes</label>
+                                        <textarea 
+                                            className="form-control"
+                                            placeholder="Additional notes or context..."
+                                            value={notes}
+                                            onChange={(e) => setNotes(e.target.value)}
+                                            rows={2}
+                                            style={{ resize: 'vertical', minHeight: '60px' }}
+                                        />
+                                    </div>
+
                                 </div>
                             </div>
                             <div className="modal-footer">
@@ -4881,6 +6072,18 @@
                             </div>
                         </form>
                     </div>
+
+                    {showCategoryPicker && (
+                        <CategoryPickerModal 
+                            categories={settings.categories || []}
+                            selected={category}
+                            onSelect={(cat) => {
+                                setCategory(cat);
+                                setShowCategoryPicker(false);
+                            }}
+                            onClose={() => setShowCategoryPicker(false)}
+                        />
+                    )}
                 </div>
             );
         };
@@ -5063,7 +6266,7 @@
                                                     />
                                                 </th>
                                                 <th style={{ width: '140px' }}>Date</th>
-                                                <th>Merchant</th>
+                                                <th>Narration</th>
                                                 <th style={{ width: '160px' }}>Category</th>
                                                 <th style={{ width: '120px' }}>Amount</th>
                                                 <th style={{ width: '120px' }}>Type</th>
@@ -5094,8 +6297,8 @@
                                                             type="text" 
                                                             className="form-control" 
                                                             style={{ height: '32px', fontSize: '0.85rem', width: '100%', padding: '4px 8px' }}
-                                                            value={item.merchant} 
-                                                            onChange={(e) => handleFieldChange(item.tempId, "merchant", e.target.value)}
+                                                            value={item.narration || item.merchant} 
+                                                            onChange={(e) => { handleFieldChange(item.tempId, "narration", e.target.value); handleFieldChange(item.tempId, "merchant", e.target.value); }}
                                                         />
                                                     </td>
                                                     <td>
@@ -5105,7 +6308,7 @@
                                                             value={item.category} 
                                                             onChange={(e) => handleFieldChange(item.tempId, "category", e.target.value)}
                                                         >
-                                                            {categories.map(cat => <option key={cat} value={cat}>{cat}</option>)}
+                                                            {renderCategoryOptions(categories)}
                                                         </select>
                                                     </td>
                                                     <td>
@@ -5421,12 +6624,12 @@
                                     <div className="form-field">
                                         <label>Category Envelope</label>
                                         <select className="form-control" value={category} onChange={(e) => setCategory(e.target.value)}>
-                                            {categories.map(c => <option key={c} value={c}>{c}</option>)}
+                                            {renderCategoryOptions(categories)}
                                         </select>
                                     </div>
 
                                     <div className="form-field">
-                                        <label>Monthly Limit ($)</label>
+                                        <label>Monthly Limit ({getCurrencySymbol(settings?.currency || "INR")})</label>
                                         <input 
                                             type="number" 
                                             step="1" 
@@ -5451,7 +6654,7 @@
 
 
         // --- MODAL COMPONENT: Create Goal Modal ---
-        const CreateGoalModal = ({ onClose, onSave }) => {
+        const CreateGoalModal = ({ onClose, onSave, settings }) => {
             const [name, setName] = React.useState("");
             const [target, setTarget] = React.useState("");
             const [current, setCurrent] = React.useState("");
@@ -5497,7 +6700,7 @@
 
                                     <div className="form-row">
                                         <div className="form-field">
-                                            <label>Target Amount ($)</label>
+                                            <label>Target Amount ({getCurrencySymbol(settings?.currency || "INR")})</label>
                                             <input 
                                                 type="number" 
                                                 className="form-control" 
@@ -5508,7 +6711,7 @@
                                             />
                                         </div>
                                         <div className="form-field">
-                                            <label>Current Capital ($)</label>
+                                            <label>Current Capital ({getCurrencySymbol(settings?.currency || "INR")})</label>
                                             <input 
                                                 type="number" 
                                                 className="form-control" 
@@ -5597,7 +6800,7 @@
                                     <div className="form-field">
                                         <label>Then Categorize As:</label>
                                         <select className="form-control" value={thenText} onChange={(e) => setThenText(e.target.value)}>
-                                            {categories.map(c => <option key={c} value={c}>{c}</option>)}
+                                            {renderCategoryOptions(categories)}
                                         </select>
                                     </div>
                                 </div>
