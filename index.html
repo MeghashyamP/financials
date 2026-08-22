@@ -2118,7 +2118,6 @@
                 liabilitiesTotal: 0,
                 goals: [],
                 budgets: [],
-                subscriptions: [],
                 recurring: [],
                 networthItems: [],
                 forecast: { incomeOverride: null, expenseOverride: null, note: "" },
@@ -2452,7 +2451,6 @@
                         { key: "liabilitiesTotal", value: JSON.stringify(0) },
                         { key: "goals", value: JSON.stringify([]) },
                         { key: "budgets", value: JSON.stringify([]) },
-                        { key: "subscriptions", value: JSON.stringify([]) },
                         { key: "recurring", value: JSON.stringify([]) },
                         { key: "networthItems", value: JSON.stringify([]) },
                         { key: "forecast", value: JSON.stringify({ incomeOverride: null, expenseOverride: null, note: "" }) },
@@ -3518,6 +3516,220 @@
             };
         };
 
+        const getOccurrencesInPeriod = (item, pStartStr, pEndStr) => {
+            if (!pStartStr || !pEndStr) return 0;
+
+            const pStart = new Date(pStartStr + "T00:00:00");
+            const pEnd = new Date(pEndStr + "T23:59:59");
+            if (isNaN(pStart.getTime()) || isNaN(pEnd.getTime()) || pEnd < pStart) return 0;
+
+            const effectiveStart = item.startDate ? new Date(item.startDate + "T00:00:00") : null;
+            const itemEnd = item.endDate ? new Date(item.endDate + "T23:59:59") : null;
+
+            if (itemEnd && itemEnd < pStart) return 0;
+            if (effectiveStart && effectiveStart > pEnd) return 0;
+
+            const cadence = item.cadence || "monthly";
+            const startStr = item.startDate || item.nextDate || pStartStr;
+            const itemStart = new Date(startStr + "T00:00:00");
+            const validAnchor = !isNaN(itemStart.getTime()) ? itemStart : pStart;
+
+            if (cadence === "once") {
+                if (validAnchor >= pStart && validAnchor <= pEnd) {
+                    if ((!effectiveStart || validAnchor >= effectiveStart) && (!itemEnd || validAnchor <= itemEnd)) return 1;
+                }
+                return 0;
+            }
+
+            if (cadence === "custom_days") {
+                if (!item.customDays) return 0;
+                const datesList = typeof item.customDays === "string"
+                    ? item.customDays.split(",").map(s => s.trim()).filter(Boolean)
+                    : (Array.isArray(item.customDays) ? item.customDays : []);
+                let count = 0;
+                for (const dStr of datesList) {
+                    const d = new Date(dStr + "T00:00:00");
+                    if (!isNaN(d.getTime())) {
+                        if (d >= pStart && d <= pEnd && (!effectiveStart || d >= effectiveStart) && (!itemEnd || d <= itemEnd)) {
+                            count++;
+                        }
+                    }
+                }
+                return count;
+            }
+
+            let count = 0;
+
+            if (cadence === "monthly") {
+                const targetDay = validAnchor.getDate();
+                let currYear = pStart.getFullYear();
+                let currMonth = pStart.getMonth();
+
+                while (true) {
+                    const maxDays = new Date(currYear, currMonth + 1, 0).getDate();
+                    const actualDay = Math.min(targetDay, maxDays);
+                    const occDate = new Date(currYear, currMonth, actualDay, 12, 0, 0);
+
+                    if (occDate > pEnd) break;
+
+                    if (occDate >= pStart && occDate <= pEnd && (!effectiveStart || occDate >= effectiveStart) && (!itemEnd || occDate <= itemEnd)) {
+                        count++;
+                    }
+
+                    currMonth++;
+                    if (currMonth > 11) {
+                        currMonth = 0;
+                        currYear++;
+                    }
+                }
+                return count;
+            }
+
+            if (cadence === "yearly" || cadence === "annual") {
+                const targetMonth = validAnchor.getMonth();
+                const targetDay = validAnchor.getDate();
+                let currYear = pStart.getFullYear();
+
+                while (true) {
+                    const maxDays = new Date(currYear, targetMonth + 1, 0).getDate();
+                    const actualDay = Math.min(targetDay, maxDays);
+                    const occDate = new Date(currYear, targetMonth, actualDay, 12, 0, 0);
+
+                    if (occDate > pEnd) break;
+
+                    if (occDate >= pStart && occDate <= pEnd && (!effectiveStart || occDate >= effectiveStart) && (!itemEnd || occDate <= itemEnd)) {
+                        count++;
+                    }
+
+                    currYear++;
+                }
+                return count;
+            }
+
+            if (cadence === "quarterly") {
+                let curr = new Date(validAnchor.getTime());
+                if (curr > pStart) {
+                    while (curr > pStart) {
+                        const prevQ = new Date(curr.getTime());
+                        prevQ.setMonth(prevQ.getMonth() - 3);
+                        if (prevQ >= pStart) {
+                            curr = prevQ;
+                        } else {
+                            break;
+                        }
+                    }
+                } else if (curr < pStart) {
+                    while (curr < pStart) {
+                        curr.setMonth(curr.getMonth() + 3);
+                    }
+                    curr.setMonth(curr.getMonth() - 3);
+                }
+
+                while (true) {
+                    const occDate = new Date(curr.getFullYear(), curr.getMonth(), curr.getDate(), 12, 0, 0);
+                    if (occDate > pEnd) break;
+
+                    if (occDate >= pStart && occDate <= pEnd && (!effectiveStart || occDate >= effectiveStart) && (!itemEnd || occDate <= itemEnd)) {
+                        count++;
+                    }
+
+                    curr.setMonth(curr.getMonth() + 3);
+                }
+                return count;
+            }
+
+            if (cadence === "weekly" || cadence === "biweekly" || cadence === "custom_interval") {
+                let stepDays = 7;
+                if (cadence === "biweekly") stepDays = 14;
+                else if (cadence === "custom_interval") stepDays = Math.max(1, Number(item.customIntervalDays) || 14);
+
+                let curr = new Date(validAnchor.getTime());
+                if (curr < pStart) {
+                    const diffMs = pStart.getTime() - curr.getTime();
+                    const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+                    const stepsToSkip = Math.floor(diffDays / stepDays);
+                    if (stepsToSkip > 0) {
+                        curr.setDate(curr.getDate() + (stepsToSkip * stepDays));
+                    }
+                } else if (curr > pStart) {
+                    const diffMs = curr.getTime() - pStart.getTime();
+                    const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+                    const stepsBack = Math.ceil(diffDays / stepDays);
+                    curr.setDate(curr.getDate() - (stepsBack * stepDays));
+                }
+
+                while (true) {
+                    const occDate = new Date(curr.getFullYear(), curr.getMonth(), curr.getDate(), 12, 0, 0);
+                    if (occDate > pEnd) break;
+
+                    if (occDate >= pStart && occDate <= pEnd && (!effectiveStart || occDate >= effectiveStart) && (!itemEnd || occDate <= itemEnd)) {
+                        count++;
+                    }
+
+                    curr.setDate(curr.getDate() + stepDays);
+                }
+                return count;
+            }
+
+            if (cadence === "weekly_days") {
+                const dayMap = { "Sun": 0, "Mon": 1, "Tue": 2, "Wed": 3, "Thu": 4, "Fri": 5, "Sat": 6 };
+                const targetDays = (item.weeklyDays || ["Mon"]).map(d => dayMap[d]).filter(d => d !== undefined);
+                let curr = new Date(pStart.getTime());
+                curr.setHours(12, 0, 0, 0);
+
+                while (curr <= pEnd) {
+                    if (targetDays.includes(curr.getDay())) {
+                        if ((!effectiveStart || curr >= effectiveStart) && (!itemEnd || curr <= itemEnd)) {
+                            count++;
+                        }
+                    }
+                    curr.setDate(curr.getDate() + 1);
+                }
+                return count;
+            }
+
+            if (cadence === "monthly_days") {
+                const days = (item.monthlyDays || "1").split(",").map(s => parseInt(s.trim(), 10)).filter(n => !isNaN(n) && n >= 1 && n <= 31);
+                let currYear = pStart.getFullYear();
+                let currMonth = pStart.getMonth();
+
+                while (true) {
+                    const maxDaysInMonth = new Date(currYear, currMonth + 1, 0).getDate();
+                    let monthDone = false;
+                    for (const d of days) {
+                        const actualDay = Math.min(d, maxDaysInMonth);
+                        const occDate = new Date(currYear, currMonth, actualDay, 12, 0, 0);
+
+                        if (occDate > pEnd) { monthDone = true; break; }
+
+                        if (occDate >= pStart && occDate <= pEnd && (!effectiveStart || occDate >= effectiveStart) && (!itemEnd || occDate <= itemEnd)) {
+                            count++;
+                        }
+                    }
+                    if (monthDone) break;
+
+                    currMonth++;
+                    if (currMonth > 11) {
+                        currMonth = 0;
+                        currYear++;
+                    }
+                }
+                return count;
+            }
+
+            // Default monthly fallback
+            let curr = new Date(pStart.getTime());
+            while (curr <= pEnd) {
+                const occDate = new Date(curr.getFullYear(), curr.getMonth(), curr.getDate(), 12, 0, 0);
+                if (occDate > pEnd) break;
+                if ((!effectiveStart || occDate >= effectiveStart) && (!itemEnd || occDate <= itemEnd)) {
+                    count++;
+                }
+                curr.setMonth(curr.getMonth() + 1);
+            }
+            return count;
+        };
+
         // --- React Dashboard Application ---
         const App = () => {
             // Main unified states
@@ -3535,6 +3747,7 @@
             const [calcCustomStart, setCalcCustomStart] = React.useState("");
             const [calcCustomEnd, setCalcCustomEnd] = React.useState("");
             const [networthSectionFilter, setNetworthSectionFilter] = React.useState("all");
+            const [networthCollapsed, setNetworthCollapsed] = React.useState({});
 
             // Calculate All Time min and max transaction dates
             const allTimeRange = React.useMemo(() => {
@@ -3622,10 +3835,9 @@
             const getPageTitle = (page) => {
                 switch (page) {
                     case "dashboard": return "Financials Dashboard";
-                    case "transactions": return "Transactions Ledger";
+                    case "transactions": return "";
                     case "networth": return "Net Worth";
                     case "recurring": return "Recurring";
-                    case "subscriptions": return "Active Subscriptions";
                     case "budgets": return "Monthly Budgets";
                     case "goals": return "Savings Goals";
                     case "documents": return "Document Vault";
@@ -3638,10 +3850,9 @@
             const getPageDescription = (page) => {
                 switch (page) {
                     case "dashboard": return "Self-contained personal wealth control panel";
-                    case "transactions": return "Register, search, filter and organize your cash flows";
+                    case "transactions": return "";
                     case "networth": return "Capital assets, investment portfolios, real estate & debt principal owed";
-                    case "recurring": return "Periodic bills, EMIs, SIPs, subscriptions, regular income and scheduled commitments";
-                    case "subscriptions": return "Keep track of streaming, software, gyms, and renewals";
+                    case "recurring": return "Periodic bills, EMIs, SIPs, regular income and scheduled commitments";
                     case "budgets": return "Configure envelopes and track your current spending limits";
                     case "goals": return "Establish and trace your long term capital targets";
                     case "documents": return "Upload and store your bank statements, receipts, and invoices";
@@ -3656,6 +3867,14 @@
             const [showImportModal, setShowImportModal] = React.useState(false);
             const [showSyncModal, setShowSyncModal] = React.useState(false);
             const [subpageActionSignal, setSubpageActionSignal] = React.useState(0);
+
+            // Transactions search and filter states in topbar
+            const [txSearch, setTxSearch] = React.useState("");
+            const [txTypeFilter, setTxTypeFilter] = React.useState("all");
+            const [txCategoryFilter, setTxCategoryFilter] = React.useState("all");
+            const [txAccountFilter, setTxAccountFilter] = React.useState("all");
+            const [txCustomFromDate, setTxCustomFromDate] = React.useState("");
+            const [txCustomToDate, setTxCustomToDate] = React.useState("");
 
             // Fetch unified state on mount and when updates occur
             const loadState = async () => {
@@ -3842,24 +4061,20 @@
             };
 
             // Apply "Link to Ledger" selections made in the PDF review table: advances the linked
-            // Recurring / Subscription / Net Worth item's next due date so the ledger stays live.
+            // Recurring / Net Worth item's next due date so the ledger stays live.
             const applyLedgerLinks = async (selectedTransactions) => {
                 const linked = selectedTransactions.filter(t => t.linkTo);
                 if (linked.length === 0) return;
 
                 let recurringList = settings.recurring || [];
-                let subsList = settings.subscriptions || [];
                 let networthList = settings.networthItems || [];
-                let recurringChanged = false, subsChanged = false, networthChanged = false;
+                let recurringChanged = false, networthChanged = false;
 
                 linked.forEach(t => {
                     const [kind, id] = t.linkTo.split(":");
                     if (kind === "recurring") {
                         recurringList = recurringList.map(r => r.id === id ? { ...r, nextDate: advanceDateByCadence(t.date, r.cadence) } : r);
                         recurringChanged = true;
-                    } else if (kind === "subscription") {
-                        subsList = subsList.map(s => s.id === id ? { ...s, nextDate: advanceDateByCadence(t.date, s.cadence) } : s);
-                        subsChanged = true;
                     } else if (kind === "networth") {
                         networthList = networthList.map(it => {
                             if (it.id !== id) return it;
@@ -3875,7 +4090,6 @@
                 });
 
                 if (recurringChanged) await updateSetting("recurring", recurringList);
-                if (subsChanged) await updateSetting("subscriptions", subsList);
                 if (networthChanged) await updateSetting("networthItems", networthList);
             };
 
@@ -4194,7 +4408,6 @@
                                 { id: "transactions", label: "Transactions", icon: "transactions" },
                                 { id: "networth", label: "Net Worth", icon: "networth" },
                                 { id: "recurring", label: "Recurring", icon: "recurring" },
-                                { id: "subscriptions", label: "Subscriptions", icon: "subscriptions" },
                                 { id: "budgets", label: "Budgets", icon: "budgets" },
                                 { id: "goals", label: "Goals", icon: "goals" },
                                 { id: "documents", label: "Documents", icon: "documents" },
@@ -4243,7 +4456,7 @@
                                     <Icon name="plus" />
                                 </button>
                             )}
-                            {["networth", "recurring", "subscriptions", "budgets", "goals", "rules"].includes(activePage) && (
+                            {["networth", "recurring", "budgets", "goals", "rules"].includes(activePage) && (
                                 <button className="btn btn-primary btn-sm" onClick={() => setSubpageActionSignal(s => s + 1)} title="Add">
                                     <Icon name="plus" />
                                 </button>
@@ -4259,7 +4472,6 @@
                                 { id: "transactions", label: "Txns", icon: "transactions" },
                                 { id: "networth", label: "Net Worth", icon: "networth" },
                                 { id: "recurring", label: "Recurring", icon: "recurring" },
-                                { id: "subscriptions", label: "Subs", icon: "subscriptions" },
                                 { id: "budgets", label: "Budgets", icon: "budgets" },
                                 { id: "goals", label: "Goals", icon: "goals" },
                                 { id: "documents", label: "Docs", icon: "documents" },
@@ -4282,52 +4494,331 @@
                     <div className={`main-wrapper ${isSidebarCollapsed ? "sidebar-collapsed" : ""}`}>
 
                         {/* Header top sticky bar - Desktop */}
-                        <header className="topbar" style={activePage === "networth" ? { height: '76px', minHeight: '76px', boxSizing: 'border-box', padding: '10px 32px' } : {}}>
-                            {activePage === "networth" ? (
-                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '12px', width: '100%', alignItems: 'center' }}>
-                                    {(() => {
-                                        const nwItems = (settings.networthItems || []).filter(it => it.includeInNetWorth !== false);
-                                        const nwCash = nwItems
-                                            .filter(it => (NET_WORTH_GROUPS.find(g => g.key === it.category) || {}).kind === "balance")
-                                            .reduce((s, it) => s + Number(it.value || 0), 0);
-                                        const nwAssets = nwItems
-                                            .filter(it => (NET_WORTH_GROUPS.find(g => g.key === it.category) || {}).kind === "asset")
-                                            .reduce((s, it) => s + Number(it.value || 0), 0);
-                                        const nwInvestments = nwItems
-                                            .filter(it => (NET_WORTH_GROUPS.find(g => g.key === it.category) || {}).kind === "investment")
-                                            .reduce((s, it) => s + Number(it.value || 0), 0);
-                                        const nwLiabilities = nwItems
-                                            .filter(it => (NET_WORTH_GROUPS.find(g => g.key === it.category) || {}).kind === "liability")
-                                            .reduce((s, it) => s + Math.abs(Number(it.value || 0)), 0);
-                                        const nwTotal = nwCash + nwAssets + nwInvestments - nwLiabilities;
-                                        const fmt = (v) => formatCurrencyVal(v, settings.currency || "INR");
+                        <header className="topbar" style={["transactions", "dashboard", "recurring", "networth"].includes(activePage) ? { height: 'auto', minHeight: '115px', boxSizing: 'border-box', padding: '12px 32px' } : {}}>
+                            {activePage === "dashboard" && (
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', width: '100%' }}>
+                                    {/* Line 1: All the tiles */}
+                                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '12px', width: '100%', alignItems: 'center' }}>
+                                        {(() => {
+                                            const expenseTx = filteredTx.filter(t => t.type === "expense");
+                                            const incomeTx = filteredTx.filter(t => t.type === "income");
 
-                                        const tiles = [
-                                            { id: 'all', title: 'Net Worth', val: nwTotal, icon: 'networth', color: 'var(--text-main)', border: 'var(--primary)', bg: 'rgba(99, 102, 241, 0.04)', shadow: 'rgba(99, 102, 241, 0.15)', iconClass: 'primary' },
-                                            { id: 'assets', title: 'Fixed Assets', val: nwAssets, icon: 'home', color: 'var(--primary)', border: 'var(--primary)', bg: 'rgba(99, 102, 241, 0.04)', shadow: 'rgba(99, 102, 241, 0.15)', iconClass: 'primary' },
-                                            { id: 'investments', title: 'Investments', val: nwInvestments, icon: 'goals', color: 'var(--info)', border: 'var(--info)', bg: 'rgba(59, 130, 246, 0.04)', shadow: 'rgba(59, 130, 246, 0.15)', iconClass: 'info' },
-                                            { id: 'cash', title: 'Bank & Cash', val: nwCash, icon: 'arrowDown', color: 'var(--success)', border: 'var(--success)', bg: 'rgba(16, 185, 129, 0.04)', shadow: 'rgba(16, 185, 129, 0.15)', iconClass: 'success' },
-                                            { id: 'liabilities', title: 'Liabilities', val: nwLiabilities, icon: 'arrowUp', color: 'var(--danger)', border: 'var(--danger)', bg: 'rgba(239, 68, 68, 0.04)', shadow: 'rgba(239, 68, 68, 0.15)', iconClass: 'warning' }
-                                        ];
+                                            const networthItems = settings.networthItems || [];
+                                            const hasLedger = networthItems.length > 0;
+                                            const ledgerAssets = networthItems
+                                                .filter(it => ["asset", "balance"].includes((NET_WORTH_GROUPS.find(g => g.key === it.category) || {}).kind))
+                                                .reduce((s, it) => s + Number(it.value || 0), 0);
+                                            const ledgerInvestments = networthItems
+                                                .filter(it => it.category === "Investments")
+                                                .reduce((s, it) => s + Number(it.value || 0), 0);
+                                            const ledgerLiabilities = networthItems
+                                                .filter(it => (NET_WORTH_GROUPS.find(g => g.key === it.category) || {}).kind === "liability")
+                                                .reduce((s, it) => s + Math.abs(Number(it.value || 0)), 0);
 
-                                        return tiles.map(t => {
-                                            const isSelected = networthSectionFilter === t.id;
-                                            return (
+                                            const assets = hasLedger ? (ledgerAssets + ledgerInvestments) : (settings.assetsTotal || 0);
+                                            const liabilities = hasLedger ? ledgerLiabilities : (settings.liabilitiesTotal || 0);
+                                            const netWorthVal = assets - liabilities;
+                                            const netWorthReady = hasLedger || settings.netWorthConfigured;
+
+                                            const incomeSum = incomeTx.reduce((s, t) => s + t.amount, 0);
+                                            const spendingSum = expenseTx.reduce((s, t) => s + t.amount, 0);
+                                            const savingsRate = incomeSum > 0 ? (((incomeSum - spendingSum) / incomeSum) * 100) : 0;
+
+                                            const fmt = (v) => formatCurrencyVal(v, settings.currency || "INR");
+
+                                            const tiles = [
+                                                { id: 'networth', title: 'Net Worth', displayVal: netWorthReady ? fmt(netWorthVal) : 'Not set', icon: 'networth', color: 'var(--text-main)', iconClass: 'primary', onClick: () => setActivePage('networth'), cursor: 'pointer' },
+                                                { id: 'income', title: 'Income', displayVal: fmt(incomeSum), icon: 'arrowDown', color: 'var(--success)', iconClass: 'success' },
+                                                { id: 'expenses', title: 'Expenses', displayVal: fmt(spendingSum), icon: 'arrowUp', color: 'var(--warning)', iconClass: 'warning' },
+                                                { id: 'savings', title: 'Savings Rate', displayVal: `${savingsRate.toFixed(1)}%`, icon: 'goals', color: savingsRate >= 0 ? 'var(--info)' : 'var(--danger)', iconClass: 'info' }
+                                            ];
+
+                                            return tiles.map((t, idx) => (
                                                 <div
-                                                    key={t.id}
+                                                    key={t.id || idx}
                                                     className="card"
                                                     style={{
                                                         padding: '8px 14px',
-                                                        cursor: 'pointer',
-                                                        transition: 'all 0.2s ease',
-                                                        border: isSelected ? `2px solid ${t.border}` : '1px solid var(--border-color)',
-                                                        background: isSelected ? t.bg : 'var(--card-bg)',
-                                                        boxShadow: isSelected ? `0 4px 12px ${t.shadow}` : 'var(--shadow-sm)',
-                                                        transform: isSelected ? 'translateY(-1px)' : 'none',
+                                                        border: '1px solid var(--border-color)',
+                                                        background: 'var(--card-bg)',
+                                                        boxShadow: 'var(--shadow-sm)',
+                                                        margin: 0,
+                                                        cursor: t.onClick ? 'pointer' : 'default'
+                                                    }}
+                                                    onClick={t.onClick}
+                                                    title={t.onClick ? "Click to view Net Worth ledger" : undefined}
+                                                >
+                                                    <div className="card-header" style={{ marginBottom: '2px' }}>
+                                                        <span className="card-title" style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)' }}>{t.title}</span>
+                                                        <div className={`card-icon ${t.iconClass}`} style={{ width: '22px', height: '22px', padding: '2px', borderRadius: '6px' }}>
+                                                            <Icon name={t.icon} currency={settings.currency} />
+                                                        </div>
+                                                    </div>
+                                                    <div className="card-value" style={{ fontSize: '1.05rem', fontWeight: 700, color: t.color, lineHeight: 1.2 }}>
+                                                        {t.displayVal}
+                                                    </div>
+                                                </div>
+                                            ));
+                                        })()}
+                                    </div>
+
+                                    {/* Line 2: Period (center aligned) */}
+                                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: '100%' }}>
+                                        {/* Unified Date Selector controls */}
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'nowrap', background: 'var(--card-bg)', padding: '3px 8px', height: '36px', borderRadius: '8px', border: '1px solid var(--border-color)', boxShadow: '0 1px 3px rgba(0,0,0,0.04)', boxSizing: 'border-box' }}>
+                                            {/* Left: Start Date Picker */}
+                                            <div
+                                                style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', cursor: 'pointer' }}
+                                                onClick={(e) => {
+                                                    const inputEl = e.currentTarget.querySelector('input[type="date"]');
+                                                    if (inputEl) {
+                                                        try {
+                                                            if (inputEl.showPicker) inputEl.showPicker();
+                                                            else inputEl.focus();
+                                                        } catch (err) { }
+                                                    }
+                                                }}
+                                            >
+                                                <div className="form-control" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.8rem', padding: '2px 8px', height: '28px', cursor: 'pointer', background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: '6px', whiteSpace: 'nowrap', minWidth: '95px' }}>
+                                                    <span style={{ fontWeight: 500 }}>{formatDate(displayStartDate, settings.dateFormat)}</span>
+                                                </div>
+                                                <input
+                                                    type="date"
+                                                    value={displayStartDate}
+                                                    onChange={(e) => handleStartDateChange(e.target.value)}
+                                                    style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', opacity: 0, cursor: 'pointer' }}
+                                                    title="Start Date"
+                                                />
+                                            </div>
+
+                                            {/* Center: Selected Period Dropdown */}
+                                            <select
+                                                className="form-control"
+                                                style={{ width: 'auto', minWidth: '150px', fontSize: '0.82rem', padding: '2px 8px', height: '28px', cursor: 'pointer', fontWeight: 500 }}
+                                                value={normPeriodKey}
+                                                onChange={(e) => handleUnifiedPeriodChange(e.target.value)}
+                                            >
+                                                <PeriodSelectOptions />
+                                            </select>
+
+                                            {/* Right: End Date Picker */}
+                                            <div
+                                                style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', cursor: 'pointer' }}
+                                                onClick={(e) => {
+                                                    const inputEl = e.currentTarget.querySelector('input[type="date"]');
+                                                    if (inputEl) {
+                                                        try {
+                                                            if (inputEl.showPicker) inputEl.showPicker();
+                                                            else inputEl.focus();
+                                                        } catch (err) { }
+                                                    }
+                                                }}
+                                            >
+                                                <div className="form-control" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.8rem', padding: '2px 8px', height: '28px', cursor: 'pointer', background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: '6px', whiteSpace: 'nowrap', minWidth: '95px' }}>
+                                                    <span style={{ fontWeight: 500 }}>{formatDate(displayEndDate, settings.dateFormat)}</span>
+                                                </div>
+                                                <input
+                                                    type="date"
+                                                    value={displayEndDate}
+                                                    onChange={(e) => handleEndDateChange(e.target.value)}
+                                                    style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', opacity: 0, cursor: 'pointer' }}
+                                                    title="End Date"
+                                                />
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+                            {activePage === "networth" && (
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', width: '100%' }}>
+                                    {/* Line 1: Summary Tiles */}
+                                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '12px', width: '100%', alignItems: 'center' }}>
+                                        {(() => {
+                                            const nwItems = (settings.networthItems || []).filter(it => it.includeInNetWorth !== false);
+                                            const nwCash = nwItems
+                                                .filter(it => (NET_WORTH_GROUPS.find(g => g.key === it.category) || {}).kind === "balance")
+                                                .reduce((s, it) => s + Number(it.value || 0), 0);
+                                            const nwAssets = nwItems
+                                                .filter(it => (NET_WORTH_GROUPS.find(g => g.key === it.category) || {}).kind === "asset")
+                                                .reduce((s, it) => s + Number(it.value || 0), 0);
+                                            const nwInvestments = nwItems
+                                                .filter(it => (NET_WORTH_GROUPS.find(g => g.key === it.category) || {}).kind === "investment")
+                                                .reduce((s, it) => s + Number(it.value || 0), 0);
+                                            const nwLiabilities = nwItems
+                                                .filter(it => (NET_WORTH_GROUPS.find(g => g.key === it.category) || {}).kind === "liability")
+                                                .reduce((s, it) => s + Math.abs(Number(it.value || 0)), 0);
+                                            const nwTotal = nwCash + nwAssets + nwInvestments - nwLiabilities;
+                                            const fmt = (v) => formatCurrencyVal(v, settings.currency || "INR");
+
+                                            const tiles = [
+                                                { id: 'all', title: 'Net Worth', val: nwTotal, icon: 'networth', color: 'var(--text-main)', border: 'var(--primary)', bg: 'rgba(99, 102, 241, 0.04)', shadow: 'rgba(99, 102, 241, 0.15)', iconClass: 'primary' },
+                                                { id: 'assets', title: 'Fixed Assets', val: nwAssets, icon: 'home', color: 'var(--primary)', border: 'var(--primary)', bg: 'rgba(99, 102, 241, 0.04)', shadow: 'rgba(99, 102, 241, 0.15)', iconClass: 'primary' },
+                                                { id: 'investments', title: 'Investments', val: nwInvestments, icon: 'goals', color: 'var(--info)', border: 'var(--info)', bg: 'rgba(59, 130, 246, 0.04)', shadow: 'rgba(59, 130, 246, 0.15)', iconClass: 'info' },
+                                                { id: 'cash', title: 'Bank & Cash', val: nwCash, icon: 'arrowDown', color: 'var(--success)', border: 'var(--success)', bg: 'rgba(16, 185, 129, 0.04)', shadow: 'rgba(16, 185, 129, 0.15)', iconClass: 'success' },
+                                                { id: 'liabilities', title: 'Liabilities', val: nwLiabilities, icon: 'arrowUp', color: 'var(--danger)', border: 'var(--danger)', bg: 'rgba(239, 68, 68, 0.04)', shadow: 'rgba(239, 68, 68, 0.15)', iconClass: 'warning' }
+                                            ];
+
+                                            return tiles.map(t => {
+                                                const isSelected = networthSectionFilter === t.id;
+                                                return (
+                                                    <div
+                                                        key={t.id}
+                                                        className="card"
+                                                        style={{
+                                                            padding: '8px 14px',
+                                                            cursor: 'pointer',
+                                                            transition: 'all 0.2s ease',
+                                                            border: isSelected ? `2px solid ${t.border}` : '1px solid var(--border-color)',
+                                                            background: isSelected ? t.bg : 'var(--card-bg)',
+                                                            boxShadow: isSelected ? `0 4px 12px ${t.shadow}` : 'var(--shadow-sm)',
+                                                            transform: isSelected ? 'translateY(-1px)' : 'none',
+                                                            margin: 0
+                                                        }}
+                                                        onClick={() => setNetworthSectionFilter(t.id)}
+                                                        title={`Click to filter ${t.title}`}
+                                                    >
+                                                        <div className="card-header" style={{ marginBottom: '2px' }}>
+                                                            <span className="card-title" style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)' }}>{t.title}</span>
+                                                            <div className={`card-icon ${t.iconClass}`} style={{ width: '22px', height: '22px', padding: '2px', borderRadius: '6px' }}>
+                                                                <Icon name={t.icon} />
+                                                            </div>
+                                                        </div>
+                                                        <div className="card-value" style={{ fontSize: '1.05rem', fontWeight: 700, color: t.color, lineHeight: 1.2 }}>
+                                                            {fmt(t.val)}
+                                                        </div>
+                                                    </div>
+                                                );
+                                            });
+                                        })()}
+                                    </div>
+
+                                    {/* Line 2: Section filter status, collapse all toggle & Add ledger entry */}
+                                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px', width: '100%', flexWrap: 'wrap' }}>
+                                        {(() => {
+                                            const items = settings.networthItems || [];
+                                            const cashCount = items.filter(it => (NET_WORTH_GROUPS.find(g => g.key === it.category) || {}).kind === "balance").length;
+                                            const assetCount = items.filter(it => (NET_WORTH_GROUPS.find(g => g.key === it.category) || {}).kind === "asset").length;
+                                            const investmentCount = items.filter(it => (NET_WORTH_GROUPS.find(g => g.key === it.category) || {}).kind === "investment").length;
+                                            const liabilityCount = items.filter(it => (NET_WORTH_GROUPS.find(g => g.key === it.category) || {}).kind === "liability").length;
+                                            const allSectionKeys = ["assets", "investments", "cash", "liabilities", ...NET_WORTH_GROUPS.map(g => g.key)];
+                                            const isAllCollapsed = allSectionKeys.length > 0 && allSectionKeys.every(k => networthCollapsed[k] === true);
+
+                                            return (
+                                                <React.Fragment>
+                                                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.9rem', fontWeight: 600, color: 'var(--text-main)' }}>
+                                                        <span>
+                                                            {networthSectionFilter === 'all' && `Showing All Sections (${items.length} total entries)`}
+                                                            {networthSectionFilter === 'cash' && `Showing Cash & Bank Balances (${cashCount} entries)`}
+                                                            {networthSectionFilter === 'assets' && `Showing Fixed Assets (${assetCount} entries)`}
+                                                            {networthSectionFilter === 'investments' && `Showing Investments (${investmentCount} entries)`}
+                                                            {networthSectionFilter === 'liabilities' && `Showing Debt & Liabilities (${liabilityCount} entries)`}
+                                                        </span>
+                                                        {networthSectionFilter !== 'all' && (
+                                                            <button
+                                                                className="btn btn-secondary btn-sm"
+                                                                style={{ fontSize: '0.75rem', padding: '2px 10px', borderRadius: '12px', fontWeight: 500 }}
+                                                                onClick={() => setNetworthSectionFilter('all')}
+                                                            >
+                                                                Show All
+                                                            </button>
+                                                        )}
+                                                    </div>
+
+                                                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                                                        <button
+                                                            className="btn btn-secondary btn-sm"
+                                                            style={{ fontSize: '0.8rem', padding: '6px 14px', display: 'inline-flex', alignItems: 'center', gap: '6px', fontWeight: 600 }}
+                                                            onClick={() => {
+                                                                const nextState = {};
+                                                                const targetState = !isAllCollapsed;
+                                                                allSectionKeys.forEach(k => { nextState[k] = targetState; });
+                                                                setNetworthCollapsed(nextState);
+                                                            }}
+                                                        >
+                                                            <Icon name={isAllCollapsed ? "chevronDown" : "chevronUp"} />
+                                                            <span>{isAllCollapsed ? "Expand All" : "Collapse All"}</span>
+                                                        </button>
+                                                        <button
+                                                            className="btn btn-primary btn-sm"
+                                                            style={{ padding: '6px 14px', fontSize: '0.82rem' }}
+                                                            onClick={() => setSubpageActionSignal(s => s + 1)}
+                                                        >
+                                                            + Add Ledger Entry
+                                                        </button>
+                                                    </div>
+                                                </React.Fragment>
+                                            );
+                                        })()}
+                                    </div>
+                                </div>
+                            )}
+                            {activePage === "recurring" && (
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', width: '100%' }}>
+                                    {/* Line 1: Tiles */}
+                                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '12px', width: '100%', alignItems: 'center' }}>
+                                        {(() => {
+                                            const confirmedList = settings.recurring || [];
+                                            const now = new Date();
+                                            const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+                                            const activeList = confirmedList.filter(c => !c.endDate || c.endDate >= todayStr);
+
+                                            const getItemMonthlyEq = (item) => {
+                                                let monthlyEquivalent = Number(item.amount || 0);
+                                                if (item.cadence === "weekly" || item.cadence === "weekly_days") monthlyEquivalent = (item.amount * 52) / 12;
+                                                else if (item.cadence === "biweekly") monthlyEquivalent = (item.amount * 26) / 12;
+                                                else if (item.cadence === "quarterly") monthlyEquivalent = item.amount / 3;
+                                                else if (item.cadence === "annual" || item.cadence === "yearly") monthlyEquivalent = item.amount / 12;
+                                                else if (item.cadence === "once") monthlyEquivalent = 0;
+                                                else if (item.cadence === "custom_interval" && item.customIntervalDays) monthlyEquivalent = (item.amount * 30) / Number(item.customIntervalDays);
+                                                return monthlyEquivalent;
+                                            };
+
+                                            const getPeriodRange = () => calculatePeriodDateRange(calcPeriod || "next_6_months", new Date(), calcCustomStart, calcCustomEnd);
+
+                                            const getPeriodItemAmount = (item) => {
+                                                if (item.excludeFromMonthlyCalculations) return 0;
+                                                const { pStartStr, pEndStr } = getPeriodRange();
+                                                const count = getOccurrencesInPeriod(item, pStartStr, pEndStr);
+                                                return count * Number(item.amount || 0);
+                                            };
+
+                                            const confirmedPeriodInflow = confirmedList.reduce((sum, item) => {
+                                                if (item.excludeFromMonthlyCalculations || item.type !== "income") return sum;
+                                                return sum + getPeriodItemAmount(item);
+                                            }, 0);
+
+                                            const confirmedPeriodOutflow = confirmedList.reduce((sum, item) => {
+                                                if (item.excludeFromMonthlyCalculations || item.type === "income") return sum;
+                                                return sum + getPeriodItemAmount(item);
+                                            }, 0);
+
+                                            const netPeriodSurplus = confirmedPeriodInflow - confirmedPeriodOutflow;
+
+                                            const confirmedMonthlyOutflow = activeList.reduce((sum, item) => {
+                                                if (item.excludeFromMonthlyCalculations || item.type === "income") return sum;
+                                                return sum + getItemMonthlyEq(item);
+                                            }, 0);
+
+                                            const fmt = (v) => formatCurrencyVal(v, settings.currency || "INR");
+
+                                            const tiles = [
+                                                { title: 'Recurring Inflow', displayVal: `+${fmt(confirmedPeriodInflow)}`, icon: 'arrowDown', color: 'var(--success)', iconClass: 'success' },
+                                                { title: 'Recurring Outflow', displayVal: `−${fmt(confirmedPeriodOutflow)}`, icon: 'arrowUp', color: 'var(--danger)', iconClass: 'warning' },
+                                                { title: 'Net Cash Surplus', displayVal: `${netPeriodSurplus >= 0 ? "+" : ""}${fmt(netPeriodSurplus)}`, icon: 'networth', color: netPeriodSurplus >= 0 ? 'var(--success)' : 'var(--danger)', iconClass: 'primary' },
+                                                { title: 'Monthly Outflow Rate', displayVal: fmt(confirmedMonthlyOutflow), icon: 'recurring', color: 'var(--primary)', iconClass: 'info' }
+                                            ];
+
+                                            return tiles.map((t, idx) => (
+                                                <div
+                                                    key={idx}
+                                                    className="card"
+                                                    style={{
+                                                        padding: '8px 14px',
+                                                        border: '1px solid var(--border-color)',
+                                                        background: 'var(--card-bg)',
+                                                        boxShadow: 'var(--shadow-sm)',
                                                         margin: 0
                                                     }}
-                                                    onClick={() => setNetworthSectionFilter(t.id)}
-                                                    title={`Click to filter ${t.title}`}
                                                 >
                                                     <div className="card-header" style={{ marginBottom: '2px' }}>
                                                         <span className="card-title" style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)' }}>{t.title}</span>
@@ -4336,133 +4827,358 @@
                                                         </div>
                                                     </div>
                                                     <div className="card-value" style={{ fontSize: '1.05rem', fontWeight: 700, color: t.color, lineHeight: 1.2 }}>
-                                                        {fmt(t.val)}
+                                                        {t.displayVal}
                                                     </div>
                                                 </div>
-                                            );
-                                        });
-                                    })()}
+                                            ));
+                                        })()}
+                                    </div>
+
+                                    {/* Line 2: Recurring overview, Period, Add recurring item */}
+                                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px', width: '100%', flexWrap: 'wrap' }}>
+                                        {/* Recurring Overview */}
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.9rem', fontWeight: 600, color: 'var(--text-main)', flex: '0 0 auto' }}>
+                                            <span>Recurring Overview</span>
+                                            <span className="badge badge-income" style={{ fontSize: '0.78rem' }}>
+                                                {(settings.recurring || []).filter(c => {
+                                                    const now = new Date();
+                                                    const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+                                                    return !c.endDate || c.endDate >= todayStr;
+                                                }).length} Active
+                                            </span>
+                                        </div>
+
+                                        {/* Unified Period Selector */}
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'nowrap', background: 'var(--card-bg)', padding: '3px 8px', height: '36px', borderRadius: '8px', border: '1px solid var(--border-color)', boxShadow: '0 1px 3px rgba(0,0,0,0.04)', boxSizing: 'border-box' }}>
+                                            <div
+                                                style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', cursor: 'pointer' }}
+                                                onClick={(e) => {
+                                                    const inputEl = e.currentTarget.querySelector('input[type="date"]');
+                                                    if (inputEl) {
+                                                        try {
+                                                            if (inputEl.showPicker) inputEl.showPicker();
+                                                            else inputEl.focus();
+                                                        } catch (err) { }
+                                                    }
+                                                }}
+                                            >
+                                                <div className="form-control" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.8rem', padding: '2px 8px', height: '28px', cursor: 'pointer', background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: '6px', whiteSpace: 'nowrap', minWidth: '95px' }}>
+                                                    <span style={{ fontWeight: 500 }}>{formatDate(displayStartDate, settings.dateFormat)}</span>
+                                                </div>
+                                                <input
+                                                    type="date"
+                                                    value={displayStartDate}
+                                                    onChange={(e) => handleStartDateChange(e.target.value)}
+                                                    style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', opacity: 0, cursor: 'pointer' }}
+                                                    title="Start Date"
+                                                />
+                                            </div>
+
+                                            <select
+                                                className="form-control"
+                                                style={{ width: 'auto', minWidth: '120px', fontSize: '0.82rem', padding: '2px 6px', height: '28px', cursor: 'pointer', fontWeight: 500 }}
+                                                value={normPeriodKey}
+                                                onChange={(e) => handleUnifiedPeriodChange(e.target.value)}
+                                            >
+                                                <PeriodSelectOptions />
+                                            </select>
+
+                                            <div
+                                                style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', cursor: 'pointer' }}
+                                                onClick={(e) => {
+                                                    const inputEl = e.currentTarget.querySelector('input[type="date"]');
+                                                    if (inputEl) {
+                                                        try {
+                                                            if (inputEl.showPicker) inputEl.showPicker();
+                                                            else inputEl.focus();
+                                                        } catch (err) { }
+                                                    }
+                                                }}
+                                            >
+                                                <div className="form-control" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.8rem', padding: '2px 8px', height: '28px', cursor: 'pointer', background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: '6px', whiteSpace: 'nowrap', minWidth: '95px' }}>
+                                                    <span style={{ fontWeight: 500 }}>{formatDate(displayEndDate, settings.dateFormat)}</span>
+                                                </div>
+                                                <input
+                                                    type="date"
+                                                    value={displayEndDate}
+                                                    onChange={(e) => handleEndDateChange(e.target.value)}
+                                                    style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', opacity: 0, cursor: 'pointer' }}
+                                                    title="End Date"
+                                                />
+                                            </div>
+                                        </div>
+
+                                        {/* Add Recurring Item Button */}
+                                        <button
+                                            className="btn btn-primary"
+                                            style={{ height: '36px', minWidth: '140px', padding: '0 14px', flex: '0 0 auto', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}
+                                            onClick={() => setSubpageActionSignal(s => s + 1)}
+                                        >
+                                            <Icon name="plus" />
+                                            <span>Add Recurring Item</span>
+                                        </button>
+                                    </div>
                                 </div>
-                            ) : (
-                                <div className="topbar-actions">
-                                        {activePage === "documents" && (
-                                            <>
-                                                <button className="btn btn-secondary" onClick={handleSyncLocalFolder}>
-                                                    <Icon name="sync" />
-                                                    <span>Sync Folder</span>
-                                                </button>
-                                                <button className="btn btn-primary" onClick={() => setShowImportModal(true)}>
-                                                    <Icon name="download" />
-                                                    <span>Import PDF/CSV</span>
-                                                </button>
-                                            </>
-                                        )}
-                                        {["dashboard", "transactions", "recurring", "subscriptions", "budgets"].includes(activePage) && (
-                                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'nowrap', background: 'var(--card-bg)', padding: '4px 8px', height: '40px', borderRadius: '8px', border: '1px solid var(--border-color)', boxShadow: '0 1px 3px rgba(0,0,0,0.04)', boxSizing: 'border-box' }}>
-                                                {/* Left: Start Date Picker */}
-                                                <div
-                                                    style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', cursor: 'pointer' }}
-                                                    onClick={(e) => {
-                                                        const inputEl = e.currentTarget.querySelector('input[type="date"]');
-                                                        if (inputEl) {
-                                                            try {
-                                                                if (inputEl.showPicker) inputEl.showPicker();
-                                                                else inputEl.focus();
-                                                            } catch (err) { }
-                                                        }
-                                                    }}
-                                                >
-                                                    <div className="form-control" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.8rem', padding: '2px 10px', height: '30px', cursor: 'pointer', background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: '6px', whiteSpace: 'nowrap', minWidth: '105px' }}>
-                                                        <span style={{ fontWeight: 500 }}>{formatDate(displayStartDate, settings.dateFormat)}</span>
-                                                    </div>
+                            )}
+                            {activePage === "transactions" && (
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', width: '100%' }}>
+                                    {/* Line 1: Search, All Types, All Categories, All Accounts, Import PDF/CSV */}
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', width: '100%', flexWrap: 'wrap' }}>
+                                        {/* Search field */}
+                                        <div className="filter-group" style={{ flex: 1, minWidth: '150px' }}>
+                                            <input
+                                                type="text"
+                                                className="form-control"
+                                                style={{ height: '36px', fontSize: '0.84rem', padding: '4px 12px', width: '100%' }}
+                                                placeholder="Search by merchant, date..."
+                                                value={txSearch}
+                                                onChange={(e) => setTxSearch(e.target.value)}
+                                            />
+                                        </div>
+
+                                        {/* Type selection */}
+                                        <div className="filter-group" style={{ flex: '0 0 auto', minWidth: '110px' }}>
+                                            <select
+                                                className="form-control"
+                                                style={{ height: '36px', fontSize: '0.84rem', padding: '4px 10px', width: '100%' }}
+                                                value={txTypeFilter}
+                                                onChange={(e) => setTxTypeFilter(e.target.value)}
+                                            >
+                                                <option value="all">All Types</option>
+                                                <option value="expense">Expenses Only</option>
+                                                <option value="income">Income Only</option>
+                                            </select>
+                                        </div>
+
+                                        {/* Category selection */}
+                                        <div className="filter-group" style={{ flex: '0 0 auto', minWidth: '140px' }}>
+                                            <select
+                                                className="form-control"
+                                                style={{ height: '36px', fontSize: '0.84rem', padding: '4px 10px', width: '100%' }}
+                                                value={txCategoryFilter}
+                                                onChange={(e) => setTxCategoryFilter(e.target.value)}
+                                            >
+                                                <option value="all">All Categories</option>
+                                                {renderCategoryOptions(settings.categories || [])}
+                                            </select>
+                                        </div>
+
+                                        {/* Account selection */}
+                                        <div className="filter-group" style={{ flex: '0 0 auto', minWidth: '130px' }}>
+                                            <select
+                                                className="form-control"
+                                                style={{ height: '36px', fontSize: '0.84rem', padding: '4px 10px', width: '100%' }}
+                                                value={txAccountFilter}
+                                                onChange={(e) => setTxAccountFilter(e.target.value)}
+                                            >
+                                                <option value="all">All Accounts</option>
+                                                {(settings.accounts || []).map(a => <option key={a} value={a}>{a}</option>)}
+                                            </select>
+                                        </div>
+
+                                        {/* Import PDF/CSV */}
+                                        <button className="btn btn-secondary" style={{ height: '36px', padding: '0 14px', flex: '0 0 auto' }} onClick={() => setShowImportModal(true)}>
+                                            <Icon name="download" />
+                                            <span>Import PDF/CSV</span>
+                                        </button>
+
+                                        {/* Custom Date Range if selected */}
+                                        {settings.selectedPeriod === "custom-range" && (
+                                            <div className="filter-group" style={{ flex: '0 0 auto' }}>
+                                                <span className="filter-label" style={{ fontSize: '0.7rem', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.03em' }}>Custom Date Range</span>
+                                                <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
                                                     <input
                                                         type="date"
-                                                        value={displayStartDate}
-                                                        onChange={(e) => handleStartDateChange(e.target.value)}
-                                                        style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', opacity: 0, cursor: 'pointer' }}
-                                                        title="Start Date"
+                                                        className="form-control"
+                                                        style={{ height: '36px', fontSize: '0.8rem', padding: '4px 8px' }}
+                                                        value={txCustomFromDate}
+                                                        onChange={(e) => setTxCustomFromDate(e.target.value)}
+                                                        placeholder="From Date"
                                                     />
-                                                </div>
-
-                                                {/* Center: Selected Period Dropdown */}
-                                                <select
-                                                    className="form-control"
-                                                    style={{ width: 'auto', minWidth: '150px', fontSize: '0.82rem', padding: '2px 8px', height: '30px', cursor: 'pointer', fontWeight: 500 }}
-                                                    value={normPeriodKey}
-                                                    onChange={(e) => handleUnifiedPeriodChange(e.target.value)}
-                                                >
-                                                    <PeriodSelectOptions />
-                                                </select>
-
-                                                {/* Right: End Date Picker */}
-                                                <div
-                                                    style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', cursor: 'pointer' }}
-                                                    onClick={(e) => {
-                                                        const inputEl = e.currentTarget.querySelector('input[type="date"]');
-                                                        if (inputEl) {
-                                                            try {
-                                                                if (inputEl.showPicker) inputEl.showPicker();
-                                                                else inputEl.focus();
-                                                            } catch (err) { }
-                                                        }
-                                                    }}
-                                                >
-                                                    <div className="form-control" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.8rem', padding: '2px 10px', height: '30px', cursor: 'pointer', background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: '6px', whiteSpace: 'nowrap', minWidth: '105px' }}>
-                                                        <span style={{ fontWeight: 500 }}>{formatDate(displayEndDate, settings.dateFormat)}</span>
-                                                    </div>
+                                                    <span style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>to</span>
                                                     <input
                                                         type="date"
-                                                        value={displayEndDate}
-                                                        onChange={(e) => handleEndDateChange(e.target.value)}
-                                                        style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', opacity: 0, cursor: 'pointer' }}
-                                                        title="End Date"
+                                                        className="form-control"
+                                                        style={{ height: '36px', fontSize: '0.8rem', padding: '4px 8px' }}
+                                                        value={txCustomToDate}
+                                                        onChange={(e) => setTxCustomToDate(e.target.value)}
+                                                        placeholder="To Date"
                                                     />
                                                 </div>
                                             </div>
                                         )}
-                                        {activePage === "transactions" && (
-                                            <>
-                                                <button className="btn btn-secondary" onClick={() => setShowImportModal(true)}>
-                                                    <Icon name="download" />
-                                                    <span>Import PDF/CSV</span>
-                                                </button>
-                                                <button className="btn btn-primary" onClick={() => setShowAddEntryModal(true)}>
-                                                    <Icon name="plus" />
-                                                    <span>Add Transaction</span>
-                                                </button>
-                                            </>
-                                        )}
-                                        {activePage === "recurring" && (
-                                            <button className="btn btn-primary" onClick={() => setSubpageActionSignal(s => s + 1)}>
-                                                <Icon name="plus" />
-                                                <span>Add Recurring Item</span>
-                                            </button>
-                                        )}
-                                        {activePage === "subscriptions" && (
-                                            <button className="btn btn-primary" onClick={() => setSubpageActionSignal(s => s + 1)}>
-                                                <Icon name="plus" />
-                                                <span>Add Subscription</span>
-                                            </button>
-                                        )}
-                                        {activePage === "budgets" && (
-                                            <button className="btn btn-primary" onClick={() => setSubpageActionSignal(s => s + 1)}>
-                                                <Icon name="plus" />
-                                                <span>Create Budget</span>
-                                            </button>
-                                        )}
-                                        {activePage === "goals" && (
-                                            <button className="btn btn-primary" onClick={() => setSubpageActionSignal(s => s + 1)}>
-                                                <Icon name="plus" />
-                                                <span>Create Goal</span>
-                                            </button>
-                                        )}
-                                        {activePage === "rules" && (
-                                            <button className="btn btn-primary" onClick={() => setSubpageActionSignal(s => s + 1)}>
-                                                <Icon name="plus" />
-                                                <span>Create Rule</span>
-                                            </button>
-                                        )}
                                     </div>
+
+                                    {/* Line 2: Period & Add Transaction */}
+                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr auto 1fr', alignItems: 'center', gap: '10px', width: '100%' }}>
+                                        <div></div>
+
+                                        {/* Unified Date Selector controls */}
+                                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', flexWrap: 'nowrap', background: 'var(--card-bg)', padding: '3px 8px', height: '36px', borderRadius: '8px', border: '1px solid var(--border-color)', boxShadow: '0 1px 3px rgba(0,0,0,0.04)', boxSizing: 'border-box' }}>
+                                            <div
+                                                style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', cursor: 'pointer' }}
+                                                onClick={(e) => {
+                                                    const inputEl = e.currentTarget.querySelector('input[type="date"]');
+                                                    if (inputEl) {
+                                                        try {
+                                                            if (inputEl.showPicker) inputEl.showPicker();
+                                                            else inputEl.focus();
+                                                        } catch (err) { }
+                                                    }
+                                                }}
+                                            >
+                                                <div className="form-control" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.8rem', padding: '2px 8px', height: '28px', cursor: 'pointer', background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: '6px', whiteSpace: 'nowrap', minWidth: '95px' }}>
+                                                    <span style={{ fontWeight: 500 }}>{formatDate(displayStartDate, settings.dateFormat)}</span>
+                                                </div>
+                                                <input
+                                                    type="date"
+                                                    value={displayStartDate}
+                                                    onChange={(e) => handleStartDateChange(e.target.value)}
+                                                    style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', opacity: 0, cursor: 'pointer' }}
+                                                    title="Start Date"
+                                                />
+                                            </div>
+
+                                            <select
+                                                className="form-control"
+                                                style={{ width: 'auto', minWidth: '120px', fontSize: '0.82rem', padding: '2px 6px', height: '28px', cursor: 'pointer', fontWeight: 500 }}
+                                                value={normPeriodKey}
+                                                onChange={(e) => handleUnifiedPeriodChange(e.target.value)}
+                                            >
+                                                <PeriodSelectOptions />
+                                            </select>
+
+                                            <div
+                                                style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', cursor: 'pointer' }}
+                                                onClick={(e) => {
+                                                    const inputEl = e.currentTarget.querySelector('input[type="date"]');
+                                                    if (inputEl) {
+                                                        try {
+                                                            if (inputEl.showPicker) inputEl.showPicker();
+                                                            else inputEl.focus();
+                                                        } catch (err) { }
+                                                    }
+                                                }}
+                                            >
+                                                <div className="form-control" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.8rem', padding: '2px 8px', height: '28px', cursor: 'pointer', background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: '6px', whiteSpace: 'nowrap', minWidth: '95px' }}>
+                                                    <span style={{ fontWeight: 500 }}>{formatDate(displayEndDate, settings.dateFormat)}</span>
+                                                </div>
+                                                <input
+                                                    type="date"
+                                                    value={displayEndDate}
+                                                    onChange={(e) => handleEndDateChange(e.target.value)}
+                                                    style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', opacity: 0, cursor: 'pointer' }}
+                                                    title="End Date"
+                                                />
+                                            </div>
+                                        </div>
+
+                                        {/* Add Transaction */}
+                                        <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                                            <button className="btn btn-primary" style={{ height: '36px', minWidth: '140px', padding: '0 14px', flex: '0 0 auto', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }} onClick={() => setShowAddEntryModal(true)}>
+                                                <Icon name="plus" />
+                                                <span>Add Transaction</span>
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+                            {!["networth", "recurring", "dashboard", "transactions"].includes(activePage) && (
+                                <div className="topbar-actions">
+                                    {activePage === "documents" && (
+                                        <>
+                                            <button className="btn btn-secondary" onClick={handleSyncLocalFolder}>
+                                                <Icon name="sync" />
+                                                <span>Sync Folder</span>
+                                            </button>
+                                            <button className="btn btn-primary" onClick={() => setShowImportModal(true)}>
+                                                <Icon name="download" />
+                                                <span>Import PDF/CSV</span>
+                                            </button>
+                                        </>
+                                    )}
+                                    {activePage === "budgets" && (
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'nowrap', background: 'var(--card-bg)', padding: '4px 8px', height: '40px', borderRadius: '8px', border: '1px solid var(--border-color)', boxShadow: '0 1px 3px rgba(0,0,0,0.04)', boxSizing: 'border-box' }}>
+                                            {/* Left: Start Date Picker */}
+                                            <div
+                                                style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', cursor: 'pointer' }}
+                                                onClick={(e) => {
+                                                    const inputEl = e.currentTarget.querySelector('input[type="date"]');
+                                                    if (inputEl) {
+                                                        try {
+                                                            if (inputEl.showPicker) inputEl.showPicker();
+                                                            else inputEl.focus();
+                                                        } catch (err) { }
+                                                    }
+                                                }}
+                                            >
+                                                <div className="form-control" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.8rem', padding: '2px 10px', height: '30px', cursor: 'pointer', background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: '6px', whiteSpace: 'nowrap', minWidth: '105px' }}>
+                                                    <span style={{ fontWeight: 500 }}>{formatDate(displayStartDate, settings.dateFormat)}</span>
+                                                </div>
+                                                <input
+                                                    type="date"
+                                                    value={displayStartDate}
+                                                    onChange={(e) => handleStartDateChange(e.target.value)}
+                                                    style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', opacity: 0, cursor: 'pointer' }}
+                                                    title="Start Date"
+                                                />
+                                            </div>
+
+                                            {/* Center: Selected Period Dropdown */}
+                                            <select
+                                                className="form-control"
+                                                style={{ width: 'auto', minWidth: '150px', fontSize: '0.82rem', padding: '2px 8px', height: '30px', cursor: 'pointer', fontWeight: 500 }}
+                                                value={normPeriodKey}
+                                                onChange={(e) => handleUnifiedPeriodChange(e.target.value)}
+                                            >
+                                                <PeriodSelectOptions />
+                                            </select>
+
+                                            {/* Right: End Date Picker */}
+                                            <div
+                                                style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', cursor: 'pointer' }}
+                                                onClick={(e) => {
+                                                    const inputEl = e.currentTarget.querySelector('input[type="date"]');
+                                                    if (inputEl) {
+                                                        try {
+                                                            if (inputEl.showPicker) inputEl.showPicker();
+                                                            else inputEl.focus();
+                                                        } catch (err) { }
+                                                    }
+                                                }}
+                                            >
+                                                <div className="form-control" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.8rem', padding: '2px 10px', height: '30px', cursor: 'pointer', background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: '6px', whiteSpace: 'nowrap', minWidth: '105px' }}>
+                                                    <span style={{ fontWeight: 500 }}>{formatDate(displayEndDate, settings.dateFormat)}</span>
+                                                </div>
+                                                <input
+                                                    type="date"
+                                                    value={displayEndDate}
+                                                    onChange={(e) => handleEndDateChange(e.target.value)}
+                                                    style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', opacity: 0, cursor: 'pointer' }}
+                                                    title="End Date"
+                                                />
+                                            </div>
+                                        </div>
+                                    )}
+                                    {activePage === "budgets" && (
+                                        <button className="btn btn-primary" onClick={() => setSubpageActionSignal(s => s + 1)}>
+                                            <Icon name="plus" />
+                                            <span>Create Budget</span>
+                                        </button>
+                                    )}
+                                    {activePage === "goals" && (
+                                        <button className="btn btn-primary" onClick={() => setSubpageActionSignal(s => s + 1)}>
+                                            <Icon name="plus" />
+                                            <span>Create Goal</span>
+                                        </button>
+                                    )}
+                                    {activePage === "rules" && (
+                                        <button className="btn btn-primary" onClick={() => setSubpageActionSignal(s => s + 1)}>
+                                            <Icon name="plus" />
+                                            <span>Create Rule</span>
+                                        </button>
+                                    )}
+                                </div>
                             )}
                         </header>
 
@@ -4486,6 +5202,12 @@
                                     onAdd={handleAddTransactions}
                                     updateSetting={updateSetting}
                                     tags={tags}
+                                    search={txSearch}
+                                    typeFilter={txTypeFilter}
+                                    categoryFilter={txCategoryFilter}
+                                    accountFilter={txAccountFilter}
+                                    customFromDate={txCustomFromDate}
+                                    customToDate={txCustomToDate}
                                 />
                             )}
                             {activePage === "networth" && (
@@ -4497,13 +5219,15 @@
                                     subpageActionSignal={subpageActionSignal}
                                     activeSectionFilter={networthSectionFilter}
                                     setActiveSectionFilter={setNetworthSectionFilter}
+                                    collapsed={networthCollapsed}
+                                    setCollapsed={setNetworthCollapsed}
                                 />
                             )}
                             {activePage === "recurring" && (
                                 <RecurringPage
                                     transactions={transactions}
                                     settings={settings}
-                                    suggested={suggestedRecurring.filter(s => !s.isSubscription)}
+                                    suggested={suggestedRecurring}
                                     updateSetting={updateSetting}
                                     showToast={showToast}
                                     subpageActionSignal={subpageActionSignal}
@@ -4513,22 +5237,13 @@
                                     setCustomStart={setCalcCustomStart}
                                     customEnd={calcCustomEnd}
                                     setCustomEnd={setCalcCustomEnd}
-                                />
-                            )}
-                            {activePage === "subscriptions" && (
-                                <SubscriptionsPage
-                                    transactions={transactions}
-                                    settings={settings}
-                                    suggested={suggestedRecurring.filter(s => s.isSubscription)}
-                                    updateSetting={updateSetting}
-                                    showToast={showToast}
-                                    subpageActionSignal={subpageActionSignal}
-                                    selectedPeriod={calcPeriod}
-                                    setSelectedPeriod={setCalcPeriod}
-                                    customStart={calcCustomStart}
-                                    setCustomStart={setCalcCustomStart}
-                                    customEnd={calcCustomEnd}
-                                    setCustomEnd={setCalcCustomEnd}
+                                    displayStartDate={displayStartDate}
+                                    displayEndDate={displayEndDate}
+                                    normPeriodKey={normPeriodKey}
+                                    handleStartDateChange={handleStartDateChange}
+                                    handleEndDateChange={handleEndDateChange}
+                                    handleUnifiedPeriodChange={handleUnifiedPeriodChange}
+                                    PeriodSelectOptions={PeriodSelectOptions}
                                 />
                             )}
                             {activePage === "budgets" && (
@@ -4712,75 +5427,6 @@
 
             return (
                 <div>
-                    {/* Metric Cards row */}
-                    <div className="summary-grid">
-
-                        {/* Card 1: Net Worth */}
-                        <div className="card">
-                            <div className="card-header">
-                                <span className="card-title">Net Worth</span>
-                                <div className="card-icon primary"><Icon name="transactions" currency={settings.currency} /></div>
-                            </div>
-                            {netWorthReady ? (
-                                <div className="card-value">{formatCurrency(netWorthVal)}</div>
-                            ) : (
-                                <div className="card-value" style={{ fontSize: '1.4rem', color: 'var(--text-muted)' }}>Not set</div>
-                            )}
-
-                            {!netWorthReady ? (
-                                <div className="card-subtitle not-configured" style={{ borderTop: 'none', padding: 0 }}>
-                                    <button className="btn btn-secondary btn-sm" style={{ width: '100%' }} onClick={() => setActivePage("networth")}>
-                                        Build your Net Worth ledger
-                                    </button>
-                                </div>
-                            ) : (
-                                <div className="card-subtitle">
-                                    <span>Assets: {formatCurrency(assets)}</span>
-                                    <span>•</span>
-                                    <span>Liabs: {formatCurrency(liabilities)}</span>
-                                </div>
-                            )}
-                        </div>
-
-                        {/* Card 2: Income */}
-                        <div className="card">
-                            <div className="card-header">
-                                <span className="card-title">Income</span>
-                                <div className="card-icon success"><Icon name="arrowDown" /></div>
-                            </div>
-                            <div className="card-value" style={{ color: 'var(--success)' }}>{formatCurrency(incomeSum)}</div>
-                            <div className="card-subtitle">
-                                <span>{incomeTx.length} transactions</span>
-                            </div>
-                        </div>
-
-                        {/* Card 3: Spending */}
-                        <div className="card">
-                            <div className="card-header">
-                                <span className="card-title">Expenses</span>
-                                <div className="card-icon warning"><Icon name="arrowUp" /></div>
-                            </div>
-                            <div className="card-value" style={{ color: 'var(--warning)' }}>{formatCurrency(spendingSum)}</div>
-                            <div className="card-subtitle">
-                                <span>{expenseTx.length} transactions</span>
-                            </div>
-                        </div>
-
-                        {/* Card 4: Savings Rate */}
-                        <div className="card">
-                            <div className="card-header">
-                                <span className="card-title">Savings Rate</span>
-                                <div className="card-icon info"><Icon name="goals" /></div>
-                            </div>
-                            <div className="card-value" style={{ color: savingsRate >= 0 ? 'var(--info)' : 'var(--danger)' }}>
-                                {savingsRate.toFixed(1)}%
-                            </div>
-                            <div className="card-subtitle">
-                                <span>Net Savings: {formatCurrency(incomeSum - spendingSum)}</span>
-                            </div>
-                        </div>
-                    </div>
-
                     {/* SVG Graphic Charts Row */}
                     <div className="dashboard-charts">
 
@@ -4960,18 +5606,10 @@
                 else if (item.cadence === "annual") m = item.amount / 12;
                 return sum + m;
             }, 0);
-            const subscriptionsMonthly = (settings.subscriptions || []).reduce((sum, item) => {
-                let m = item.amount;
-                if (item.cadence === "weekly") m = (item.amount * 52) / 12;
-                else if (item.cadence === "biweekly") m = (item.amount * 26) / 12;
-                else if (item.cadence === "quarterly") m = item.amount / 3;
-                else if (item.cadence === "annual") m = item.amount / 12;
-                return sum + (item.active === false ? 0 : m);
-            }, 0);
             const ledgerMonthlyOutflow = (settings.networthItems || [])
                 .reduce((s, it) => s + Math.min(0, computeNetWorthMonthlyEstimate(it)), 0);
 
-            const commitmentsMonthly = recurringMonthly + subscriptionsMonthly + Math.abs(ledgerMonthlyOutflow);
+            const commitmentsMonthly = recurringMonthly + Math.abs(ledgerMonthlyOutflow);
 
             const effectiveIncome = forecast.incomeOverride !== null && forecast.incomeOverride !== undefined && forecast.incomeOverride !== ""
                 ? Number(forecast.incomeOverride) : avgIncome;
@@ -5065,7 +5703,7 @@
                                     value={noteInput} onChange={(ev) => setNoteInput(ev.target.value)} />
                             </div>
                             <p style={{ fontSize: '0.75rem', color: 'var(--text-light)' }}>
-                                Recurring bills, EMIs &amp; SIPs ({formatCurrency(commitmentsMonthly)}/mo) are always pulled automatically from Recurring, Subscriptions and your Net Worth ledger.
+                                Recurring bills, EMIs &amp; SIPs ({formatCurrency(commitmentsMonthly)}/mo) are always pulled automatically from Recurring and your Net Worth ledger.
                             </p>
                             <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
                                 <button className="btn btn-secondary btn-sm" onClick={handleResetToAuto}>Reset to auto</button>
@@ -5105,10 +5743,6 @@
                     if (r.active === false || !r.nextDate || (r.endDate && r.endDate < calTodayStr)) return;
                     items.push({ date: r.nextDate, name: r.name, amount: r.amount, source: "Recurring bill", swatch: "warning" });
                 });
-                (settings.subscriptions || []).forEach(s => {
-                    if (s.active === false || !s.nextDate) return;
-                    items.push({ date: s.nextDate, name: s.name, amount: s.amount, source: "Subscription", swatch: "info" });
-                });
                 (settings.networthItems || []).forEach(it => {
                     if (!it.nextDueDate) return;
                     items.push({
@@ -5120,7 +5754,7 @@
                     });
                 });
                 return items.filter(i => !isNaN(new Date(i.date).getTime())).sort((a, b) => new Date(a.date) - new Date(b.date));
-            }, [settings.recurring, settings.subscriptions, settings.networthItems]);
+            }, [settings.recurring, settings.networthItems]);
 
             const today = new Date();
             today.setHours(0, 0, 0, 0);
@@ -5524,13 +6158,21 @@
         };
 
         // --- SUB-PAGE: Transactions ---
-        const TransactionsPage = ({ transactions, settings, onDelete, onPatch, onAdd, tags, updateSetting }) => {
-            const [search, setSearch] = React.useState("");
-            const [typeFilter, setTypeFilter] = React.useState("all");
-            const [categoryFilter, setCategoryFilter] = React.useState("all");
-            const [accountFilter, setAccountFilter] = React.useState("all");
-            const [customFromDate, setCustomFromDate] = React.useState("");
-            const [customToDate, setCustomToDate] = React.useState("");
+        const TransactionsPage = ({
+            transactions,
+            settings,
+            onDelete,
+            onPatch,
+            onAdd,
+            tags,
+            updateSetting,
+            search = "",
+            typeFilter = "all",
+            categoryFilter = "all",
+            accountFilter = "all",
+            customFromDate = "",
+            customToDate = ""
+        }) => {
             const [sortField, setSortField] = React.useState("date");
             const [sortDirection, setSortDirection] = React.useState("desc");
             const [txToDelete, setTxToDelete] = React.useState(null);
@@ -5610,72 +6252,6 @@
 
             return (
                 <div>
-                    {/* Filter controls row */}
-                    <div className="filters-bar">
-                        {settings.selectedPeriod === "custom-range" && (
-                            <div className="filter-group">
-                                <span className="filter-label">Custom Date Range</span>
-                                <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-                                    <input
-                                        type="date"
-                                        className="form-control"
-                                        style={{ fontSize: '0.8rem', padding: '4px 8px' }}
-                                        value={customFromDate}
-                                        onChange={(e) => setCustomFromDate(e.target.value)}
-                                        placeholder="From Date"
-                                    />
-                                    <span style={{ color: 'var(--text-muted)' }}>to</span>
-                                    <input
-                                        type="date"
-                                        className="form-control"
-                                        style={{ fontSize: '0.8rem', padding: '4px 8px' }}
-                                        value={customToDate}
-                                        onChange={(e) => setCustomToDate(e.target.value)}
-                                        placeholder="To Date"
-                                    />
-                                </div>
-                            </div>
-                        )}
-                        {/* Search field (includes merchant, notes, tags & dates) */}
-                        <div className="filter-group" style={{ flex: 1, minWidth: '220px' }}>
-                            <span className="filter-label">Search Ledger (Merchant, Category, Notes, Date...)</span>
-                            <input
-                                type="text"
-                                className="form-control"
-                                placeholder="Search by merchant, date (e.g. 2026-08-22 or 22 Aug), notes..."
-                                value={search}
-                                onChange={(e) => setSearch(e.target.value)}
-                            />
-                        </div>
-
-                        {/* Type selection */}
-                        <div className="filter-group">
-                            <span className="filter-label">Type</span>
-                            <select className="form-control" value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}>
-                                <option value="all">All Types</option>
-                                <option value="expense">Expenses Only</option>
-                                <option value="income">Income Only</option>
-                            </select>
-                        </div>
-
-                        {/* Category selection */}
-                        <div className="filter-group">
-                            <span className="filter-label">Category</span>
-                            <select className="form-control" value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)}>
-                                <option value="all">All Categories</option>
-                                {renderCategoryOptions(categories)}
-                            </select>
-                        </div>
-
-                        {/* Account selection */}
-                        <div className="filter-group">
-                            <span className="filter-label">Account</span>
-                            <select className="form-control" value={accountFilter} onChange={(e) => setAccountFilter(e.target.value)}>
-                                <option value="all">All Accounts</option>
-                                {accounts.map(a => <option key={a} value={a}>{a}</option>)}
-                            </select>
-                        </div>
-                    </div>
 
                     {/* Ledger Table */}
                     {sorted.length === 0 ? (
@@ -5685,28 +6261,28 @@
                             <p>Try refining your search terms or date filter options.</p>
                         </div>
                     ) : (
-                        <div className="table-responsive">
-                            <table className="table">
+                        <div className="table-responsive" style={{ maxHeight: 'calc(100vh - 220px)', overflowY: 'auto', position: 'relative' }}>
+                            <table className="table" style={{ borderCollapse: 'separate', borderSpacing: 0 }}>
                                 <thead>
                                     <tr>
-                                        <th style={{ width: '120px', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSort("date")}>
+                                        <th style={{ position: 'sticky', top: 0, zIndex: 80, backgroundColor: '#F9FAFB', borderBottom: '1px solid var(--border-color)', width: '120px', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSort("date")}>
                                             Date {sortField === "date" ? (sortDirection === "asc" ? "▲" : "▼") : ""}
                                         </th>
-                                        <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSort("narration")}>
+                                        <th style={{ position: 'sticky', top: 0, zIndex: 80, backgroundColor: '#F9FAFB', borderBottom: '1px solid var(--border-color)', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSort("narration")}>
                                             Narration {sortField === "narration" ? (sortDirection === "asc" ? "▲" : "▼") : ""}
                                         </th>
-                                        <th style={{ width: '160px', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSort("category")}>
+                                        <th style={{ position: 'sticky', top: 0, zIndex: 80, backgroundColor: '#F9FAFB', borderBottom: '1px solid var(--border-color)', width: '160px', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSort("category")}>
                                             Category {sortField === "category" ? (sortDirection === "asc" ? "▲" : "▼") : ""}
                                         </th>
-                                        <th style={{ width: '130px', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSort("account")}>
+                                        <th style={{ position: 'sticky', top: 0, zIndex: 80, backgroundColor: '#F9FAFB', borderBottom: '1px solid var(--border-color)', width: '130px', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSort("account")}>
                                             Account {sortField === "account" ? (sortDirection === "asc" ? "▲" : "▼") : ""}
                                         </th>
-                                        <th style={{ width: '150px' }}>Tags</th>
-                                        <th style={{ width: '120px', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSort("amount")}>
+                                        <th style={{ position: 'sticky', top: 0, zIndex: 80, backgroundColor: '#F9FAFB', borderBottom: '1px solid var(--border-color)', width: '150px' }}>Tags</th>
+                                        <th style={{ position: 'sticky', top: 0, zIndex: 80, backgroundColor: '#F9FAFB', borderBottom: '1px solid var(--border-color)', width: '120px', cursor: 'pointer', userSelect: 'none' }} onClick={() => handleSort("amount")}>
                                             Amount {sortField === "amount" ? (sortDirection === "asc" ? "▲" : "▼") : ""}
                                         </th>
-                                        <th style={{ width: '110px' }}>Notes</th>
-                                        <th style={{ width: '100px' }}>Actions</th>
+                                        <th style={{ position: 'sticky', top: 0, zIndex: 80, backgroundColor: '#F9FAFB', borderBottom: '1px solid var(--border-color)', width: '110px' }}>Notes</th>
+                                        <th style={{ position: 'sticky', top: 0, zIndex: 80, backgroundColor: '#F9FAFB', borderBottom: '1px solid var(--border-color)', width: '100px' }}>Actions</th>
                                     </tr>
                                 </thead>
                                 <tbody>
@@ -5937,7 +6513,14 @@
             customStart = "",
             setCustomStart,
             customEnd = "",
-            setCustomEnd
+            setCustomEnd,
+            displayStartDate,
+            displayEndDate,
+            normPeriodKey,
+            handleStartDateChange,
+            handleEndDateChange,
+            handleUnifiedPeriodChange,
+            PeriodSelectOptions
         }) => {
             const confirmedList = settings.recurring || [];
             const [showModal, setShowModal] = React.useState(false);
@@ -5985,221 +6568,10 @@
             };
 
             const getPeriodRange = () => {
+                if (displayStartDate && displayEndDate) {
+                    return { pStartStr: displayStartDate, pEndStr: displayEndDate };
+                }
                 return calculatePeriodDateRange(selectedPeriod, new Date(), customStart, customEnd);
-            };
-
-            const getOccurrencesInPeriod = (item, pStartStr, pEndStr) => {
-                if (!pStartStr || !pEndStr) return 0;
-
-                const pStart = new Date(pStartStr + "T00:00:00");
-                const pEnd = new Date(pEndStr + "T23:59:59");
-                if (isNaN(pStart.getTime()) || isNaN(pEnd.getTime()) || pEnd < pStart) return 0;
-
-                const effectiveStart = item.startDate ? new Date(item.startDate + "T00:00:00") : null;
-                const itemEnd = item.endDate ? new Date(item.endDate + "T23:59:59") : null;
-
-                if (itemEnd && itemEnd < pStart) return 0;
-                if (effectiveStart && effectiveStart > pEnd) return 0;
-
-                const cadence = item.cadence || "monthly";
-                const startStr = item.startDate || item.nextDate || pStartStr;
-                const itemStart = new Date(startStr + "T00:00:00");
-                const validAnchor = !isNaN(itemStart.getTime()) ? itemStart : pStart;
-
-                if (cadence === "once") {
-                    if (validAnchor >= pStart && validAnchor <= pEnd) {
-                        if ((!effectiveStart || validAnchor >= effectiveStart) && (!itemEnd || validAnchor <= itemEnd)) return 1;
-                    }
-                    return 0;
-                }
-
-                if (cadence === "custom_days") {
-                    if (!item.customDays) return 0;
-                    const datesList = typeof item.customDays === "string"
-                        ? item.customDays.split(",").map(s => s.trim()).filter(Boolean)
-                        : (Array.isArray(item.customDays) ? item.customDays : []);
-                    let count = 0;
-                    for (const dStr of datesList) {
-                        const d = new Date(dStr + "T00:00:00");
-                        if (!isNaN(d.getTime())) {
-                            if (d >= pStart && d <= pEnd && (!effectiveStart || d >= effectiveStart) && (!itemEnd || d <= itemEnd)) {
-                                count++;
-                            }
-                        }
-                    }
-                    return count;
-                }
-
-                let count = 0;
-
-                if (cadence === "monthly") {
-                    const targetDay = validAnchor.getDate();
-                    let currYear = pStart.getFullYear();
-                    let currMonth = pStart.getMonth();
-
-                    while (true) {
-                        const maxDays = new Date(currYear, currMonth + 1, 0).getDate();
-                        const actualDay = Math.min(targetDay, maxDays);
-                        const occDate = new Date(currYear, currMonth, actualDay, 12, 0, 0);
-
-                        if (occDate > pEnd) break;
-
-                        if (occDate >= pStart && occDate <= pEnd && (!effectiveStart || occDate >= effectiveStart) && (!itemEnd || occDate <= itemEnd)) {
-                            count++;
-                        }
-
-                        currMonth++;
-                        if (currMonth > 11) {
-                            currMonth = 0;
-                            currYear++;
-                        }
-                    }
-                    return count;
-                }
-
-                if (cadence === "yearly" || cadence === "annual") {
-                    const targetMonth = validAnchor.getMonth();
-                    const targetDay = validAnchor.getDate();
-                    let currYear = pStart.getFullYear();
-
-                    while (true) {
-                        const maxDays = new Date(currYear, targetMonth + 1, 0).getDate();
-                        const actualDay = Math.min(targetDay, maxDays);
-                        const occDate = new Date(currYear, targetMonth, actualDay, 12, 0, 0);
-
-                        if (occDate > pEnd) break;
-
-                        if (occDate >= pStart && occDate <= pEnd && (!effectiveStart || occDate >= effectiveStart) && (!itemEnd || occDate <= itemEnd)) {
-                            count++;
-                        }
-
-                        currYear++;
-                    }
-                    return count;
-                }
-
-                if (cadence === "quarterly") {
-                    let curr = new Date(validAnchor.getTime());
-                    if (curr > pStart) {
-                        while (curr > pStart) {
-                            const prevQ = new Date(curr.getTime());
-                            prevQ.setMonth(prevQ.getMonth() - 3);
-                            if (prevQ >= pStart) {
-                                curr = prevQ;
-                            } else {
-                                break;
-                            }
-                        }
-                    } else if (curr < pStart) {
-                        while (curr < pStart) {
-                            curr.setMonth(curr.getMonth() + 3);
-                        }
-                        curr.setMonth(curr.getMonth() - 3);
-                    }
-
-                    while (true) {
-                        const occDate = new Date(curr.getFullYear(), curr.getMonth(), curr.getDate(), 12, 0, 0);
-                        if (occDate > pEnd) break;
-
-                        if (occDate >= pStart && occDate <= pEnd && (!effectiveStart || occDate >= effectiveStart) && (!itemEnd || occDate <= itemEnd)) {
-                            count++;
-                        }
-
-                        curr.setMonth(curr.getMonth() + 3);
-                    }
-                    return count;
-                }
-
-                if (cadence === "weekly" || cadence === "biweekly" || cadence === "custom_interval") {
-                    let stepDays = 7;
-                    if (cadence === "biweekly") stepDays = 14;
-                    else if (cadence === "custom_interval") stepDays = Math.max(1, Number(item.customIntervalDays) || 14);
-
-                    let curr = new Date(validAnchor.getTime());
-                    if (curr < pStart) {
-                        const diffMs = pStart.getTime() - curr.getTime();
-                        const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
-                        const stepsToSkip = Math.floor(diffDays / stepDays);
-                        if (stepsToSkip > 0) {
-                            curr.setDate(curr.getDate() + (stepsToSkip * stepDays));
-                        }
-                    } else if (curr > pStart) {
-                        const diffMs = curr.getTime() - pStart.getTime();
-                        const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
-                        const stepsBack = Math.ceil(diffDays / stepDays);
-                        curr.setDate(curr.getDate() - (stepsBack * stepDays));
-                    }
-
-                    while (true) {
-                        const occDate = new Date(curr.getFullYear(), curr.getMonth(), curr.getDate(), 12, 0, 0);
-                        if (occDate > pEnd) break;
-
-                        if (occDate >= pStart && occDate <= pEnd && (!effectiveStart || occDate >= effectiveStart) && (!itemEnd || occDate <= itemEnd)) {
-                            count++;
-                        }
-
-                        curr.setDate(curr.getDate() + stepDays);
-                    }
-                    return count;
-                }
-
-                if (cadence === "weekly_days") {
-                    const dayMap = { "Sun": 0, "Mon": 1, "Tue": 2, "Wed": 3, "Thu": 4, "Fri": 5, "Sat": 6 };
-                    const targetDays = (item.weeklyDays || ["Mon"]).map(d => dayMap[d]).filter(d => d !== undefined);
-                    let curr = new Date(pStart.getTime());
-                    curr.setHours(12, 0, 0, 0);
-
-                    while (curr <= pEnd) {
-                        if (targetDays.includes(curr.getDay())) {
-                            if ((!effectiveStart || curr >= effectiveStart) && (!itemEnd || curr <= itemEnd)) {
-                                count++;
-                            }
-                        }
-                        curr.setDate(curr.getDate() + 1);
-                    }
-                    return count;
-                }
-
-                if (cadence === "monthly_days") {
-                    const days = (item.monthlyDays || "1").split(",").map(s => parseInt(s.trim(), 10)).filter(n => !isNaN(n) && n >= 1 && n <= 31);
-                    let currYear = pStart.getFullYear();
-                    let currMonth = pStart.getMonth();
-
-                    while (true) {
-                        const maxDaysInMonth = new Date(currYear, currMonth + 1, 0).getDate();
-                        let monthDone = false;
-                        for (const d of days) {
-                            const actualDay = Math.min(d, maxDaysInMonth);
-                            const occDate = new Date(currYear, currMonth, actualDay, 12, 0, 0);
-
-                            if (occDate > pEnd) { monthDone = true; break; }
-
-                            if (occDate >= pStart && occDate <= pEnd && (!effectiveStart || occDate >= effectiveStart) && (!itemEnd || occDate <= itemEnd)) {
-                                count++;
-                            }
-                        }
-                        if (monthDone) break;
-
-                        currMonth++;
-                        if (currMonth > 11) {
-                            currMonth = 0;
-                            currYear++;
-                        }
-                    }
-                    return count;
-                }
-
-                // Default monthly fallback
-                let curr = new Date(pStart.getTime());
-                while (curr <= pEnd) {
-                    const occDate = new Date(curr.getFullYear(), curr.getMonth(), curr.getDate(), 12, 0, 0);
-                    if (occDate > pEnd) break;
-                    if ((!effectiveStart || occDate >= effectiveStart) && (!itemEnd || occDate <= itemEnd)) {
-                        count++;
-                    }
-                    curr.setMonth(curr.getMonth() + 1);
-                }
-                return count;
             };
 
             const getPeriodItemAmount = (item) => {
@@ -6286,43 +6658,6 @@
 
             return (
                 <div>
-                    {/* Commitments Card Metrics */}
-                    <div className="summary-grid" style={{ marginBottom: '28px' }}>
-                        <div className="card">
-                            <div className="card-header">
-                                <span className="card-title">Recurring Inflow</span>
-                                <div className="card-icon success"><Icon name="arrowDown" /></div>
-                            </div>
-                            <div className="card-value" style={{ color: 'var(--success)' }}>+{formatCurrency(confirmedPeriodInflow)}</div>
-                            <div className="card-subtitle"><span>Inflow for {getPeriodBadgeLabel()}</span></div>
-                        </div>
-                        <div className="card">
-                            <div className="card-header">
-                                <span className="card-title">Recurring Outflow</span>
-                                <div className="card-icon warning"><Icon name="arrowUp" /></div>
-                            </div>
-                            <div className="card-value" style={{ color: 'var(--danger)' }}>−{formatCurrency(confirmedPeriodOutflow)}</div>
-                            <div className="card-subtitle"><span>Outflow for {getPeriodBadgeLabel()}</span></div>
-                        </div>
-                        <div className="card">
-                            <div className="card-header">
-                                <span className="card-title">Net Cash Surplus</span>
-                                <div className="card-icon primary"><Icon name="networth" /></div>
-                            </div>
-                            <div className="card-value" style={{ color: netPeriodSurplus >= 0 ? 'var(--success)' : 'var(--danger)' }}>
-                                {netPeriodSurplus >= 0 ? "+" : ""}{formatCurrency(netPeriodSurplus)}
-                            </div>
-                            <div className="card-subtitle"><span>Net surplus for {getPeriodBadgeLabel()}</span></div>
-                        </div>
-                        <div className="card">
-                            <div className="card-header">
-                                <span className="card-title">Monthly Outflow Rate</span>
-                                <div className="card-icon info"><Icon name="recurring" /></div>
-                            </div>
-                            <div className="card-value" style={{ color: 'var(--primary)' }}>{formatCurrency(confirmedMonthlyOutflow)}</div>
-                            <div className="card-subtitle"><span>Standard monthly recurring commitment</span></div>
-                        </div>
-                    </div>
 
                     {/* Section 1: Detected Suggestions */}
                     {suggested.length > 0 && (
@@ -6690,7 +7025,7 @@
         const CreateRecurringModal = ({ settings, editingItem, onClose, onSave }) => {
             const e = editingItem || {};
             const [name, setName] = React.useState(e.name || "");
-            const [category, setCategory] = React.useState(e.category || "Subscription");
+            const [category, setCategory] = React.useState(e.category || (categories[0] || "Utilities"));
             const [amount, setAmount] = React.useState(e.amount ?? "");
             const [type, setType] = React.useState(e.type || "expense");
             const [cadence, setCadence] = React.useState(e.cadence || "monthly");
@@ -6863,237 +7198,6 @@
                             </div>
                         </form>
                     </div>
-                </div>
-            );
-        };
-
-
-        // --- SUB-PAGE: Subscriptions (Section 11) ---
-        const SubscriptionsPage = ({
-            transactions,
-            settings,
-            suggested,
-            updateSetting,
-            showToast,
-            subpageActionSignal,
-            selectedPeriod = "next_6_months",
-            customStart = "",
-            customEnd = ""
-        }) => {
-            const confirmedList = settings.subscriptions || [];
-            const [showModal, setShowModal] = React.useState(false);
-            const [itemToDelete, setItemToDelete] = React.useState(null);
-
-            React.useEffect(() => {
-                if (subpageActionSignal > 0) {
-                    setShowModal(true);
-                }
-            }, [subpageActionSignal]);
-
-            const pRange = calculatePeriodDateRange(selectedPeriod, new Date(), customStart, customEnd);
-
-            const handleSaveSubscription = async (item) => {
-                const updatedList = [...confirmedList, {
-                    id: crypto.randomUUID(),
-                    name: item.name,
-                    category: item.category || "Subscription",
-                    amount: Number(item.amount),
-                    cadence: item.cadence || "monthly",
-                    nextDate: item.nextDate || "",
-                    active: true
-                }];
-                await updateSetting("subscriptions", updatedList);
-                showToast(`Subscription added for "${item.name}"`);
-                setShowModal(false);
-            };
-
-            // Calculate commitments
-            const monthlySum = confirmedList.reduce((sum, item) => {
-                let monthlyEquivalent = item.amount;
-                if (item.cadence === "weekly") monthlyEquivalent = (item.amount * 52) / 12;
-                else if (item.cadence === "biweekly") monthlyEquivalent = (item.amount * 26) / 12;
-                else if (item.cadence === "quarterly") monthlyEquivalent = item.amount / 3;
-                else if (item.cadence === "annual") monthlyEquivalent = item.amount / 12;
-                return sum + monthlyEquivalent;
-            }, 0);
-
-            const formatCurrency = (val) => formatCurrencyVal(val, settings.currency || "INR");
-
-            const handleKeepSuggestion = async (item) => {
-                const updatedList = [...confirmedList, {
-                    id: crypto.randomUUID(),
-                    name: item.merchantDisplay,
-                    category: item.category,
-                    amount: item.averageCharge,
-                    cadence: item.cadence,
-                    nextDate: item.nextDate,
-                    active: true
-                }];
-                await updateSetting("subscriptions", updatedList);
-                showToast(`Subscription kept for "${item.merchantDisplay}"`);
-            };
-
-            const handleIgnoreSuggestion = async (item) => {
-                const dismissed = settings.dismissedPatterns || [];
-                const updatedDismissed = [...dismissed, item.merchantNormalized];
-                await updateSetting("dismissedPatterns", updatedDismissed);
-                showToast(`Subscription ignored for "${item.merchantDisplay}"`);
-            };
-
-            const handleRemoveConfirmed = async (id) => {
-                const updatedList = confirmedList.filter(c => c.id !== id);
-                await updateSetting("subscriptions", updatedList);
-                showToast("Confirmed subscription removed");
-            };
-
-            return (
-                <div>
-                    <div className="status-banner" style={{ backgroundColor: 'var(--info-light)', color: 'var(--info)' }}>
-                        <span>Subscription Tracking running locally.</span>
-                    </div>
-
-                    {/* Commitments Card Metrics */}
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '28px' }}>
-                        <div className="card">
-                            <span className="card-title">Estimated Monthly Subscriptions</span>
-                            <div className="card-value" style={{ color: 'var(--info)', marginTop: '8px' }}>{formatCurrency(monthlySum)}</div>
-                        </div>
-                        <div className="card">
-                            <span className="card-title">Estimated Annual Subscriptions</span>
-                            <div className="card-value" style={{ color: 'var(--primary)', marginTop: '8px' }}>{formatCurrency(monthlySum * 12)}</div>
-                        </div>
-                    </div>
-
-                    {/* Suggestions Panel */}
-                    {suggested.length > 0 && (
-                        <div className="section-card" style={{ marginBottom: '24px', borderColor: 'var(--info)' }}>
-                            <div className="section-card-title" style={{ color: 'var(--info)' }}>
-                                <Icon name="alert" style={{ marginRight: '6px' }} />
-                                <span>Detected Subscriptions Suggestions</span>
-                            </div>
-                            <div className="table-responsive">
-                                <table className="table">
-                                    <thead>
-                                        <tr>
-                                            <th>Subscription Service</th>
-                                            <th>Group/Category</th>
-                                            <th>Cadence</th>
-                                            <th>Monthly Equivalent</th>
-                                            <th>Next Renewal Date</th>
-                                            <th>Actions</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        {suggested.map((s, idx) => (
-                                            <tr key={idx}>
-                                                <td style={{ fontWeight: 600 }}>{s.merchantDisplay}</td>
-                                                <td>{s.category}</td>
-                                                <td style={{ textTransform: 'capitalize' }}>{s.cadence}</td>
-                                                <td>{formatCurrency(s.monthlyEquivalent)}</td>
-                                                <td>{s.nextDate ? formatDate(s.nextDate, settings.dateFormat) : "—"}</td>
-                                                <td>
-                                                    <div style={{ display: 'flex', gap: '6px' }}>
-                                                        <button className="btn btn-primary btn-sm" onClick={() => handleKeepSuggestion(s)}>Keep</button>
-                                                        <button className="btn btn-secondary btn-sm" onClick={() => handleIgnoreSuggestion(s)}>Ignore</button>
-                                                    </div>
-                                                </td>
-                                            </tr>
-                                        ))}
-                                    </tbody>
-                                </table>
-                            </div>
-                        </div>
-                    )}
-
-                    {/* Confirmed Subscription list */}
-                    <div className="section-card">
-                        <div className="section-card-title">Confirmed Subscription List</div>
-                        {confirmedList.length === 0 ? (
-                            <div className="empty-state">
-                                <Icon name="subscriptions" />
-                                <h3>No Confirmed Subscriptions</h3>
-                                <p>Confirm suggested services above or add manual subscription records.</p>
-                            </div>
-                        ) : (
-                            <div className="table-responsive">
-                                <table className="table">
-                                    <thead>
-                                        <tr>
-                                            <th>Service Name</th>
-                                            <th>Category</th>
-                                            <th>Amount</th>
-                                            <th>Cadence</th>
-                                            <th>Next Renewal</th>
-                                            <th style={{ width: '60px' }}></th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        {confirmedList.map(c => (
-                                            <tr key={c.id}>
-                                                <td style={{ fontWeight: 600 }}>{c.name}</td>
-                                                <td>{c.category}</td>
-                                                <td style={{ fontWeight: 600, color: 'var(--danger)' }}>{formatCurrency(c.amount)}</td>
-                                                <td style={{ textTransform: 'capitalize' }}>{c.cadence}</td>
-                                                <td>{c.nextDate ? formatDate(c.nextDate, settings.dateFormat) : "—"}</td>
-                                                <td>
-                                                    <button
-                                                        className="btn btn-secondary btn-sm"
-                                                        style={{ border: 'none', color: 'var(--danger)' }}
-                                                        onClick={() => setItemToDelete(c)}
-                                                    >
-                                                        <Icon name="trash" />
-                                                    </button>
-                                                </td>
-                                            </tr>
-                                        ))}
-                                    </tbody>
-                                </table>
-                            </div>
-                        )}
-                    </div>
-                    {/* Delete Subscription Confirmation Modal */}
-                    {itemToDelete && (
-                        <div className="modal-overlay">
-                            <div className="modal-container" style={{ maxWidth: '420px' }}>
-                                <div className="modal-header">
-                                    <h3 className="modal-title" style={{ color: 'var(--danger)' }}>Confirm Deletion</h3>
-                                    <button className="modal-close-btn" onClick={() => setItemToDelete(null)}>
-                                        <Icon name="close" />
-                                    </button>
-                                </div>
-                                <div className="modal-body">
-                                    <p style={{ marginBottom: '12px', fontSize: '0.9rem' }}>Are you sure you want to delete this subscription entry?</p>
-                                    <div style={{ padding: '12px', backgroundColor: 'var(--bg-color)', borderRadius: '8px', border: '1px solid var(--border-color)', fontSize: '0.88rem' }}>
-                                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
-                                            <span style={{ color: 'var(--text-muted)' }}>Name:</span>
-                                            <span style={{ fontWeight: 600 }}>{itemToDelete.name}</span>
-                                        </div>
-                                        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                                            <span style={{ color: 'var(--text-muted)' }}>Amount:</span>
-                                            <span style={{ fontWeight: 600, color: 'var(--danger)' }}>{formatCurrency(itemToDelete.amount)}</span>
-                                        </div>
-                                    </div>
-                                </div>
-                                <div className="modal-footer">
-                                    <button className="btn btn-secondary" onClick={() => setItemToDelete(null)}>Cancel</button>
-                                    <button className="btn btn-danger" onClick={async () => {
-                                        await handleRemoveConfirmed(itemToDelete.id);
-                                        setItemToDelete(null);
-                                    }}>
-                                        Confirm Delete
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
-                    )}
-                    {/* Create Subscription Modal */}
-                    {showModal && (
-                        <CreateRecurringModal
-                            settings={settings}
-                            onClose={() => setShowModal(false)}
-                            onSave={handleSaveSubscription}
-                        />
-                    )}
                 </div>
             );
         };
@@ -7388,12 +7492,14 @@
         // --- SUB-PAGE: Net Worth Ledger (Fixed Assets, Passive Income, Pension, House Tax,
         // Insurance, Investments, Liabilities, Credit Cards, Current Balances) ---
         // --- SUB-PAGE: Net Worth Ledger ---
-        const NetWorthPage = ({ settings, updateSetting, showToast, setActivePage, subpageActionSignal, activeSectionFilter: propActiveSectionFilter, setActiveSectionFilter: propSetActiveSectionFilter }) => {
+        const NetWorthPage = ({ settings, updateSetting, showToast, setActivePage, subpageActionSignal, activeSectionFilter: propActiveSectionFilter, setActiveSectionFilter: propSetActiveSectionFilter, collapsed: propCollapsed, setCollapsed: propSetCollapsed }) => {
             const items = settings.networthItems || [];
             const [showModal, setShowModal] = React.useState(false);
             const [editingItem, setEditingItem] = React.useState(null);
             const [defaultModalCategory, setDefaultModalCategory] = React.useState(null);
-            const [collapsed, setCollapsed] = React.useState({});
+            const [localCollapsed, setLocalCollapsed] = React.useState({});
+            const collapsed = propCollapsed !== undefined ? propCollapsed : localCollapsed;
+            const setCollapsed = propSetCollapsed || setLocalCollapsed;
             const [quickBillItem, setQuickBillItem] = React.useState(null);
             const [quickBillAmount, setQuickBillAmount] = React.useState("");
             const [itemToDelete, setItemToDelete] = React.useState(null);
@@ -7562,71 +7668,6 @@
 
             return (
                 <div>
-                    {/* View Action & Section Control Header (Frozen Sticky Line) */}
-                    <div style={{
-                        position: 'sticky',
-                        top: '76px',
-                        zIndex: 80,
-                        background: 'var(--bg-color)',
-                        marginTop: '-20px',
-                        padding: '6px 0 10px 0',
-                        marginBottom: '16px',
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        alignItems: 'center',
-                        flexWrap: 'wrap',
-                        gap: '12px',
-                        borderBottom: '1px solid var(--border-color)'
-                    }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.9rem', fontWeight: 600, color: 'var(--text-main)' }}>
-                            <span>
-                                {activeSectionFilter === 'all' && `Showing All Sections (${items.length} total entries)`}
-                                {activeSectionFilter === 'cash' && `Showing Cash & Bank Balances (${cashCount} entries)`}
-                                {activeSectionFilter === 'assets' && `Showing Fixed Assets (${assetCount} entries)`}
-                                {activeSectionFilter === 'investments' && `Showing Investments (${investmentCount} entries)`}
-                                {activeSectionFilter === 'liabilities' && `Showing Debt & Liabilities (${liabilityCount} entries)`}
-                            </span>
-                            {activeSectionFilter !== 'all' && (
-                                <button
-                                    className="btn btn-secondary btn-sm"
-                                    style={{ fontSize: '0.75rem', padding: '2px 10px', borderRadius: '12px', fontWeight: 500 }}
-                                    onClick={() => setActiveSectionFilter('all')}
-                                >
-                                    Show All
-                                </button>
-                            )}
-                        </div>
-
-                        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                            {(() => {
-                                const allSectionKeys = [...SECTIONS.map(s => s.id), ...NET_WORTH_GROUPS.map(g => g.key)];
-                                const isAllCollapsed = allSectionKeys.length > 0 && allSectionKeys.every(k => collapsed[k] === true);
-                                return (
-                                    <button
-                                        className="btn btn-secondary btn-sm"
-                                        style={{ fontSize: '0.8rem', padding: '6px 14px', display: 'inline-flex', alignItems: 'center', gap: '6px', fontWeight: 600 }}
-                                        onClick={() => {
-                                            const nextState = {};
-                                            const targetState = !isAllCollapsed;
-                                            allSectionKeys.forEach(k => { nextState[k] = targetState; });
-                                            setCollapsed(nextState);
-                                        }}
-                                    >
-                                        <Icon name={isAllCollapsed ? "chevronDown" : "chevronUp"} />
-                                        <span>{isAllCollapsed ? "Expand All" : "Collapse All"}</span>
-                                    </button>
-                                );
-                            })()}
-                            <button
-                                className="btn btn-primary btn-sm"
-                                style={{ padding: '6px 14px', fontSize: '0.82rem' }}
-                                onClick={() => { setDefaultModalCategory(null); setEditingItem(null); setShowModal(true); }}
-                            >
-                                + Add Ledger Entry
-                            </button>
-                        </div>
-                    </div>
-
                     {/* Master Section Blocks */}
                     {items.length === 0 ? (
                         <div className="empty-state">
@@ -8800,7 +8841,7 @@
                     <div className="section-card">
                         <div className="section-card-title">Detection Adjustments</div>
                         <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginBottom: '14px' }}>
-                            You have currently ignored <strong>{dismissedCount}</strong> suggested subscription or recurring merchant schedules.
+                            You have currently ignored <strong>{dismissedCount}</strong> suggested recurring merchant schedules.
                         </p>
                         <button className="btn btn-secondary" onClick={handleRestoreSuggestions} disabled={dismissedCount === 0}>
                             Restore Ignored Suggestions
@@ -9985,14 +10026,13 @@
             const accounts = settings?.accounts || [];
 
             // Build the "link to existing ledger" option list — lets the user tie an imported row
-            // to a Recurring bill, Subscription, or Net Worth ledger entry (EMI, SIP, premium…) so
+            // to a Recurring bill or Net Worth ledger entry (EMI, SIP, premium…) so
             // that item's Next Due Date auto-advances on import instead of staying stale.
             const linkOptions = {
                 recurring: (settings.recurring || []).map(r => ({ id: r.id, label: r.name })),
-                subscription: (settings.subscriptions || []).map(s => ({ id: s.id, label: s.name })),
                 networth: (settings.networthItems || []).filter(it => it.frequencyPerYear > 0).map(it => ({ id: it.id, label: `${it.name} (${it.category})` }))
             };
-            const hasLinkOptions = linkOptions.recurring.length + linkOptions.subscription.length + linkOptions.networth.length > 0;
+            const hasLinkOptions = linkOptions.recurring.length + linkOptions.networth.length > 0;
 
             // Local state to keep track of edited fields and selection status
             const [items, setItems] = React.useState(
@@ -10047,11 +10087,7 @@
                             {linkOptions.recurring.map(o => <option key={`recurring:${o.id}`} value={`recurring:${o.id}`}>{o.label}</option>)}
                         </optgroup>
                     )}
-                    {linkOptions.subscription.length > 0 && (
-                        <optgroup label="Subscriptions">
-                            {linkOptions.subscription.map(o => <option key={`subscription:${o.id}`} value={`subscription:${o.id}`}>{o.label}</option>)}
-                        </optgroup>
-                    )}
+
                     {linkOptions.networth.length > 0 && (
                         <optgroup label="Net Worth ledger (EMI, SIP, premiums…)">
                             {linkOptions.networth.map(o => <option key={`networth:${o.id}`} value={`networth:${o.id}`}>{o.label}</option>)}
@@ -10085,7 +10121,7 @@
                             </p>
                             {hasLinkOptions && (
                                 <p style={{ color: 'var(--text-light)', fontSize: '0.78rem', marginBottom: '14px' }}>
-                                    🔗 Optionally link a row to an existing Recurring bill, Subscription, or Net Worth ledger entry (EMI, SIP, premium…) — its Next Due Date will auto-advance on import.
+                                    🔗 Optionally link a row to an existing Recurring bill or Net Worth ledger entry (EMI, SIP, premium…) — its Next Due Date will auto-advance on import.
                                 </p>
                             )}
 
