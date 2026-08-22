@@ -3807,6 +3807,8 @@
 
             if (cadence === "monthly_days") {
                 const days = (item.monthlyDays || "1").split(",").map(s => parseInt(s.trim(), 10)).filter(n => !isNaN(n) && n >= 1 && n <= 31);
+                if (days.length === 0) return 0;
+                days.sort((a, b) => a - b);
                 let currYear = pStart.getFullYear();
                 let currMonth = pStart.getMonth();
 
@@ -7175,6 +7177,8 @@
             const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
 
             const activeList = confirmedList.filter(c => !c.endDate || c.endDate >= todayStr);
+            const activeInflowList = activeList.filter(c => c.type === "income");
+            const activeOutflowList = activeList.filter(c => c.type !== "income");
             const expiredList = confirmedList.filter(c => c.endDate && c.endDate < todayStr);
 
             const toggleExcludeRecurring = async (id) => {
@@ -7292,6 +7296,95 @@
                 return c.cadence || "Monthly";
             };
 
+            const renderRecurringTable = (itemsList) => (
+                <div className="table-responsive">
+                    <table className="table">
+                        <thead>
+                            <tr>
+                                <th>Name</th>
+                                <th>Category</th>
+                                <th>Per Payment</th>
+                                <th>Period Total</th>
+                                <th>Frequency / Cadence</th>
+                                <th>Next Expected Date</th>
+                                <th>End Date</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {itemsList.map(c => {
+                                const linkedTxns = transactions.filter(t => t.linkedRecurringId === c.id);
+                                const periodAmt = getPeriodItemAmount(c);
+
+                                return (
+                                    <tr key={c.id}>
+                                        <td style={{ fontWeight: 600 }}>{c.name}</td>
+                                        <td>{c.category}</td>
+                                        <td style={{ fontWeight: 600, color: c.type === "income" ? "var(--success)" : "var(--danger)" }}>
+                                            {c.type === "income" ? "+" : "-"}{formatCurrency(c.amount)}
+                                        </td>
+                                        <td style={{ fontWeight: 700, color: c.type === "income" ? "var(--success)" : (c.excludeFromMonthlyCalculations ? "var(--text-muted)" : "var(--danger)") }}>
+                                            {c.type === "income" ? "+" : "-"}{formatCurrency(periodAmt)}
+                                        </td>
+                                        <td><span className="badge badge-info">{getCadenceLabel(c)}</span></td>
+                                        <td>{c.nextDate ? formatDate(c.nextDate, settings.dateFormat) : "—"}</td>
+                                        <td>{c.endDate ? formatDate(c.endDate, settings.dateFormat) : "No End Date"}</td>
+                                        <td>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'nowrap' }}>
+                                                <button
+                                                    className="btn btn-secondary btn-sm"
+                                                    style={{ fontSize: '0.75rem', padding: '2px 8px', whiteSpace: 'nowrap' }}
+                                                    onClick={() => setMappedModalItem(c)}
+                                                    title={`${linkedTxns.length} Mapped`}
+                                                >
+                                                    🔄 {linkedTxns.length}
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    className={`badge ${c.excludeFromMonthlyCalculations ? "badge-queued" : "badge-income"}`}
+                                                    style={{
+                                                        cursor: 'pointer',
+                                                        border: 'none',
+                                                        padding: '3px 8px',
+                                                        fontSize: '0.85rem',
+                                                        display: 'inline-flex',
+                                                        alignItems: 'center',
+                                                        justifyContent: 'center',
+                                                        userSelect: 'none'
+                                                    }}
+                                                    onClick={() => toggleExcludeRecurring(c.id)}
+                                                    title={c.excludeFromMonthlyCalculations ? "Excluded from monthly calculations (Click to include)" : "Included in monthly calculations (Click to exclude)"}
+                                                >
+                                                    {c.excludeFromMonthlyCalculations ? "❌" : "✅"}
+                                                </button>
+                                                <div style={{ display: 'flex', gap: '4px' }}>
+                                                    <button
+                                                        className="btn btn-secondary btn-sm"
+                                                        style={{ border: 'none', color: 'var(--primary)', padding: '4px 6px' }}
+                                                        onClick={() => { setEditingItem(c); setShowModal(true); }}
+                                                        title="Edit recurring item"
+                                                    >
+                                                        ✏️
+                                                    </button>
+                                                    <button
+                                                        className="btn btn-secondary btn-sm"
+                                                        style={{ border: 'none', color: 'var(--danger)', padding: '4px 6px' }}
+                                                        onClick={() => setItemToDelete(c)}
+                                                        title="Delete recurring item"
+                                                    >
+                                                        <Icon name="trash" />
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                );
+                            })}
+                        </tbody>
+                    </table>
+                </div>
+            );
+
             return (
                 <div>
 
@@ -7344,108 +7437,77 @@
                         </div>
                     )}
 
-                    {/* Section 2: Active Recurring Items list */}
-                    <div className="section-card" style={{ marginBottom: '24px' }}>
-                        <div className="section-card-title" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                            <span>Active Recurring Transactions</span>
-                            <span className="badge badge-income" style={{ fontSize: '0.78rem' }}>{activeList.length} Active</span>
-                        </div>
-                        {activeList.length === 0 ? (
+                    {/* Section 2: Active Recurring Items - Segregated Inflow & Outflow */}
+                    {activeList.length === 0 ? (
+                        <div className="section-card" style={{ marginBottom: '24px' }}>
+                            <div className="section-card-title" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                                <span>Active Recurring Transactions</span>
+                                <span className="badge badge-income" style={{ fontSize: '0.78rem' }}>0 Active</span>
+                            </div>
                             <div className="empty-state">
                                 <Icon name="recurring" />
                                 <h3>No Active Recurring Items</h3>
                                 <p>Add SIPs, rent, EMIs, salary or recurring bills using the button above.</p>
                                 <button className="btn btn-primary" onClick={() => setShowModal(true)}>Add Recurring Item</button>
                             </div>
-                        ) : (
-                            <div className="table-responsive">
-                                <table className="table">
-                                    <thead>
-                                        <tr>
-                                            <th>Name</th>
-                                            <th>Category</th>
-                                            <th>Per Payment</th>
-                                            <th>Period Total</th>
-                                            <th>Frequency / Cadence</th>
-                                            <th>Next Expected Date</th>
-                                            <th>End Date</th>
-                                            <th>Actions</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        {activeList.map(c => {
-                                            const linkedTxns = transactions.filter(t => t.linkedRecurringId === c.id);
-                                            const periodAmt = getPeriodItemAmount(c);
-
-                                            return (
-                                                <tr key={c.id}>
-                                                    <td style={{ fontWeight: 600 }}>{c.name}</td>
-                                                    <td>{c.category}</td>
-                                                    <td style={{ fontWeight: 600, color: c.type === "income" ? "var(--success)" : "var(--danger)" }}>
-                                                        {c.type === "income" ? "+" : "-"}{formatCurrency(c.amount)}
-                                                    </td>
-                                                    <td style={{ fontWeight: 700, color: c.type === "income" ? "var(--success)" : (c.excludeFromMonthlyCalculations ? "var(--text-muted)" : "var(--danger)") }}>
-                                                        {c.type === "income" ? "+" : "-"}{formatCurrency(periodAmt)}
-                                                    </td>
-                                                    <td><span className="badge badge-info">{getCadenceLabel(c)}</span></td>
-                                                    <td>{c.nextDate ? formatDate(c.nextDate, settings.dateFormat) : "—"}</td>
-                                                    <td>{c.endDate ? formatDate(c.endDate, settings.dateFormat) : "No End Date"}</td>
-                                                    <td>
-                                                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'nowrap' }}>
-                                                            <button
-                                                                className="btn btn-secondary btn-sm"
-                                                                style={{ fontSize: '0.75rem', padding: '2px 8px', whiteSpace: 'nowrap' }}
-                                                                onClick={() => setMappedModalItem(c)}
-                                                                title={`${linkedTxns.length} Mapped`}
-                                                            >
-                                                                🔄 {linkedTxns.length}
-                                                            </button>
-                                                            <button
-                                                                type="button"
-                                                                className={`badge ${c.excludeFromMonthlyCalculations ? "badge-queued" : "badge-income"}`}
-                                                                style={{
-                                                                    cursor: 'pointer',
-                                                                    border: 'none',
-                                                                    padding: '3px 8px',
-                                                                    fontSize: '0.85rem',
-                                                                    display: 'inline-flex',
-                                                                    alignItems: 'center',
-                                                                    justifyContent: 'center',
-                                                                    userSelect: 'none'
-                                                                }}
-                                                                onClick={() => toggleExcludeRecurring(c.id)}
-                                                                title={c.excludeFromMonthlyCalculations ? "Excluded from monthly calculations (Click to include)" : "Included in monthly calculations (Click to exclude)"}
-                                                            >
-                                                                {c.excludeFromMonthlyCalculations ? "❌" : "✅"}
-                                                            </button>
-                                                            <div style={{ display: 'flex', gap: '4px' }}>
-                                                                <button
-                                                                    className="btn btn-secondary btn-sm"
-                                                                    style={{ border: 'none', color: 'var(--primary)', padding: '4px 6px' }}
-                                                                    onClick={() => { setEditingItem(c); setShowModal(true); }}
-                                                                    title="Edit recurring item"
-                                                                >
-                                                                    ✏️
-                                                                </button>
-                                                                <button
-                                                                    className="btn btn-secondary btn-sm"
-                                                                    style={{ border: 'none', color: 'var(--danger)', padding: '4px 6px' }}
-                                                                    onClick={() => setItemToDelete(c)}
-                                                                    title="Delete recurring item"
-                                                                >
-                                                                    <Icon name="trash" />
-                                                                </button>
-                                                            </div>
-                                                        </div>
-                                                    </td>
-                                                </tr>
-                                            );
-                                        })}
-                                    </tbody>
-                                </table>
+                        </div>
+                    ) : (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '24px', marginBottom: '24px' }}>
+                            {/* Inflow Section */}
+                            <div className="section-card" style={{ marginBottom: 0, borderLeft: '4px solid var(--success)', background: 'var(--card-bg)' }}>
+                                <div className="section-card-title" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                                    <span style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--success)', fontWeight: 700, fontSize: '0.95rem' }}>
+                                        <Icon name="arrowDown" />
+                                        <span>Recurring Inflows (Income &amp; Deposits)</span>
+                                    </span>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                        <span className="badge badge-income" style={{ fontSize: '0.78rem', fontWeight: 600 }}>
+                                            +{formatCurrency(confirmedPeriodInflow)} Total
+                                        </span>
+                                        <span className="badge badge-income" style={{ fontSize: '0.78rem' }}>
+                                            {activeInflowList.length} {activeInflowList.length === 1 ? 'Item' : 'Items'}
+                                        </span>
+                                    </div>
+                                </div>
+                                {activeInflowList.length === 0 ? (
+                                    <div className="empty-state" style={{ padding: '20px 16px' }}>
+                                        <p style={{ margin: 0, color: 'var(--text-muted)', fontSize: '0.85rem' }}>
+                                            No active recurring inflows (salary, deposits, interest) configured.
+                                        </p>
+                                    </div>
+                                ) : (
+                                    renderRecurringTable(activeInflowList)
+                                )}
                             </div>
-                        )}
-                    </div>
+
+                            {/* Outflow Section */}
+                            <div className="section-card" style={{ marginBottom: 0, borderLeft: '4px solid var(--danger)', background: 'var(--card-bg)' }}>
+                                <div className="section-card-title" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                                    <span style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--danger)', fontWeight: 700, fontSize: '0.95rem' }}>
+                                        <Icon name="arrowUp" />
+                                        <span>Recurring Outflows (Expenses &amp; Payments)</span>
+                                    </span>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                        <span className="badge badge-queued" style={{ background: 'rgba(239, 68, 68, 0.12)', color: 'var(--danger)', fontWeight: 600, fontSize: '0.78rem' }}>
+                                            −{formatCurrency(confirmedPeriodOutflow)} Total
+                                        </span>
+                                        <span className="badge badge-queued" style={{ background: 'rgba(239, 68, 68, 0.12)', color: 'var(--danger)', fontWeight: 600, fontSize: '0.78rem' }}>
+                                            {activeOutflowList.length} {activeOutflowList.length === 1 ? 'Item' : 'Items'}
+                                        </span>
+                                    </div>
+                                </div>
+                                {activeOutflowList.length === 0 ? (
+                                    <div className="empty-state" style={{ padding: '20px 16px' }}>
+                                        <p style={{ margin: 0, color: 'var(--text-muted)', fontSize: '0.85rem' }}>
+                                            No active recurring outflows (EMIs, SIPs, rent, subscriptions) configured.
+                                        </p>
+                                    </div>
+                                ) : (
+                                    renderRecurringTable(activeOutflowList)
+                                )}
+                            </div>
+                        </div>
+                    )}
 
                     {/* Section 3: Expired Recurring Items list */}
                     <div className="section-card" style={{ borderColor: expiredList.length > 0 ? 'var(--border-color)' : 'transparent', background: 'var(--card-bg)' }}>
@@ -7659,6 +7721,7 @@
 
         // --- SUB-COMPONENT: Create / Edit Recurring Transaction Modal ---
         const CreateRecurringModal = ({ settings, editingItem, onClose, onSave }) => {
+            const categories = settings?.categories || [];
             const e = editingItem || {};
             const [name, setName] = React.useState(e.name || "");
             const [category, setCategory] = React.useState(e.category || (categories[0] || "Utilities"));
@@ -7673,7 +7736,6 @@
             const [endDate, setEndDate] = React.useState(e.endDate || "");
             const [excludeFromMonthlyCalculations, setExcludeFromMonthlyCalculations] = React.useState(!!e.excludeFromMonthlyCalculations);
 
-            const categories = settings?.categories || [];
             const daysOfWeek = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
             const toggleDay = (day) => {
