@@ -559,7 +559,8 @@
         }
 
         /* Section Cards & Dashboard Polish */
-        .section-card, .chart-card {
+        .section-card,
+        .chart-card {
             background-color: var(--card-bg);
             border: 1px solid var(--border-color);
             border-radius: var(--radius-card);
@@ -568,7 +569,8 @@
             transition: transform 0.2s ease, box-shadow 0.2s ease;
         }
 
-        .section-card:hover, .chart-card:hover {
+        .section-card:hover,
+        .chart-card:hover {
             box-shadow: 0 8px 28px rgba(0, 0, 0, 0.06), 0 2px 6px rgba(0, 0, 0, 0.03);
         }
 
@@ -3849,6 +3851,11 @@
         const App = () => {
             // Main unified states
             const [activePage, setActivePage] = React.useState("dashboard");
+
+            const handleNavigatePage = (pageId) => {
+                setActivePage(pageId);
+                window.scrollTo(0, 0);
+            };
             const [transactions, setTransactions] = React.useState([]);
             const [tags, setTags] = React.useState([]);
             const [rules, setRules] = React.useState([]);
@@ -4533,7 +4540,7 @@
                                     key={item.id}
                                     title={item.label}
                                     className={`sidebar-nav-item ${activePage === item.id ? "active" : ""}`}
-                                    onClick={() => setActivePage(item.id)}
+                                    onClick={() => handleNavigatePage(item.id)}
                                 >
                                     <Icon name={item.icon} currency={settings.currency} />
                                     <span className="sidebar-label">{item.label}</span>
@@ -4596,7 +4603,7 @@
                                 <div
                                     key={item.id}
                                     className={`mobile-nav-item ${activePage === item.id ? "active" : ""}`}
-                                    onClick={() => setActivePage(item.id)}
+                                    onClick={() => handleNavigatePage(item.id)}
                                 >
                                     <Icon name={item.icon} currency={settings.currency} />
                                     <span>{item.label}</span>
@@ -5304,8 +5311,10 @@
                                     transactions={filteredTx}
                                     allTransactions={transactions}
                                     settings={settings}
-                                    setActivePage={setActivePage}
+                                    setActivePage={handleNavigatePage}
                                     updateSetting={updateSetting}
+                                    loadState={loadState}
+                                    showToast={showToast}
                                 />
                             )}
                             {activePage === "transactions" && (
@@ -5490,10 +5499,12 @@
         };
 
         // --- SUB-PAGE: Dashboard ---
-        const DashboardPage = ({ transactions, allTransactions, settings, setActivePage, updateSetting }) => {
+        const DashboardPage = ({ transactions, allTransactions, settings, setActivePage, updateSetting, loadState, showToast }) => {
             const expenseTx = transactions.filter(t => t.type === "expense");
             const incomeTx = transactions.filter(t => t.type === "income");
             const fullTx = allTransactions || transactions;
+            const [selectedDay, setSelectedDay] = React.useState(null);
+            const [calendarViewDate, setCalendarViewDate] = React.useState(new Date());
 
             // Income & Spending sums
             const incomeSum = incomeTx.reduce((s, t) => s + t.amount, 0);
@@ -5548,15 +5559,25 @@
                         setActivePage={setActivePage}
                     />
 
-                    {/* Forecast & Upcoming Payments Row */}
-                    <div className="content-columns" style={{ margin: 0 }}>
-                        <ForecastCard
+                    {/* Calendar & Payments Row */}
+                    <div className="content-columns" style={{ margin: 0, gridTemplateColumns: '1fr 1fr' }}>
+                        <PaymentsCalendarWidget
+                            settings={settings}
+                            transactions={fullTx}
+                            selectedDay={selectedDay}
+                            setSelectedDay={setSelectedDay}
+                            viewDate={calendarViewDate}
+                            setViewDate={setCalendarViewDate}
+                        />
+                        <PaymentsSectionWidget
                             settings={settings}
                             transactions={fullTx}
                             updateSetting={updateSetting}
-                        />
-                        <PaymentsCalendarWidget
-                            settings={settings}
+                            loadState={loadState}
+                            showToast={showToast}
+                            selectedDay={selectedDay}
+                            setSelectedDay={setSelectedDay}
+                            viewDate={calendarViewDate}
                         />
                     </div>
 
@@ -5756,179 +5777,8 @@
             );
         };
 
-        // --- SUB-COMPONENT: Editable "Forecast" card for the Dashboard ---
-        // Projects next month's likely savings from income, recurring commitments and
-        // discretionary spending, all of which the user can override.
-        const ForecastCard = ({ settings, transactions, updateSetting }) => {
-            const formatCurrency = (val) => formatCurrencyVal(val, settings.currency || "INR");
-            const forecast = settings.forecast || { incomeOverride: null, expenseOverride: null, note: "" };
-
-            const [editing, setEditing] = React.useState(false);
-            const [incomeInput, setIncomeInput] = React.useState("");
-            const [expenseInput, setExpenseInput] = React.useState("");
-            const [noteInput, setNoteInput] = React.useState(forecast.note || "");
-
-            // Average monthly income/expense over the last 3 completed months, as a sane default
-            const now = new Date();
-            const threeMonthsAgo = new Date(now.getFullYear(), now.getMonth() - 3, 1);
-            const recentTx = transactions.filter(t => new Date(t.date) >= threeMonthsAgo);
-            const monthsSpan = Math.max(1, recentTx.length ? 3 : 1);
-            const avgIncome = recentTx.filter(t => t.type === "income").reduce((s, t) => s + t.amount, 0) / monthsSpan;
-            const avgDiscretionary = recentTx.filter(t => t.type === "expense").reduce((s, t) => s + t.amount, 0) / monthsSpan;
-
-            // Recurring commitments (bills, EMIs, subscriptions) + net worth ledger monthly outflows,
-            // since these are near-certain and shouldn't be re-estimated from history.
-            const fcNow = new Date();
-            const fcTodayStr = `${fcNow.getFullYear()}-${String(fcNow.getMonth() + 1).padStart(2, '0')}-${String(fcNow.getDate()).padStart(2, '0')}`;
-            const recurringMonthly = (settings.recurring || []).reduce((sum, item) => {
-                if (item.active === false || (item.endDate && item.endDate < fcTodayStr)) return sum;
-                let m = item.amount;
-                if (item.cadence === "weekly") m = (item.amount * 52) / 12;
-                else if (item.cadence === "biweekly") m = (item.amount * 26) / 12;
-                else if (item.cadence === "quarterly") m = item.amount / 3;
-                else if (item.cadence === "annual") m = item.amount / 12;
-                return sum + m;
-            }, 0);
-            const ledgerMonthlyOutflow = (settings.networthItems || [])
-                .reduce((s, it) => s + Math.min(0, computeNetWorthMonthlyEstimate(it)), 0);
-
-            const commitmentsMonthly = recurringMonthly + Math.abs(ledgerMonthlyOutflow);
-
-            const effectiveIncome = forecast.incomeOverride !== null && forecast.incomeOverride !== undefined && forecast.incomeOverride !== ""
-                ? Number(forecast.incomeOverride) : avgIncome;
-            const effectiveDiscretionary = forecast.expenseOverride !== null && forecast.expenseOverride !== undefined && forecast.expenseOverride !== ""
-                ? Number(forecast.expenseOverride) : avgDiscretionary;
-
-            const projectedSavings = effectiveIncome - commitmentsMonthly - effectiveDiscretionary;
-
-            const startEditing = () => {
-                setIncomeInput(forecast.incomeOverride ?? "");
-                setExpenseInput(forecast.expenseOverride ?? "");
-                setNoteInput(forecast.note || "");
-                setEditing(true);
-            };
-
-            const handleSave = async () => {
-                await updateSetting("forecast", {
-                    incomeOverride: incomeInput === "" ? null : Number(incomeInput),
-                    expenseOverride: expenseInput === "" ? null : Number(expenseInput),
-                    note: noteInput
-                });
-                setEditing(false);
-            };
-
-            const handleResetToAuto = async () => {
-                await updateSetting("forecast", { incomeOverride: null, expenseOverride: null, note: noteInput });
-                setEditing(false);
-            };
-
-            return (
-                <div className="section-card">
-                    <div className="section-card-title">
-                        <span>📅 Next Month Forecast</span>
-                        {!editing && (
-                            <button className="btn btn-secondary btn-sm" onClick={startEditing}>
-                                <Icon name="edit" /><span>Edit</span>
-                            </button>
-                        )}
-                    </div>
-
-                    {!editing ? (
-                        <div>
-                            <div style={{ display: 'flex', alignItems: 'baseline', gap: '10px', marginBottom: '4px' }}>
-                                <span style={{ fontSize: '1.9rem', fontWeight: 700, color: projectedSavings >= 0 ? 'var(--success)' : 'var(--danger)' }}>
-                                    {projectedSavings >= 0 ? "+" : ""}{formatCurrency(projectedSavings)}
-                                </span>
-                                <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>projected savings</span>
-                            </div>
-                            <p style={{ fontSize: '0.8rem', color: 'var(--text-light)', marginBottom: '14px' }}>
-                                {forecast.incomeOverride !== null && forecast.incomeOverride !== undefined ? "Using your manual income figure" : "Based on your last 3 months' average income"}
-                                {" · "}
-                                {forecast.expenseOverride !== null && forecast.expenseOverride !== undefined ? "manual discretionary spend" : "average discretionary spend"}
-                            </p>
-
-                            {/* Stacked Progress Bar visual */}
-                            {effectiveIncome > 0 && (
-                                <div style={{ marginBottom: '16px' }}>
-                                    <div className="progress-bar-stacked" style={{ height: '8px', marginBottom: '6px' }}>
-                                        {(() => {
-                                            const tot = Math.max(1, effectiveIncome);
-                                            const cPct = Math.min(100, Math.max(0, (commitmentsMonthly / tot) * 100));
-                                            const dPct = Math.min(100 - cPct, Math.max(0, (effectiveDiscretionary / tot) * 100));
-                                            const sPct = Math.max(0, 100 - cPct - dPct);
-                                            return (
-                                                <React.Fragment>
-                                                    <div style={{ width: `${cPct}%`, background: '#F59E0B' }} title={`Recurring (${cPct.toFixed(0)}%)`}></div>
-                                                    <div style={{ width: `${dPct}%`, background: '#EF4444' }} title={`Discretionary (${dPct.toFixed(0)}%)`}></div>
-                                                    <div style={{ width: `${sPct}%`, background: '#10B981' }} title={`Savings (${sPct.toFixed(0)}%)`}></div>
-                                                </React.Fragment>
-                                            );
-                                        })()}
-                                    </div>
-                                </div>
-                            )}
-
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', fontSize: '0.85rem' }}>
-                                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                                    <span style={{ color: 'var(--text-muted)' }}>Expected income</span>
-                                    <span style={{ fontWeight: 600, color: 'var(--success)' }}>+{formatCurrency(effectiveIncome)}</span>
-                                </div>
-                                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                                    <span style={{ color: 'var(--text-muted)' }}>Recurring bills, EMIs &amp; SIPs</span>
-                                    <span style={{ fontWeight: 600, color: 'var(--warning)' }}>−{formatCurrency(commitmentsMonthly)}</span>
-                                </div>
-                                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                                    <span style={{ color: 'var(--text-muted)' }}>Discretionary spending</span>
-                                    <span style={{ fontWeight: 600, color: 'var(--danger)' }}>−{formatCurrency(effectiveDiscretionary)}</span>
-                                </div>
-                            </div>
-
-                            {forecast.note && (
-                                <p style={{ marginTop: '14px', padding: '10px 12px', background: 'var(--primary-light)', borderRadius: '8px', fontSize: '0.8rem', color: 'var(--primary-hover)' }}>
-                                    {forecast.note}
-                                </p>
-                            )}
-                        </div>
-                    ) : (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                            <div className="form-field">
-                                <label>Expected income next month ({getCurrencySymbol(settings.currency || "INR")})</label>
-                                <input type="number" className="form-control" placeholder={avgIncome.toFixed(0)}
-                                    value={incomeInput} onChange={(ev) => setIncomeInput(ev.target.value)} />
-                            </div>
-                            <div className="form-field">
-                                <label>Expected discretionary spend ({getCurrencySymbol(settings.currency || "INR")})</label>
-                                <input type="number" className="form-control" placeholder={avgDiscretionary.toFixed(0)}
-                                    value={expenseInput} onChange={(ev) => setExpenseInput(ev.target.value)} />
-                            </div>
-                            <div className="form-field">
-                                <label>Note (optional)</label>
-                                <input type="text" className="form-control" placeholder="e.g. Bonus expected, festival spending…"
-                                    value={noteInput} onChange={(ev) => setNoteInput(ev.target.value)} />
-                            </div>
-                            <p style={{ fontSize: '0.75rem', color: 'var(--text-light)' }}>
-                                Recurring bills, EMIs &amp; SIPs ({formatCurrency(commitmentsMonthly)}/mo) are always pulled automatically from Recurring and your Net Worth ledger.
-                            </p>
-                            <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
-                                <button className="btn btn-secondary btn-sm" onClick={handleResetToAuto}>Reset to auto</button>
-                                <button className="btn btn-secondary btn-sm" onClick={() => setEditing(false)}>Cancel</button>
-                                <button className="btn btn-primary btn-sm" onClick={handleSave}>Save Forecast</button>
-                            </div>
-                        </div>
-                    )}
-                </div>
-            );
-        };
-
-        // --- SUB-COMPONENT: Upcoming Payments Calendar widget for the Dashboard ---
-        // Aggregates due dates from Recurring bills, Subscriptions and the Net Worth ledger
-        // (EMIs, insurance premiums, SIPs, credit cards…) into a small month calendar + agenda list.
-        const PaymentsCalendarWidget = ({ settings }) => {
-            const formatCurrency = (val) => formatCurrencyVal(val, settings.currency || "INR");
-            const [viewDate, setViewDate] = React.useState(new Date());
-            const [timeframe, setTimeframe] = React.useState("30");
-            const [selectedDay, setSelectedDay] = React.useState(null);
-
+        // --- SUB-COMPONENT: Calendar widget for the Dashboard ---
+        const PaymentsCalendarWidget = ({ settings, transactions, selectedDay, setSelectedDay, viewDate, setViewDate }) => {
             const toYYYYMMDD = (dStr) => {
                 if (!dStr) return "";
                 const d = new Date(dStr);
@@ -5939,49 +5789,77 @@
                 return `${y}-${m}-${day}`;
             };
 
+            const getAnchorDayOfMonth = (dStr) => {
+                if (!dStr) return 1;
+                if (typeof dStr === 'string' && dStr.includes('-')) {
+                    const parts = dStr.split('-');
+                    if (parts.length === 3) {
+                        const dayNum = parseInt(parts[2].substring(0, 2), 10);
+                        if (!isNaN(dayNum) && dayNum >= 1 && dayNum <= 31) return dayNum;
+                    }
+                }
+                const d = new Date(dStr);
+                if (!isNaN(d.getTime())) return d.getDate();
+                return 1;
+            };
+
+            const getDueDateInMonth = (anchorDay, viewYear, viewMonth) => {
+                const maxDays = new Date(viewYear, viewMonth + 1, 0).getDate();
+                const day = Math.min(Math.max(anchorDay, 1), maxDays);
+                const m = String(viewMonth + 1).padStart(2, '0');
+                const d = String(day).padStart(2, '0');
+                return `${viewYear}-${m}-${d}`;
+            };
+
+            const year = viewDate.getFullYear();
+            const month = viewDate.getMonth();
+
             const dueItems = React.useMemo(() => {
                 const items = [];
                 const calNow = new Date();
                 const calTodayStr = `${calNow.getFullYear()}-${String(calNow.getMonth() + 1).padStart(2, '0')}-${String(calNow.getDate()).padStart(2, '0')}`;
+                const viewMonthPrefix = `${year}-${String(month + 1).padStart(2, '0')}`;
+
                 (settings.recurring || []).forEach(r => {
-                    if (r.active === false || !r.nextDate || (r.endDate && r.endDate < calTodayStr)) return;
-                    items.push({ date: r.nextDate, name: r.name, amount: r.amount, source: "Recurring bill", swatch: "warning" });
+                    if (r.active === false || (r.endDate && r.endDate < calTodayStr)) return;
+                    const anchorDay = getAnchorDayOfMonth(r.nextDate || r.startDate);
+                    const itemDueDateStr = getDueDateInMonth(anchorDay, year, month);
+
+                    // Check if already paid in this view month
+                    const isPaid = (transactions || []).some(t => {
+                        const tDate = toYYYYMMDD(t.date);
+                        return tDate && tDate.startsWith(viewMonthPrefix) && (t.linkedRecurringId === r.id || t.merchant === r.name);
+                    });
+
+                    if (!isPaid) {
+                        items.push({ date: itemDueDateStr });
+                    }
                 });
+
                 (settings.networthItems || []).forEach(it => {
                     if (!it.nextDueDate) return;
-                    items.push({
-                        date: it.nextDueDate,
-                        name: it.name,
-                        amount: Math.abs(Number(it.incomeExpense || 0)),
-                        source: it.category,
-                        swatch: (NET_WORTH_GROUPS.find(g => g.key === it.category) || {}).swatch || "primary"
+                    const anchorDay = getAnchorDayOfMonth(it.nextDueDate);
+                    const itemDueDateStr = getDueDateInMonth(anchorDay, year, month);
+
+                    const isPaid = (transactions || []).some(t => {
+                        const tDate = toYYYYMMDD(t.date);
+                        return tDate && tDate.startsWith(viewMonthPrefix) && (t.linkedRecurringId === it.id || t.merchant === it.name);
                     });
+
+                    if (!isPaid) {
+                        items.push({ date: itemDueDateStr });
+                    }
                 });
-                return items.filter(i => !isNaN(new Date(i.date).getTime())).sort((a, b) => new Date(a.date) - new Date(b.date));
-            }, [settings.recurring, settings.networthItems]);
+                return items.filter(i => !isNaN(new Date(i.date).getTime()));
+            }, [settings.recurring, settings.networthItems, transactions, year, month]);
 
             const today = new Date();
             today.setHours(0, 0, 0, 0);
 
-            const timeframeDays = timeframe === "custom" ? null : Number(timeframe);
-            const rangeEnd = timeframeDays ? new Date(today.getTime() + timeframeDays * 86400000) : null;
-
-            const agendaItems = dueItems.filter(i => {
-                const dKey = toYYYYMMDD(i.date);
-                if (timeframe === "custom") {
-                    if (!selectedDay) return true;
-                    return dKey === toYYYYMMDD(selectedDay);
-                }
-                const d = new Date(i.date);
-                if (d < today) return false;
-                return rangeEnd ? d <= rangeEnd : true;
-            });
-
-            // Month grid calculation
-            const year = viewDate.getFullYear();
-            const month = viewDate.getMonth();
+            // Month grid calculation (starting from Monday)
             const firstDay = new Date(year, month, 1);
-            const startOffset = firstDay.getDay();
+            // Sunday = 0 -> offset 6, Monday = 1 -> offset 0, Tue = 2 -> offset 1, etc.
+            const startOffset = (firstDay.getDay() + 6) % 7;
             const daysInMonth = new Date(year, month + 1, 0).getDate();
             const cells = [];
             for (let i = 0; i < startOffset; i++) cells.push(null);
@@ -5998,69 +5876,35 @@
 
             return (
                 <div className="section-card" style={{ background: 'var(--card-bg)', borderRadius: '16px', border: '1px solid var(--border-color)', boxShadow: 'var(--shadow-sm)' }}>
-                    <div className="section-card-title" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
-                        <span style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 600, fontSize: '0.95rem' }}>
-                            <Icon name="calendar" /> Upcoming Payments & Calendar
-                        </span>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                            <input
-                                type="date"
-                                className="form-control"
-                                style={{ fontSize: '0.78rem', padding: '4px 8px', width: 'auto' }}
-                                value={selectedDay ? toYYYYMMDD(selectedDay) : ""}
-                                onChange={(ev) => {
-                                    if (ev.target.value) {
-                                        const parts = ev.target.value.split("-");
-                                        const sel = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
-                                        setSelectedDay(sel);
-                                        setViewDate(sel);
-                                        setTimeframe("custom");
-                                    } else {
-                                        setSelectedDay(null);
-                                        setTimeframe("30");
-                                    }
-                                }}
-                            />
-                            <select
-                                className="period-picker"
-                                style={{ fontSize: '0.8rem', padding: '4px 8px' }}
-                                value={timeframe}
-                                onChange={(ev) => {
-                                    setTimeframe(ev.target.value);
-                                    if (ev.target.value !== "custom") setSelectedDay(null);
-                                }}
-                            >
-                                <option value="7">Next 7 days</option>
-                                <option value="30">Next 30 days</option>
-                                <option value="90">Next 3 months</option>
-                                <option value="custom">Pick a date</option>
-                            </select>
-                        </div>
-                    </div>
-
-                    {/* Mini Month Calendar */}
-                    <div style={{ marginBottom: '16px', background: 'var(--bg-color)', padding: '12px', borderRadius: '12px' }}>
+                    {/* Mini Month Calendar Header & Grid */}
+                    <div style={{ background: 'var(--bg-color)', padding: '12px', borderRadius: '12px' }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                                 <button className="btn btn-secondary btn-sm" style={{ padding: '3px 8px' }}
-                                    onClick={() => setViewDate(new Date(year, month - 1, 1))}>
+                                    onClick={() => {
+                                        setViewDate(new Date(year, month - 1, 1));
+                                        setSelectedDay(null);
+                                    }}>
                                     <Icon name="chevronLeft" />
                                 </button>
                                 <span style={{ fontWeight: 700, fontSize: '0.9rem' }}>
                                     {viewDate.toLocaleDateString(undefined, { month: 'long', year: 'numeric' })}
                                 </span>
                                 <button className="btn btn-secondary btn-sm" style={{ padding: '3px 8px' }}
-                                    onClick={() => setViewDate(new Date(year, month + 1, 1))}>
+                                    onClick={() => {
+                                        setViewDate(new Date(year, month + 1, 1));
+                                        setSelectedDay(null);
+                                    }}>
                                     <Icon name="chevronRight" />
                                 </button>
                             </div>
                             <button className="btn btn-secondary btn-sm" style={{ fontSize: '0.72rem', padding: '2px 8px' }}
-                                onClick={() => { setViewDate(new Date()); setSelectedDay(new Date()); setTimeframe("custom"); }}>
+                                onClick={() => { setViewDate(new Date()); setSelectedDay(new Date()); }}>
                                 Today
                             </button>
                         </div>
                         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '4px', textAlign: 'center', fontSize: '0.72rem' }}>
-                            {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((d, idx) => (
+                            {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((d, idx) => (
                                 <div key={idx} style={{ color: 'var(--text-muted)', fontWeight: 600, padding: '4px 0' }}>{d}</div>
                             ))}
                             {cells.map((d, idx) => {
@@ -6073,8 +5917,11 @@
                                     <div
                                         key={idx}
                                         onClick={() => {
-                                            setSelectedDay(cellDate);
-                                            setTimeframe("custom");
+                                            if (isSelected) {
+                                                setSelectedDay(null);
+                                            } else {
+                                                setSelectedDay(cellDate);
+                                            }
                                         }}
                                         style={{
                                             position: 'relative', padding: '8px 0', borderRadius: '8px', cursor: 'pointer',
@@ -6104,42 +5951,505 @@
                         </div>
                     </div>
 
-                    {/* Selected Day / Filter Label */}
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-                        <span style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-muted)' }}>
-                            {timeframe === "custom"
-                                ? (selectedDay ? `Due on ${formatDate(selectedDay, settings.dateFormat)}` : "All Picked Date Payments")
-                                : `Due in Next ${timeframe} Days`}
-                        </span>
-                        {selectedDay && (
-                            <button className="btn btn-secondary btn-sm" style={{ fontSize: '0.72rem', padding: '1px 6px' }}
-                                onClick={() => { setSelectedDay(null); setTimeframe("30"); }}>
-                                Clear Date Filter
+                </div>
+            );
+        };
+
+        // --- SUB-COMPONENT: Payments section with Upcoming, Overdue, and Paid filters ---
+        const PaymentsSectionWidget = ({ settings, transactions, updateSetting, loadState, showToast, selectedDay, setSelectedDay, viewDate }) => {
+            const [filter, setFilter] = React.useState("upcoming");
+            const [markPaidModalItem, setMarkPaidModalItem] = React.useState(null);
+            const [selectedTxIdToLink, setSelectedTxIdToLink] = React.useState(null);
+
+            const formatCurrency = (val) => formatCurrencyVal(val, settings.currency || "INR");
+
+            const toYYYYMMDD = (dStr) => {
+                if (!dStr) return "";
+                const d = new Date(dStr);
+                if (isNaN(d.getTime())) return "";
+                const y = d.getFullYear();
+                const m = String(d.getMonth() + 1).padStart(2, '0');
+                const day = String(d.getDate()).padStart(2, '0');
+                return `${y}-${m}-${day}`;
+            };
+
+            const getAnchorDayOfMonth = (dStr) => {
+                if (!dStr) return 1;
+                if (typeof dStr === 'string' && dStr.includes('-')) {
+                    const parts = dStr.split('-');
+                    if (parts.length === 3) {
+                        const dayNum = parseInt(parts[2].substring(0, 2), 10);
+                        if (!isNaN(dayNum) && dayNum >= 1 && dayNum <= 31) return dayNum;
+                    }
+                }
+                const d = new Date(dStr);
+                if (!isNaN(d.getTime())) return d.getDate();
+                return 1;
+            };
+
+            const getDueDateInMonth = (anchorDay, viewYear, viewMonth) => {
+                const maxDays = new Date(viewYear, viewMonth + 1, 0).getDate();
+                const day = Math.min(Math.max(anchorDay, 1), maxDays);
+                const m = String(viewMonth + 1).padStart(2, '0');
+                const d = String(day).padStart(2, '0');
+                return `${viewYear}-${m}-${d}`;
+            };
+
+            const calNow = new Date();
+            const todayStr = `${calNow.getFullYear()}-${String(calNow.getMonth() + 1).padStart(2, '0')}-${String(calNow.getDate()).padStart(2, '0')}`;
+            const todayObj = new Date(calNow.getFullYear(), calNow.getMonth(), calNow.getDate());
+
+            const viewYear = viewDate ? viewDate.getFullYear() : calNow.getFullYear();
+            const viewMonth = viewDate ? viewDate.getMonth() : calNow.getMonth();
+            const viewMonthPrefix = `${viewYear}-${String(viewMonth + 1).padStart(2, '0')}`;
+
+            const { upcomingItems, overdueItems } = React.useMemo(() => {
+                const upcoming = [];
+                const overdue = [];
+
+                (settings.recurring || []).forEach(r => {
+                    if (r.active === false || (r.endDate && r.endDate < calNow.toISOString().split('T')[0])) return;
+                    const anchorDay = getAnchorDayOfMonth(r.nextDate || r.startDate);
+                    const itemDueDateStr = getDueDateInMonth(anchorDay, viewYear, viewMonth);
+                    const itemDateObj = new Date(itemDueDateStr + "T00:00:00");
+
+                    // Check if already paid in this view month
+                    const isPaid = (transactions || []).some(t => {
+                        const tDate = toYYYYMMDD(t.date);
+                        return tDate && tDate.startsWith(viewMonthPrefix) && (t.linkedRecurringId === r.id || t.merchant === r.name);
+                    });
+
+                    if (isPaid) return;
+
+                    const itemObj = {
+                        id: r.id,
+                        kind: "recurring",
+                        date: itemDueDateStr,
+                        dateObj: itemDateObj,
+                        name: r.name,
+                        amount: r.amount,
+                        type: r.type || "expense",
+                        category: r.category || "Recurring bill",
+                        cadence: r.cadence || "monthly",
+                        swatch: "warning"
+                    };
+
+                    if (itemDueDateStr < todayStr) {
+                        const diffTime = Math.abs(todayObj - itemDateObj);
+                        const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+                        itemObj.daysOverdue = diffDays;
+                        overdue.push(itemObj);
+                    } else {
+                        upcoming.push(itemObj);
+                    }
+                });
+
+                (settings.networthItems || []).forEach(it => {
+                    if (!it.nextDueDate) return;
+                    const anchorDay = getAnchorDayOfMonth(it.nextDueDate);
+                    const itemDueDateStr = getDueDateInMonth(anchorDay, viewYear, viewMonth);
+                    const itemDateObj = new Date(itemDueDateStr + "T00:00:00");
+
+                    const isPaid = (transactions || []).some(t => {
+                        const tDate = toYYYYMMDD(t.date);
+                        return tDate && tDate.startsWith(viewMonthPrefix) && (t.linkedRecurringId === it.id || t.merchant === it.name);
+                    });
+
+                    if (isPaid) return;
+
+                    const itemObj = {
+                        id: it.id,
+                        kind: "networth",
+                        date: itemDueDateStr,
+                        dateObj: itemDateObj,
+                        name: it.name,
+                        amount: Math.abs(Number(it.incomeExpense || 0)),
+                        type: Number(it.incomeExpense || 0) < 0 ? "expense" : "income",
+                        category: it.category || "Loans & Liabilities",
+                        frequencyPerYear: it.frequencyPerYear || 12,
+                        swatch: (NET_WORTH_GROUPS.find(g => g.key === it.category) || {}).swatch || "primary"
+                    };
+
+                    if (itemDueDateStr < todayStr) {
+                        const diffTime = Math.abs(todayObj - itemDateObj);
+                        const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+                        itemObj.daysOverdue = diffDays;
+                        overdue.push(itemObj);
+                    } else {
+                        upcoming.push(itemObj);
+                    }
+                });
+
+                upcoming.sort((a, b) => a.dateObj - b.dateObj);
+                overdue.sort((a, b) => a.dateObj - b.dateObj);
+
+                return { upcomingItems: upcoming, overdueItems: overdue };
+            }, [settings.recurring, settings.networthItems, transactions, viewYear, viewMonth, todayStr]);
+
+            const paidItems = React.useMemo(() => {
+                const list = (transactions || []).filter(t => t.linkedRecurringId || t.linkTo || t.source === "recurring" || (t.notes && t.notes.includes("Marked as paid")));
+                return list.sort((a, b) => new Date(b.date) - new Date(a.date));
+            }, [transactions]);
+
+            const selectedDayStr = selectedDay ? toYYYYMMDD(selectedDay) : null;
+
+            const filteredUpcoming = selectedDayStr ? upcomingItems.filter(i => i.date === selectedDayStr) : upcomingItems;
+            const filteredOverdue = selectedDayStr ? overdueItems.filter(i => i.date === selectedDayStr) : overdueItems;
+            const filteredPaid = selectedDayStr ? paidItems.filter(i => toYYYYMMDD(i.date) === selectedDayStr) : paidItems.filter(i => toYYYYMMDD(i.date).startsWith(viewMonthPrefix));
+
+            // Auto-select active filter tab based on calendar view & date selection rules
+            React.useEffect(() => {
+                if (selectedDayStr) {
+                    if (selectedDayStr > todayStr) {
+                        // 3. Single future date selected: show upcoming filter, if empty show paid filter
+                        if (filteredUpcoming.length > 0) {
+                            setFilter("upcoming");
+                        } else {
+                            setFilter("paid");
+                        }
+                    } else {
+                        // 4. Single past or present date selected: show overdue filter, if empty show paid filter
+                        if (filteredOverdue.length > 0) {
+                            setFilter("overdue");
+                        } else {
+                            setFilter("paid");
+                        }
+                    }
+                } else {
+                    // Month view level selection
+                    const calYear = calNow.getFullYear();
+                    const calMonth = calNow.getMonth();
+                    const isPrevMonth = viewYear < calYear || (viewYear === calYear && viewMonth < calMonth);
+                    const isNextMonth = viewYear > calYear || (viewYear === calYear && viewMonth > calMonth);
+
+                    if (isPrevMonth) {
+                        // 1. Previous month selected: show overdue filter, if nothing exists show paid filter
+                        if (filteredOverdue.length > 0) {
+                            setFilter("overdue");
+                        } else {
+                            setFilter("paid");
+                        }
+                    } else if (isNextMonth) {
+                        // 2. Next month selected: show upcoming filter, if nothing exists show paid filter
+                        if (filteredUpcoming.length > 0) {
+                            setFilter("upcoming");
+                        } else {
+                            setFilter("paid");
+                        }
+                    } else {
+                        // Current month
+                        if (filteredOverdue.length > 0) {
+                            setFilter("overdue");
+                        } else if (filteredUpcoming.length > 0) {
+                            setFilter("upcoming");
+                        } else {
+                            setFilter("paid");
+                        }
+                    }
+                }
+            }, [selectedDayStr, viewYear, viewMonth, filteredUpcoming.length, filteredOverdue.length, filteredPaid.length, todayStr]);
+
+            // Candidate matching transactions for Mark Paid modal
+            const candidateMatches = React.useMemo(() => {
+                if (!markPaidModalItem) return [];
+                const itemDateStr = markPaidModalItem.date;
+                const itemAmount = Math.abs(Number(markPaidModalItem.amount));
+                return (transactions || []).filter(t => {
+                    const tDateStr = toYYYYMMDD(t.date);
+                    const tAmount = Math.abs(Number(t.amount));
+                    return tDateStr === itemDateStr && Math.abs(tAmount - itemAmount) < 0.01;
+                });
+            }, [markPaidModalItem, transactions]);
+
+            const confirmMarkPaid = async (item, txIdToLink) => {
+                try {
+                    if (txIdToLink) {
+                        const existingTx = transactions.find(t => t.id === txIdToLink);
+                        if (existingTx) {
+                            const updatedTx = {
+                                ...existingTx,
+                                linkedRecurringId: item.id,
+                                notes: existingTx.notes ? (existingTx.notes.includes("Marked as paid") ? existingTx.notes : `${existingTx.notes} (Marked as paid)`) : `Marked as paid from Dashboard on ${new Date().toLocaleDateString()}`
+                            };
+                            await updateTransactionInDB(updatedTx);
+                        }
+                    } else {
+                        const newTx = {
+                            id: crypto.randomUUID(),
+                            date: item.date || todayStr,
+                            merchant: item.name,
+                            narration: item.name,
+                            amount: item.amount,
+                            type: item.type || "expense",
+                            category: item.category || "Subscriptions",
+                            account: "Main Checking",
+                            linkedRecurringId: item.id,
+                            tags: [],
+                            notes: `Marked as paid from Dashboard on ${new Date().toLocaleDateString()}`
+                        };
+                        await updateTransactionInDB(newTx);
+                    }
+
+                    // Advance schedule on item
+                    if (item.kind === "recurring") {
+                        const updatedList = (settings.recurring || []).map(r => {
+                            if (r.id !== item.id) return r;
+                            const d = new Date(r.nextDate || new Date());
+                            switch (r.cadence) {
+                                case "weekly": d.setDate(d.getDate() + 7); break;
+                                case "biweekly": d.setDate(d.getDate() + 14); break;
+                                case "quarterly": d.setMonth(d.getMonth() + 3); break;
+                                case "annual": d.setFullYear(d.getFullYear() + 1); break;
+                                case "monthly":
+                                default: d.setMonth(d.getMonth() + 1); break;
+                            }
+                            return { ...r, nextDate: d.toISOString().split('T')[0] };
+                        });
+                        await updateSetting("recurring", updatedList);
+                    } else if (item.kind === "networth") {
+                        const updatedList = (settings.networthItems || []).map(it => {
+                            if (it.id !== item.id) return it;
+                            const d = new Date(it.nextDueDate || new Date());
+                            const monthsToAdd = (it.frequencyPerYear >= 12) ? 1 : (it.frequencyPerYear === 4) ? 3 : (it.frequencyPerYear === 2) ? 6 : 12;
+                            d.setMonth(d.getMonth() + monthsToAdd);
+                            return { ...it, nextDueDate: d.toISOString().split('T')[0] };
+                        });
+                        await updateSetting("networthItems", updatedList);
+                    }
+
+                    // Refresh global state so new transaction and updated settings are immediately reflected across all views
+                    if (typeof loadState === "function") {
+                        await loadState();
+                    }
+
+                    if (typeof showToast === "function") {
+                        showToast(`Marked "${item.name}" as paid`);
+                    }
+                } catch (e) {
+                    console.error("Mark paid error:", e);
+                } finally {
+                    setMarkPaidModalItem(null);
+                    setSelectedTxIdToLink(null);
+                }
+            };
+
+            return (
+                <div className="section-card" style={{ background: 'var(--card-bg)', borderRadius: '16px', border: '1px solid var(--border-color)', boxShadow: 'var(--shadow-sm)', display: 'flex', flexDirection: 'column', height: '100%' }}>
+                    {/* 3 Filter Tabs: Upcoming, Overdue, Paid (No Payments Heading) */}
+                    <div style={{ display: 'flex', justifyContent: 'flex-start', marginBottom: '16px' }}>
+                        <div style={{ display: 'flex', gap: '4px', background: 'var(--bg-color)', padding: '3px', borderRadius: '10px', border: '1px solid var(--border-color)', width: '100%' }}>
+                            <button
+                                className={`btn btn-sm ${filter === 'upcoming' ? 'btn-primary' : 'btn-secondary'}`}
+                                onClick={() => setFilter('upcoming')}
+                                style={{ flex: 1, fontSize: '0.78rem', padding: '4px 10px', borderRadius: '7px', fontWeight: filter === 'upcoming' ? 600 : 500, border: 'none' }}
+                            >
+                                Upcoming ({filteredUpcoming.length})
                             </button>
+                            <button
+                                className={`btn btn-sm ${filter === 'overdue' ? 'btn-primary' : 'btn-secondary'}`}
+                                onClick={() => setFilter('overdue')}
+                                style={{
+                                    flex: 1, fontSize: '0.78rem', padding: '4px 10px', borderRadius: '7px', fontWeight: filter === 'overdue' ? 600 : 500, border: 'none',
+                                    color: filter === 'overdue' ? '#fff' : (filteredOverdue.length > 0 ? 'var(--danger)' : 'inherit')
+                                }}
+                            >
+                                Overdue {filteredOverdue.length > 0 && (
+                                    <span className="badge" style={{ backgroundColor: filter === 'overdue' ? '#fff' : 'var(--danger)', color: filter === 'overdue' ? 'var(--danger)' : '#fff', marginLeft: '4px', fontSize: '0.68rem', padding: '1px 5px' }}>
+                                        {filteredOverdue.length}
+                                    </span>
+                                )}
+                            </button>
+                            <button
+                                className={`btn btn-sm ${filter === 'paid' ? 'btn-primary' : 'btn-secondary'}`}
+                                onClick={() => setFilter('paid')}
+                                style={{ flex: 1, fontSize: '0.78rem', padding: '4px 10px', borderRadius: '7px', fontWeight: filter === 'paid' ? 600 : 500, border: 'none' }}
+                            >
+                                Paid ({filteredPaid.length})
+                            </button>
+                        </div>
+                    </div>
+
+                    {/* Active Filter Content */}
+                    <div style={{ flex: 1, overflowY: 'auto', maxHeight: '280px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                        {filter === "upcoming" && (
+                            filteredUpcoming.length === 0 ? (
+                                <div className="empty-state" style={{ padding: '24px 12px' }}>
+                                    <Icon name="calendar" />
+                                    <h3>No Upcoming Payments</h3>
+                                    <p style={{ fontSize: '0.8rem' }}>{selectedDayStr ? "No scheduled payments for selected date." : "No upcoming commitments found for this month."}</p>
+                                </div>
+                            ) : (
+                                filteredUpcoming.map((item, idx) => (
+                                    <div key={item.id || idx} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 12px', borderRadius: '10px', background: '#fff', border: '1px solid var(--border-color)' }}>
+                                        <div>
+                                            <div style={{ fontWeight: 600, fontSize: '0.86rem' }}>{item.name}</div>
+                                            <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)', marginTop: '2px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                                <span className="badge" style={{ backgroundColor: `var(--${item.swatch}-light)`, color: `var(--${item.swatch})` }}>{item.category}</span>
+                                                <span>Due {formatDate(item.date, settings.dateFormat)}</span>
+                                            </div>
+                                        </div>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                            <span style={{ fontWeight: 700, fontSize: '0.9rem', color: item.type === 'income' ? 'var(--success)' : 'var(--danger)' }}>
+                                                {item.type === 'income' ? '+' : '-'}{formatCurrency(item.amount)}
+                                            </span>
+                                            <button className="btn btn-secondary btn-sm" style={{ fontSize: '0.72rem', padding: '3px 8px' }} onClick={() => { setMarkPaidModalItem(item); setSelectedTxIdToLink(null); }}>
+                                                Mark Paid
+                                            </button>
+                                        </div>
+                                    </div>
+                                ))
+                            )
+                        )}
+
+                        {filter === "overdue" && (
+                            filteredOverdue.length === 0 ? (
+                                <div className="empty-state" style={{ padding: '24px 12px' }}>
+                                    <Icon name="check" />
+                                    <h3>All Caught Up!</h3>
+                                    <p style={{ fontSize: '0.8rem' }}>No overdue payments found for this month.</p>
+                                </div>
+                            ) : (
+                                filteredOverdue.map((item, idx) => (
+                                    <div key={item.id || idx} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 12px', borderRadius: '10px', background: '#FEF2F2', border: '1px solid #FCA5A5' }}>
+                                        <div>
+                                            <div style={{ fontWeight: 600, fontSize: '0.86rem', color: '#991B1B' }}>{item.name}</div>
+                                            <div style={{ fontSize: '0.74rem', color: '#B91C1C', marginTop: '2px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                                <span className="badge" style={{ backgroundColor: '#FEE2E2', color: '#991B1B', fontWeight: 600 }}>
+                                                    {item.daysOverdue} day{item.daysOverdue > 1 ? 's' : ''} overdue
+                                                </span>
+                                                <span>Due {formatDate(item.date, settings.dateFormat)}</span>
+                                            </div>
+                                        </div>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                            <span style={{ fontWeight: 700, fontSize: '0.9rem', color: '#991B1B' }}>
+                                                -{formatCurrency(item.amount)}
+                                            </span>
+                                            <button className="btn btn-primary btn-sm" style={{ fontSize: '0.72rem', padding: '3px 8px', background: '#DC2626', borderColor: '#DC2626' }} onClick={() => { setMarkPaidModalItem(item); setSelectedTxIdToLink(null); }}>
+                                                Mark Paid
+                                            </button>
+                                        </div>
+                                    </div>
+                                ))
+                            )
+                        )}
+
+                        {filter === "paid" && (
+                            filteredPaid.length === 0 ? (
+                                <div className="empty-state" style={{ padding: '24px 12px' }}>
+                                    <Icon name="transactions" />
+                                    <h3>No Paid Payments</h3>
+                                    <p style={{ fontSize: '0.8rem' }}>No completed payment history recorded for this month.</p>
+                                </div>
+                            ) : (
+                                filteredPaid.map((item, idx) => (
+                                    <div key={item.id || idx} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 12px', borderRadius: '10px', background: '#fff', border: '1px solid var(--border-color)' }}>
+                                        <div>
+                                            <div style={{ fontWeight: 600, fontSize: '0.86rem' }}>{item.merchant || item.narration || "Payment"}</div>
+                                            <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)', marginTop: '2px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                                <span className="badge" style={{ backgroundColor: '#D1FAE5', color: '#065F46' }}>✓ Paid</span>
+                                                <span>{formatDate(item.date, settings.dateFormat)}</span>
+                                            </div>
+                                        </div>
+                                        <span style={{ fontWeight: 700, fontSize: '0.9rem', color: item.type === 'income' ? 'var(--success)' : 'var(--danger)' }}>
+                                            {item.type === 'income' ? '+' : '-'}{formatCurrency(item.amount)}
+                                        </span>
+                                    </div>
+                                ))
+                            )
                         )}
                     </div>
 
-                    {/* Agenda items list */}
-                    {agendaItems.length === 0 ? (
-                        <div className="empty-state" style={{ padding: '18px 10px' }}>
-                            <Icon name="calendar" />
-                            <h3>Nothing Due</h3>
-                            <p style={{ fontSize: '0.8rem' }}>No scheduled payments due {selectedDay ? "on selected date" : "in this window"}.</p>
-                        </div>
-                    ) : (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '240px', overflowY: 'auto' }}>
-                            {agendaItems.map((i, idx) => (
-                                <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 12px', borderRadius: '10px', background: '#fff', border: '1px solid var(--border-color)' }}>
-                                    <div>
-                                        <div style={{ fontWeight: 600, fontSize: '0.85rem' }}>{i.name}</div>
-                                        <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)', marginTop: '2px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                                            <span className="badge" style={{ backgroundColor: `var(--${i.swatch}-light)`, color: `var(--${i.swatch})` }}>{i.source}</span>
-                                            <span>{formatDate(i.date, settings.dateFormat)}</span>
+                    {/* Mark Paid Confirmation / Transaction Match Modal */}
+                    {markPaidModalItem && (
+                        <div className="modal-overlay">
+                            <div className="modal-container" style={{ maxWidth: '480px' }}>
+                                <div className="modal-header">
+                                    <h3 className="modal-title">Mark Payment as Paid</h3>
+                                    <button className="modal-close-btn" onClick={() => { setMarkPaidModalItem(null); setSelectedTxIdToLink(null); }}>
+                                        <Icon name="close" />
+                                    </button>
+                                </div>
+                                <div className="modal-body" style={{ padding: '16px' }}>
+                                    <div style={{ padding: '12px', borderRadius: '10px', background: 'var(--bg-color)', border: '1px solid var(--border-color)', marginBottom: '16px' }}>
+                                        <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>Payment Item</div>
+                                        <div style={{ fontWeight: 700, fontSize: '1rem', marginTop: '2px' }}>{markPaidModalItem.name}</div>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '6px', fontSize: '0.82rem' }}>
+                                            <span>Date: <strong>{formatDate(markPaidModalItem.date, settings.dateFormat)}</strong></span>
+                                            <span>Amount: <strong style={{ color: 'var(--primary)' }}>{formatCurrency(markPaidModalItem.amount)}</strong></span>
                                         </div>
                                     </div>
-                                    {i.amount ? <span style={{ fontWeight: 700, fontSize: '0.9rem', color: 'var(--danger)' }}>{formatCurrency(i.amount)}</span> : null}
+
+                                    {candidateMatches.length > 0 ? (
+                                        <div>
+                                            <p style={{ fontSize: '0.84rem', fontWeight: 600, color: 'var(--text-main)', marginBottom: '8px' }}>
+                                                Found {candidateMatches.length} existing transaction{candidateMatches.length > 1 ? 's' : ''} on this date with matching amount ({formatCurrency(markPaidModalItem.amount)}):
+                                            </p>
+                                            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '180px', overflowY: 'auto', marginBottom: '12px' }}>
+                                                {candidateMatches.map(tx => {
+                                                    const isChecked = (selectedTxIdToLink === tx.id) || (!selectedTxIdToLink && candidateMatches[0].id === tx.id);
+                                                    return (
+                                                        <label
+                                                            key={tx.id}
+                                                            style={{
+                                                                display: 'flex', alignItems: 'center', gap: '10px', padding: '10px 12px',
+                                                                borderRadius: '8px', border: isChecked ? '1px solid var(--primary)' : '1px solid var(--border-color)',
+                                                                background: isChecked ? 'var(--primary-light)' : '#fff', cursor: 'pointer'
+                                                            }}
+                                                        >
+                                                            <input
+                                                                type="radio"
+                                                                name="txMatch"
+                                                                checked={isChecked}
+                                                                onChange={() => setSelectedTxIdToLink(tx.id)}
+                                                            />
+                                                            <div style={{ flex: 1 }}>
+                                                                <div style={{ fontWeight: 600, fontSize: '0.84rem' }}>{tx.merchant || tx.narration || "Transaction"}</div>
+                                                                <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)', display: 'flex', gap: '8px' }}>
+                                                                    <span>{tx.category || "General"}</span>
+                                                                    <span>• {tx.account || "Account"}</span>
+                                                                </div>
+                                                            </div>
+                                                            <span style={{ fontWeight: 700, fontSize: '0.86rem' }}>{formatCurrency(tx.amount)}</span>
+                                                        </label>
+                                                    );
+                                                })}
+                                            </div>
+                                            <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+                                                Would you like to match this payment to the selected transaction or create a new transaction?
+                                            </p>
+                                        </div>
+                                    ) : (
+                                        <div>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 12px', borderRadius: '8px', background: '#FFFBEB', border: '1px solid #FCD34D', color: '#92400E', fontSize: '0.82rem', marginBottom: '12px' }}>
+                                                <Icon name="info" />
+                                                <span>No existing transaction found on <strong>{formatDate(markPaidModalItem.date, settings.dateFormat)}</strong> matching <strong>{formatCurrency(markPaidModalItem.amount)}</strong>.</span>
+                                            </div>
+                                            <p style={{ fontSize: '0.84rem', color: 'var(--text-main)' }}>
+                                                Would you like to create a new transaction for this payment?
+                                            </p>
+                                        </div>
+                                    )}
                                 </div>
-                            ))}
+                                <div className="modal-footer" style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end', padding: '12px 16px' }}>
+                                    <button className="btn btn-secondary btn-sm" onClick={() => { setMarkPaidModalItem(null); setSelectedTxIdToLink(null); }}>
+                                        Cancel
+                                    </button>
+                                    {candidateMatches.length > 0 ? (
+                                        <>
+                                            <button className="btn btn-secondary btn-sm" onClick={() => confirmMarkPaid(markPaidModalItem, null)}>
+                                                Create New Transaction
+                                            </button>
+                                            <button className="btn btn-primary btn-sm" onClick={() => confirmMarkPaid(markPaidModalItem, selectedTxIdToLink || candidateMatches[0].id)}>
+                                                Link Selected Transaction
+                                            </button>
+                                        </>
+                                    ) : (
+                                        <button className="btn btn-primary btn-sm" onClick={() => confirmMarkPaid(markPaidModalItem, null)}>
+                                            Confirm & Create Transaction
+                                        </button>
+                                    )}
+                                </div>
+                            </div>
                         </div>
                     )}
                 </div>
@@ -6566,7 +6876,7 @@
             });
 
             const handleRemoveTag = (tx, tagToRemove) => {
-                const updatedTags = tx.tags.filter(t => t !== tagToRemove);
+                const updatedTags = (tx.tags || []).filter(t => t !== tagToRemove);
                 onPatch(tx.id, { tags: updatedTags });
             };
 
@@ -6646,7 +6956,7 @@
 
                                                 <td>
                                                     <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '3px' }}>
-                                                        {t.tags.map(tag => (
+                                                        {(t.tags || []).map(tag => (
                                                             <span key={tag} className="tag-pill">
                                                                 {tag}
                                                                 <button className="remove-btn" onClick={() => handleRemoveTag(t, tag)}>×</button>
