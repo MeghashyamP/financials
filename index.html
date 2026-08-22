@@ -1722,17 +1722,20 @@
 
         // Net Worth ledger group definitions — crisp categories for Assets, Investments & Debt Liabilities
         const NET_WORTH_GROUPS = [
-            // Assets & Cash
+            // Cash & Bank Balances
+            { key: "Bank Accounts", label: "Bank Accounts & Savings", icon: "🏦", swatch: "success", kind: "balance" },
+            { key: "Cash & Wallets", label: "Physical Cash & Wallets", icon: "💵", swatch: "success", kind: "balance" },
+
+            // Fixed & Physical Assets
             { key: "Fixed Assets", label: "Fixed Assets & Real Estate", icon: "🏠", swatch: "info", kind: "asset" },
             { key: "Vehicles", label: "Vehicles & Automobiles", icon: "🚗", swatch: "info", kind: "asset" },
-            { key: "Current Balances", label: "Cash & Bank Balances", icon: "🐖", swatch: "primary", kind: "balance" },
-            { key: "Fixed Deposits", label: "Fixed Deposits & FDs", icon: "🏦", swatch: "info", kind: "asset" },
             { key: "Gold & Metals", label: "Gold & Precious Metals", icon: "🥇", swatch: "warning", kind: "asset" },
-            { key: "Retirement & PF", label: "Retirement & PF Corpus", icon: "👴", swatch: "success", kind: "asset" },
             { key: "Other Assets", label: "Other Valuables & Assets", icon: "💎", swatch: "info", kind: "asset" },
 
             // Investments
             { key: "Investments", label: "General Investments", icon: "📈", swatch: "warning", kind: "investment" },
+            { key: "Fixed Deposits", label: "Fixed Deposits & FDs", icon: "🏦", swatch: "warning", kind: "investment" },
+            { key: "Retirement & PF", label: "Retirement & PF Corpus", icon: "👴", swatch: "warning", kind: "investment" },
             { key: "Stocks & Equity", label: "Stocks & Equity Portfolio", icon: "📈", swatch: "warning", kind: "investment" },
             { key: "Mutual Funds & SIPs", label: "Mutual Funds Portfolio", icon: "📊", swatch: "warning", kind: "investment" },
             { key: "Bonds & Debt", label: "Bonds & Fixed Income", icon: "📜", swatch: "warning", kind: "investment" },
@@ -2655,7 +2658,7 @@
                             } else if (typeof field.getValue === 'function') {
                                 val = field.getValue() || "";
                             }
-                        } catch (vErr) {}
+                        } catch (vErr) { }
 
                         if (name || val) {
                             result.formFields.push({ name, type: fieldType, value: val });
@@ -2683,7 +2686,7 @@
                         const rotation = page.getRotation ? page.getRotation().angle : 0;
                         return { pageIndex: idx + 1, width, height, rotation };
                     });
-                } catch (pErr) {}
+                } catch (pErr) { }
 
             } catch (err) {
                 console.warn("PDF-lib document load & pre-processing warning:", err);
@@ -3531,13 +3534,77 @@
             const [calcPeriod, setCalcPeriod] = React.useState("this_month");
             const [calcCustomStart, setCalcCustomStart] = React.useState("");
             const [calcCustomEnd, setCalcCustomEnd] = React.useState("");
+            const [networthSectionFilter, setNetworthSectionFilter] = React.useState("all");
+
+            // Calculate All Time min and max transaction dates
+            const allTimeRange = React.useMemo(() => {
+                if (!transactions || transactions.length === 0) {
+                    const today = new Date();
+                    const pad = (n) => String(n).padStart(2, '0');
+                    const todayStr = `${today.getFullYear()}-${pad(today.getMonth() + 1)}-${pad(today.getDate())}`;
+                    return { start: "2020-01-01", end: todayStr };
+                }
+                let minD = null;
+                let maxD = null;
+                transactions.forEach(t => {
+                    if (!t.date) return;
+                    const dStr = String(t.date).slice(0, 10);
+                    if (!minD || dStr < minD) minD = dStr;
+                    if (!maxD || dStr > maxD) maxD = dStr;
+                });
+                const today = new Date();
+                const pad = (n) => String(n).padStart(2, '0');
+                const todayStr = `${today.getFullYear()}-${pad(today.getMonth() + 1)}-${pad(today.getDate())}`;
+                return {
+                    start: minD || "2020-01-01",
+                    end: maxD || todayStr
+                };
+            }, [transactions]);
 
             const activePeriod = settings.selectedPeriod || calcPeriod || "this_month";
+            const normPeriodKey = (activePeriod || "this_month").toLowerCase().replace(/-/g, "_");
             const calcRange = calculatePeriodDateRange(activePeriod, new Date(), calcCustomStart, calcCustomEnd);
+
+            const displayStartDate = React.useMemo(() => {
+                if (["custom", "custom_range"].includes(normPeriodKey)) {
+                    return calcCustomStart || calcRange.pStartStr;
+                }
+                if (["all_time", "all"].includes(normPeriodKey)) {
+                    return calcCustomStart || allTimeRange.start;
+                }
+                return calcRange.pStartStr;
+            }, [normPeriodKey, calcCustomStart, calcRange.pStartStr, allTimeRange.start]);
+
+            const displayEndDate = React.useMemo(() => {
+                if (["custom", "custom_range"].includes(normPeriodKey)) {
+                    return calcCustomEnd || calcRange.pEndStr;
+                }
+                if (["all_time", "all"].includes(normPeriodKey)) {
+                    return calcCustomEnd || allTimeRange.end;
+                }
+                return calcRange.pEndStr;
+            }, [normPeriodKey, calcCustomEnd, calcRange.pEndStr, allTimeRange.end]);
 
             const handleUnifiedPeriodChange = (val) => {
                 setCalcPeriod(val);
+                const normVal = (val || "").toLowerCase().replace(/-/g, "_");
+                if (!["custom", "custom_range"].includes(normVal)) {
+                    setCalcCustomStart("");
+                    setCalcCustomEnd("");
+                }
                 updateSetting("selectedPeriod", val);
+            };
+
+            const handleStartDateChange = (val) => {
+                setCalcCustomStart(val);
+                if (!calcCustomEnd) setCalcCustomEnd(displayEndDate);
+                handleUnifiedPeriodChange("custom");
+            };
+
+            const handleEndDateChange = (val) => {
+                setCalcCustomEnd(val);
+                if (!calcCustomStart) setCalcCustomStart(displayStartDate);
+                handleUnifiedPeriodChange("custom");
             };
 
             const [isSidebarCollapsed, setIsSidebarCollapsed] = React.useState(() => {
@@ -4215,114 +4282,188 @@
                     <div className={`main-wrapper ${isSidebarCollapsed ? "sidebar-collapsed" : ""}`}>
 
                         {/* Header top sticky bar - Desktop */}
-                        <header className="topbar">
-                            <div className="topbar-title-wrapper">
-                                <h2 className="topbar-title">{getPageTitle(activePage)}</h2>
-                                {getPageDescription(activePage) && (
-                                    <p className="topbar-desc">{getPageDescription(activePage)}</p>
-                                )}
-                            </div>
-                            <div className="topbar-actions">
-                                {activePage === "documents" && (
-                                    <>
-                                        <button className="btn btn-secondary" onClick={handleSyncLocalFolder}>
-                                            <Icon name="sync" />
-                                            <span>Sync Folder</span>
-                                        </button>
-                                        <button className="btn btn-primary" onClick={() => setShowImportModal(true)}>
-                                            <Icon name="download" />
-                                            <span>Import PDF/CSV</span>
-                                        </button>
-                                    </>
-                                )}
-                                {["dashboard", "transactions", "recurring", "subscriptions", "budgets"].includes(activePage) && (
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', background: 'var(--card-bg)', padding: '5px 12px', borderRadius: '8px', border: '1px solid var(--border-color)', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
-                                        <span style={{ fontWeight: 600, fontSize: '0.82rem', display: 'flex', alignItems: 'center', gap: '4px', whiteSpace: 'nowrap' }}>
-                                            🗓️ Period:
-                                        </span>
-                                        <select
-                                            className="form-control"
-                                            style={{ width: 'auto', minWidth: '180px', fontSize: '0.82rem', padding: '4px 8px', height: '32px', cursor: 'pointer' }}
-                                            value={(activePeriod || "this_month").toLowerCase().replace(/-/g, "_")}
-                                            onChange={(e) => handleUnifiedPeriodChange(e.target.value)}
-                                        >
-                                            <PeriodSelectOptions />
-                                        </select>
+                        <header className="topbar" style={activePage === "networth" ? { height: '76px', minHeight: '76px', boxSizing: 'border-box', padding: '10px 32px' } : {}}>
+                            {activePage === "networth" ? (
+                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '12px', width: '100%', alignItems: 'center' }}>
+                                    {(() => {
+                                        const nwItems = (settings.networthItems || []).filter(it => it.includeInNetWorth !== false);
+                                        const nwCash = nwItems
+                                            .filter(it => (NET_WORTH_GROUPS.find(g => g.key === it.category) || {}).kind === "balance")
+                                            .reduce((s, it) => s + Number(it.value || 0), 0);
+                                        const nwAssets = nwItems
+                                            .filter(it => (NET_WORTH_GROUPS.find(g => g.key === it.category) || {}).kind === "asset")
+                                            .reduce((s, it) => s + Number(it.value || 0), 0);
+                                        const nwInvestments = nwItems
+                                            .filter(it => (NET_WORTH_GROUPS.find(g => g.key === it.category) || {}).kind === "investment")
+                                            .reduce((s, it) => s + Number(it.value || 0), 0);
+                                        const nwLiabilities = nwItems
+                                            .filter(it => (NET_WORTH_GROUPS.find(g => g.key === it.category) || {}).kind === "liability")
+                                            .reduce((s, it) => s + Math.abs(Number(it.value || 0)), 0);
+                                        const nwTotal = nwCash + nwAssets + nwInvestments - nwLiabilities;
+                                        const fmt = (v) => formatCurrencyVal(v, settings.currency || "INR");
 
-                                        {[ "custom", "custom_range" ].includes((activePeriod || "").toLowerCase().replace(/-/g, "_")) && (
-                                            <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                                                <input
-                                                    type="date"
+                                        const tiles = [
+                                            { id: 'all', title: 'Net Worth', val: nwTotal, icon: 'networth', color: 'var(--text-main)', border: 'var(--primary)', bg: 'rgba(99, 102, 241, 0.04)', shadow: 'rgba(99, 102, 241, 0.15)', iconClass: 'primary' },
+                                            { id: 'assets', title: 'Fixed Assets', val: nwAssets, icon: 'home', color: 'var(--primary)', border: 'var(--primary)', bg: 'rgba(99, 102, 241, 0.04)', shadow: 'rgba(99, 102, 241, 0.15)', iconClass: 'primary' },
+                                            { id: 'investments', title: 'Investments', val: nwInvestments, icon: 'goals', color: 'var(--info)', border: 'var(--info)', bg: 'rgba(59, 130, 246, 0.04)', shadow: 'rgba(59, 130, 246, 0.15)', iconClass: 'info' },
+                                            { id: 'cash', title: 'Bank & Cash', val: nwCash, icon: 'arrowDown', color: 'var(--success)', border: 'var(--success)', bg: 'rgba(16, 185, 129, 0.04)', shadow: 'rgba(16, 185, 129, 0.15)', iconClass: 'success' },
+                                            { id: 'liabilities', title: 'Liabilities', val: nwLiabilities, icon: 'arrowUp', color: 'var(--danger)', border: 'var(--danger)', bg: 'rgba(239, 68, 68, 0.04)', shadow: 'rgba(239, 68, 68, 0.15)', iconClass: 'warning' }
+                                        ];
+
+                                        return tiles.map(t => {
+                                            const isSelected = networthSectionFilter === t.id;
+                                            return (
+                                                <div
+                                                    key={t.id}
+                                                    className="card"
+                                                    style={{
+                                                        padding: '8px 14px',
+                                                        cursor: 'pointer',
+                                                        transition: 'all 0.2s ease',
+                                                        border: isSelected ? `2px solid ${t.border}` : '1px solid var(--border-color)',
+                                                        background: isSelected ? t.bg : 'var(--card-bg)',
+                                                        boxShadow: isSelected ? `0 4px 12px ${t.shadow}` : 'var(--shadow-sm)',
+                                                        transform: isSelected ? 'translateY(-1px)' : 'none',
+                                                        margin: 0
+                                                    }}
+                                                    onClick={() => setNetworthSectionFilter(t.id)}
+                                                    title={`Click to filter ${t.title}`}
+                                                >
+                                                    <div className="card-header" style={{ marginBottom: '2px' }}>
+                                                        <span className="card-title" style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)' }}>{t.title}</span>
+                                                        <div className={`card-icon ${t.iconClass}`} style={{ width: '22px', height: '22px', padding: '2px', borderRadius: '6px' }}>
+                                                            <Icon name={t.icon} />
+                                                        </div>
+                                                    </div>
+                                                    <div className="card-value" style={{ fontSize: '1.05rem', fontWeight: 700, color: t.color, lineHeight: 1.2 }}>
+                                                        {fmt(t.val)}
+                                                    </div>
+                                                </div>
+                                            );
+                                        });
+                                    })()}
+                                </div>
+                            ) : (
+                                <div className="topbar-actions">
+                                        {activePage === "documents" && (
+                                            <>
+                                                <button className="btn btn-secondary" onClick={handleSyncLocalFolder}>
+                                                    <Icon name="sync" />
+                                                    <span>Sync Folder</span>
+                                                </button>
+                                                <button className="btn btn-primary" onClick={() => setShowImportModal(true)}>
+                                                    <Icon name="download" />
+                                                    <span>Import PDF/CSV</span>
+                                                </button>
+                                            </>
+                                        )}
+                                        {["dashboard", "transactions", "recurring", "subscriptions", "budgets"].includes(activePage) && (
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'nowrap', background: 'var(--card-bg)', padding: '4px 8px', height: '40px', borderRadius: '8px', border: '1px solid var(--border-color)', boxShadow: '0 1px 3px rgba(0,0,0,0.04)', boxSizing: 'border-box' }}>
+                                                {/* Left: Start Date Picker */}
+                                                <div
+                                                    style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', cursor: 'pointer' }}
+                                                    onClick={(e) => {
+                                                        const inputEl = e.currentTarget.querySelector('input[type="date"]');
+                                                        if (inputEl) {
+                                                            try {
+                                                                if (inputEl.showPicker) inputEl.showPicker();
+                                                                else inputEl.focus();
+                                                            } catch (err) { }
+                                                        }
+                                                    }}
+                                                >
+                                                    <div className="form-control" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.8rem', padding: '2px 10px', height: '30px', cursor: 'pointer', background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: '6px', whiteSpace: 'nowrap', minWidth: '105px' }}>
+                                                        <span style={{ fontWeight: 500 }}>{formatDate(displayStartDate, settings.dateFormat)}</span>
+                                                    </div>
+                                                    <input
+                                                        type="date"
+                                                        value={displayStartDate}
+                                                        onChange={(e) => handleStartDateChange(e.target.value)}
+                                                        style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', opacity: 0, cursor: 'pointer' }}
+                                                        title="Start Date"
+                                                    />
+                                                </div>
+
+                                                {/* Center: Selected Period Dropdown */}
+                                                <select
                                                     className="form-control"
-                                                    style={{ fontSize: '0.8rem', padding: '2px 6px', height: '32px', width: '130px' }}
-                                                    value={calcCustomStart}
-                                                    onChange={(e) => setCalcCustomStart(e.target.value)}
-                                                />
-                                                <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>to</span>
-                                                <input
-                                                    type="date"
-                                                    className="form-control"
-                                                    style={{ fontSize: '0.8rem', padding: '2px 6px', height: '32px', width: '130px' }}
-                                                    value={calcCustomEnd}
-                                                    onChange={(e) => setCalcCustomEnd(e.target.value)}
-                                                />
+                                                    style={{ width: 'auto', minWidth: '150px', fontSize: '0.82rem', padding: '2px 8px', height: '30px', cursor: 'pointer', fontWeight: 500 }}
+                                                    value={normPeriodKey}
+                                                    onChange={(e) => handleUnifiedPeriodChange(e.target.value)}
+                                                >
+                                                    <PeriodSelectOptions />
+                                                </select>
+
+                                                {/* Right: End Date Picker */}
+                                                <div
+                                                    style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', cursor: 'pointer' }}
+                                                    onClick={(e) => {
+                                                        const inputEl = e.currentTarget.querySelector('input[type="date"]');
+                                                        if (inputEl) {
+                                                            try {
+                                                                if (inputEl.showPicker) inputEl.showPicker();
+                                                                else inputEl.focus();
+                                                            } catch (err) { }
+                                                        }
+                                                    }}
+                                                >
+                                                    <div className="form-control" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.8rem', padding: '2px 10px', height: '30px', cursor: 'pointer', background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: '6px', whiteSpace: 'nowrap', minWidth: '105px' }}>
+                                                        <span style={{ fontWeight: 500 }}>{formatDate(displayEndDate, settings.dateFormat)}</span>
+                                                    </div>
+                                                    <input
+                                                        type="date"
+                                                        value={displayEndDate}
+                                                        onChange={(e) => handleEndDateChange(e.target.value)}
+                                                        style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', opacity: 0, cursor: 'pointer' }}
+                                                        title="End Date"
+                                                    />
+                                                </div>
                                             </div>
                                         )}
-
-                                        <div className="badge badge-info" style={{ fontSize: '0.8rem', padding: '5px 10px', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                                            📅 {["all_time", "all"].includes((activePeriod || "").toLowerCase().replace(/-/g, "_")) ? <strong>All Time</strong> : <><strong>{formatDate(calcRange.pStartStr, settings.dateFormat)}</strong> to <strong>{formatDate(calcRange.pEndStr, settings.dateFormat)}</strong></>}
-                                        </div>
+                                        {activePage === "transactions" && (
+                                            <>
+                                                <button className="btn btn-secondary" onClick={() => setShowImportModal(true)}>
+                                                    <Icon name="download" />
+                                                    <span>Import PDF/CSV</span>
+                                                </button>
+                                                <button className="btn btn-primary" onClick={() => setShowAddEntryModal(true)}>
+                                                    <Icon name="plus" />
+                                                    <span>Add Transaction</span>
+                                                </button>
+                                            </>
+                                        )}
+                                        {activePage === "recurring" && (
+                                            <button className="btn btn-primary" onClick={() => setSubpageActionSignal(s => s + 1)}>
+                                                <Icon name="plus" />
+                                                <span>Add Recurring Item</span>
+                                            </button>
+                                        )}
+                                        {activePage === "subscriptions" && (
+                                            <button className="btn btn-primary" onClick={() => setSubpageActionSignal(s => s + 1)}>
+                                                <Icon name="plus" />
+                                                <span>Add Subscription</span>
+                                            </button>
+                                        )}
+                                        {activePage === "budgets" && (
+                                            <button className="btn btn-primary" onClick={() => setSubpageActionSignal(s => s + 1)}>
+                                                <Icon name="plus" />
+                                                <span>Create Budget</span>
+                                            </button>
+                                        )}
+                                        {activePage === "goals" && (
+                                            <button className="btn btn-primary" onClick={() => setSubpageActionSignal(s => s + 1)}>
+                                                <Icon name="plus" />
+                                                <span>Create Goal</span>
+                                            </button>
+                                        )}
+                                        {activePage === "rules" && (
+                                            <button className="btn btn-primary" onClick={() => setSubpageActionSignal(s => s + 1)}>
+                                                <Icon name="plus" />
+                                                <span>Create Rule</span>
+                                            </button>
+                                        )}
                                     </div>
-                                )}
-                                {activePage === "transactions" && (
-                                    <>
-                                        <button className="btn btn-secondary" onClick={() => setShowImportModal(true)}>
-                                            <Icon name="download" />
-                                            <span>Import PDF/CSV</span>
-                                        </button>
-                                        <button className="btn btn-primary" onClick={() => setShowAddEntryModal(true)}>
-                                            <Icon name="plus" />
-                                            <span>Add Transaction</span>
-                                        </button>
-                                    </>
-                                )}
-                                {activePage === "networth" && (
-                                    <button className="btn btn-primary" onClick={() => setSubpageActionSignal(s => s + 1)}>
-                                        <Icon name="plus" />
-                                        <span>Add Asset / Liab</span>
-                                    </button>
-                                )}
-                                {activePage === "recurring" && (
-                                    <button className="btn btn-primary" onClick={() => setSubpageActionSignal(s => s + 1)}>
-                                        <Icon name="plus" />
-                                        <span>Add Recurring Item</span>
-                                    </button>
-                                )}
-                                {activePage === "subscriptions" && (
-                                    <button className="btn btn-primary" onClick={() => setSubpageActionSignal(s => s + 1)}>
-                                        <Icon name="plus" />
-                                        <span>Add Subscription</span>
-                                    </button>
-                                )}
-                                {activePage === "budgets" && (
-                                    <button className="btn btn-primary" onClick={() => setSubpageActionSignal(s => s + 1)}>
-                                        <Icon name="plus" />
-                                        <span>Create Budget</span>
-                                    </button>
-                                )}
-                                {activePage === "goals" && (
-                                    <button className="btn btn-primary" onClick={() => setSubpageActionSignal(s => s + 1)}>
-                                        <Icon name="plus" />
-                                        <span>Create Goal</span>
-                                    </button>
-                                )}
-                                {activePage === "rules" && (
-                                    <button className="btn btn-primary" onClick={() => setSubpageActionSignal(s => s + 1)}>
-                                        <Icon name="plus" />
-                                        <span>Create Rule</span>
-                                    </button>
-                                )}
-                            </div>
+                            )}
                         </header>
 
                         {/* Page Content viewport container */}
@@ -4354,6 +4495,8 @@
                                     showToast={showToast}
                                     setActivePage={setActivePage}
                                     subpageActionSignal={subpageActionSignal}
+                                    activeSectionFilter={networthSectionFilter}
+                                    setActiveSectionFilter={setNetworthSectionFilter}
                                 />
                             )}
                             {activePage === "recurring" && (
@@ -6233,7 +6376,7 @@
                     {/* Section 2: Active Recurring Items list */}
                     <div className="section-card" style={{ marginBottom: '24px' }}>
                         <div className="section-card-title" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                            <span>Active Recurring Transactions ({getPeriodBadgeLabel()})</span>
+                            <span>Active Recurring Transactions</span>
                             <span className="badge badge-income" style={{ fontSize: '0.78rem' }}>{activeList.length} Active</span>
                         </div>
                         {activeList.length === 0 ? (
@@ -6274,8 +6417,8 @@
                                                         {c.type === "income" ? "+" : "-"}{formatCurrency(periodAmt)}
                                                     </td>
                                                     <td><span className="badge badge-info">{getCadenceLabel(c)}</span></td>
-                                                    <td>{c.nextDate || "—"}</td>
-                                                    <td>{c.endDate || "No End Date"}</td>
+                                                    <td>{c.nextDate ? formatDate(c.nextDate, settings.dateFormat) : "—"}</td>
+                                                    <td>{c.endDate ? formatDate(c.endDate, settings.dateFormat) : "No End Date"}</td>
                                                     <td>
                                                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'nowrap' }}>
                                                             <button
@@ -7245,18 +7388,24 @@
         // --- SUB-PAGE: Net Worth Ledger (Fixed Assets, Passive Income, Pension, House Tax,
         // Insurance, Investments, Liabilities, Credit Cards, Current Balances) ---
         // --- SUB-PAGE: Net Worth Ledger ---
-        const NetWorthPage = ({ settings, updateSetting, showToast, setActivePage, subpageActionSignal }) => {
+        const NetWorthPage = ({ settings, updateSetting, showToast, setActivePage, subpageActionSignal, activeSectionFilter: propActiveSectionFilter, setActiveSectionFilter: propSetActiveSectionFilter }) => {
             const items = settings.networthItems || [];
             const [showModal, setShowModal] = React.useState(false);
             const [editingItem, setEditingItem] = React.useState(null);
+            const [defaultModalCategory, setDefaultModalCategory] = React.useState(null);
             const [collapsed, setCollapsed] = React.useState({});
             const [quickBillItem, setQuickBillItem] = React.useState(null);
             const [quickBillAmount, setQuickBillAmount] = React.useState("");
             const [itemToDelete, setItemToDelete] = React.useState(null);
+            const [localActiveSectionFilter, setLocalActiveSectionFilter] = React.useState("all");
+
+            const activeSectionFilter = propActiveSectionFilter !== undefined ? propActiveSectionFilter : localActiveSectionFilter;
+            const setActiveSectionFilter = propSetActiveSectionFilter || setLocalActiveSectionFilter;
 
             React.useEffect(() => {
                 if (subpageActionSignal > 0) {
                     setEditingItem(null);
+                    setDefaultModalCategory(null);
                     setShowModal(true);
                 }
             }, [subpageActionSignal]);
@@ -7289,6 +7438,7 @@
                 showToast(editingItem ? "Ledger entry updated" : "Ledger entry added");
                 setShowModal(false);
                 setEditingItem(null);
+                setDefaultModalCategory(null);
             };
 
             const handleDelete = async (id) => {
@@ -7328,55 +7478,156 @@
             // Grand totals across items included in Net Worth calculation
             const activeItems = items.filter(it => it.includeInNetWorth !== false);
 
+            const totalCashVal = activeItems
+                .filter(it => (NET_WORTH_GROUPS.find(g => g.key === it.category) || {}).kind === "balance")
+                .reduce((s, it) => s + Number(it.value || 0), 0);
             const totalAssetsVal = activeItems
-                .filter(it => ["asset", "balance"].includes((NET_WORTH_GROUPS.find(g => g.key === it.category) || {}).kind))
+                .filter(it => (NET_WORTH_GROUPS.find(g => g.key === it.category) || {}).kind === "asset")
                 .reduce((s, it) => s + Number(it.value || 0), 0);
             const totalInvestmentsVal = activeItems
-                .filter(it => ["investment"].includes((NET_WORTH_GROUPS.find(g => g.key === it.category) || {}).kind) || it.category === "Investments")
+                .filter(it => (NET_WORTH_GROUPS.find(g => g.key === it.category) || {}).kind === "investment")
                 .reduce((s, it) => s + Number(it.value || 0), 0);
             const totalLiabilitiesVal = activeItems
                 .filter(it => (NET_WORTH_GROUPS.find(g => g.key === it.category) || {}).kind === "liability")
                 .reduce((s, it) => s + Math.abs(Number(it.value || 0)), 0);
-            const netWorthVal = totalAssetsVal + totalInvestmentsVal - totalLiabilitiesVal;
+            const netWorthVal = totalCashVal + totalAssetsVal + totalInvestmentsVal - totalLiabilitiesVal;
+
+            const cashCount = items.filter(it => (NET_WORTH_GROUPS.find(g => g.key === it.category) || {}).kind === "balance").length;
+            const assetCount = items.filter(it => (NET_WORTH_GROUPS.find(g => g.key === it.category) || {}).kind === "asset").length;
+            const investmentCount = items.filter(it => (NET_WORTH_GROUPS.find(g => g.key === it.category) || {}).kind === "investment").length;
+            const liabilityCount = items.filter(it => (NET_WORTH_GROUPS.find(g => g.key === it.category) || {}).kind === "liability").length;
+
+            const SECTIONS = [
+                {
+                    id: "assets",
+                    label: "Fixed & Physical Assets",
+                    subtitle: "Real estate property, vehicles, physical gold, precious metals & collectibles",
+                    icon: "🏠",
+                    color: "var(--primary)",
+                    bgTint: "rgba(99, 102, 241, 0.04)",
+                    borderAccent: "rgba(99, 102, 241, 0.3)",
+                    kinds: ["asset"],
+                    defaultCategory: "Fixed Assets",
+                    addBtnLabel: "+ Add Fixed Asset",
+                    count: assetCount,
+                    totalVal: totalAssetsVal
+                },
+                {
+                    id: "investments",
+                    label: "Investment Portfolios",
+                    subtitle: "Mutual funds, stocks, fixed deposits, bonds, retirement PF & crypto",
+                    icon: "📈",
+                    color: "var(--info)",
+                    bgTint: "rgba(59, 130, 246, 0.04)",
+                    borderAccent: "rgba(59, 130, 246, 0.3)",
+                    kinds: ["investment"],
+                    defaultCategory: "Mutual Funds & SIPs",
+                    addBtnLabel: "+ Add Investment",
+                    count: investmentCount,
+                    totalVal: totalInvestmentsVal
+                },
+                {
+                    id: "cash",
+                    label: "Bank & Cash Balances",
+                    subtitle: "Bank savings accounts, checking accounts, digital wallets & physical cash holdings",
+                    icon: "💵",
+                    color: "var(--success)",
+                    bgTint: "rgba(16, 185, 129, 0.04)",
+                    borderAccent: "rgba(16, 185, 129, 0.3)",
+                    kinds: ["balance"],
+                    defaultCategory: "Bank Accounts",
+                    addBtnLabel: "+ Add Bank / Cash",
+                    count: cashCount,
+                    totalVal: totalCashVal
+                },
+                {
+                    id: "liabilities",
+                    label: "Liabilities & Debt Principal",
+                    subtitle: "Home mortgage, personal loans, car loans & credit card statement owed",
+                    icon: "💳",
+                    color: "var(--danger)",
+                    bgTint: "rgba(239, 68, 68, 0.04)",
+                    borderAccent: "rgba(239, 68, 68, 0.3)",
+                    kinds: ["liability"],
+                    defaultCategory: "Liabilities",
+                    addBtnLabel: "+ Add Debt / Loan",
+                    count: liabilityCount,
+                    totalVal: totalLiabilitiesVal
+                }
+            ];
+
+            const visibleSections = activeSectionFilter === "all"
+                ? SECTIONS
+                : SECTIONS.filter(s => s.id === activeSectionFilter);
 
             return (
                 <div>
-                    {/* Summary Cards */}
-                    <div className="summary-grid">
-                        <div className="card">
-                            <div className="card-header">
-                                <span className="card-title">Net Worth</span>
-                                <div className="card-icon primary"><Icon name="networth" /></div>
-                            </div>
-                            <div className="card-value">{formatCurrency(netWorthVal)}</div>
-                            <div className="card-subtitle"><span>(Assets + Investments) − Debt Owed</span></div>
+                    {/* View Action & Section Control Header (Frozen Sticky Line) */}
+                    <div style={{
+                        position: 'sticky',
+                        top: '76px',
+                        zIndex: 80,
+                        background: 'var(--bg-color)',
+                        marginTop: '-20px',
+                        padding: '6px 0 10px 0',
+                        marginBottom: '16px',
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        flexWrap: 'wrap',
+                        gap: '12px',
+                        borderBottom: '1px solid var(--border-color)'
+                    }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.9rem', fontWeight: 600, color: 'var(--text-main)' }}>
+                            <span>
+                                {activeSectionFilter === 'all' && `Showing All Sections (${items.length} total entries)`}
+                                {activeSectionFilter === 'cash' && `Showing Cash & Bank Balances (${cashCount} entries)`}
+                                {activeSectionFilter === 'assets' && `Showing Fixed Assets (${assetCount} entries)`}
+                                {activeSectionFilter === 'investments' && `Showing Investments (${investmentCount} entries)`}
+                                {activeSectionFilter === 'liabilities' && `Showing Debt & Liabilities (${liabilityCount} entries)`}
+                            </span>
+                            {activeSectionFilter !== 'all' && (
+                                <button
+                                    className="btn btn-secondary btn-sm"
+                                    style={{ fontSize: '0.75rem', padding: '2px 10px', borderRadius: '12px', fontWeight: 500 }}
+                                    onClick={() => setActiveSectionFilter('all')}
+                                >
+                                    Show All
+                                </button>
+                            )}
                         </div>
-                        <div className="card">
-                            <div className="card-header">
-                                <span className="card-title">Assets &amp; Cash</span>
-                                <div className="card-icon success"><Icon name="arrowDown" /></div>
-                            </div>
-                            <div className="card-value" style={{ color: 'var(--success)' }}>{formatCurrency(totalAssetsVal)}</div>
-                            <div className="card-subtitle"><span>Real estate, bank balances &amp; gold</span></div>
-                        </div>
-                        <div className="card">
-                            <div className="card-header">
-                                <span className="card-title">Investments Portfolio</span>
-                                <div className="card-icon info"><Icon name="goals" /></div>
-                            </div>
-                            <div className="card-value" style={{ color: 'var(--info)' }}>{formatCurrency(totalInvestmentsVal)}</div>
-                            <div className="card-subtitle"><span>Mutual funds, stocks, PF &amp; bonds</span></div>
-                        </div>
-                        <div className="card">
-                            <div className="card-header">
-                                <span className="card-title">Debt Principal Owed</span>
-                                <div className="card-icon warning"><Icon name="arrowUp" /></div>
-                            </div>
-                            <div className="card-value" style={{ color: 'var(--danger)' }}>{formatCurrency(totalLiabilitiesVal)}</div>
-                            <div className="card-subtitle"><span>Outstanding loan principal &amp; cards</span></div>
+
+                        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                            {(() => {
+                                const allSectionKeys = [...SECTIONS.map(s => s.id), ...NET_WORTH_GROUPS.map(g => g.key)];
+                                const isAllCollapsed = allSectionKeys.length > 0 && allSectionKeys.every(k => collapsed[k] === true);
+                                return (
+                                    <button
+                                        className="btn btn-secondary btn-sm"
+                                        style={{ fontSize: '0.8rem', padding: '6px 14px', display: 'inline-flex', alignItems: 'center', gap: '6px', fontWeight: 600 }}
+                                        onClick={() => {
+                                            const nextState = {};
+                                            const targetState = !isAllCollapsed;
+                                            allSectionKeys.forEach(k => { nextState[k] = targetState; });
+                                            setCollapsed(nextState);
+                                        }}
+                                    >
+                                        <Icon name={isAllCollapsed ? "chevronDown" : "chevronUp"} />
+                                        <span>{isAllCollapsed ? "Expand All" : "Collapse All"}</span>
+                                    </button>
+                                );
+                            })()}
+                            <button
+                                className="btn btn-primary btn-sm"
+                                style={{ padding: '6px 14px', fontSize: '0.82rem' }}
+                                onClick={() => { setDefaultModalCategory(null); setEditingItem(null); setShowModal(true); }}
+                            >
+                                + Add Ledger Entry
+                            </button>
                         </div>
                     </div>
 
+                    {/* Master Section Blocks */}
                     {items.length === 0 ? (
                         <div className="empty-state">
                             <Icon name="networth" />
@@ -7385,117 +7636,275 @@
                             <button className="btn btn-primary" onClick={() => setShowModal(true)}>Add Asset / Liab</button>
                         </div>
                     ) : (
-                        NET_WORTH_GROUPS.map(group => {
-                            const groupItems = items.filter(it => it.category === group.key);
-                            if (groupItems.length === 0) return null;
-                            const groupTotalValue = groupItems.reduce((s, it) => s + Number(it.value || 0), 0);
-                            const isCollapsed = collapsed[group.key];
+                        visibleSections.map(section => {
+                            const secItems = items.filter(it => section.kinds.includes((NET_WORTH_GROUPS.find(g => g.key === it.category) || {}).kind));
+                            const secActiveItems = secItems.filter(it => it.includeInNetWorth !== false);
+                            const secTotalVal = secActiveItems.reduce((s, it) => s + Math.abs(Number(it.value || 0)), 0);
+                            const isSecCollapsed = collapsed[section.id];
 
                             return (
-                                <div key={group.key} className="section-card" style={{ marginBottom: '20px' }}>
+                                <div
+                                    key={section.id}
+                                    className="section-card"
+                                    style={{
+                                        marginBottom: '28px',
+                                        border: `1px solid ${section.borderAccent}`,
+                                        borderRadius: '16px',
+                                        overflow: 'hidden',
+                                        boxShadow: '0 4px 12px rgba(0,0,0,0.03)',
+                                        background: 'var(--card-bg)'
+                                    }}
+                                >
+                                    {/* Master Section Header Block */}
                                     <div
-                                        className="section-card-title"
-                                        style={{ cursor: 'pointer', userSelect: 'none' }}
-                                        onClick={() => toggleCollapse(group.key)}
+                                        style={{
+                                            padding: '16px 20px',
+                                            background: section.bgTint,
+                                            borderBottom: isSecCollapsed ? 'none' : `1px solid ${section.borderAccent}`,
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            justifyContent: 'space-between',
+                                            flexWrap: 'wrap',
+                                            gap: '12px',
+                                            cursor: 'pointer',
+                                            userSelect: 'none'
+                                        }}
+                                        onClick={() => toggleCollapse(section.id)}
                                     >
-                                        <span>{group.icon} {group.label} <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>({groupItems.length})</span></span>
-                                        <span style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
-                                            <span style={{ fontWeight: 700, color: `var(--${group.swatch})` }}>{formatCurrency(groupTotalValue)}</span>
-                                            <Icon name={isCollapsed ? "chevronDown" : "chevronUp"} />
-                                        </span>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+                                            <div style={{
+                                                width: '40px',
+                                                height: '40px',
+                                                borderRadius: '12px',
+                                                background: 'var(--bg-color)',
+                                                display: 'flex',
+                                                alignItems: 'center',
+                                                justifyContent: 'center',
+                                                fontSize: '1.3rem',
+                                                border: `1px solid ${section.borderAccent}`
+                                            }}>
+                                                {section.icon}
+                                            </div>
+                                            <div>
+                                                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                                    <h3 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 700, color: 'var(--text-main)' }}>{section.label}</h3>
+                                                    <span style={{ background: 'var(--bg-color)', border: '1px solid var(--border-color)', color: 'var(--text-muted)', padding: '2px 10px', borderRadius: '12px', fontSize: '0.78rem', fontWeight: 600 }}>
+                                                        {secItems.length} {secItems.length === 1 ? 'Entry' : 'Entries'}
+                                                    </span>
+                                                </div>
+                                                <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '2px' }}>{section.subtitle}</div>
+                                            </div>
+                                        </div>
+
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }} onClick={e => e.stopPropagation()}>
+                                            <div style={{ textAlign: 'right' }}>
+                                                <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: 600 }}>Section Total</div>
+                                                <div style={{ fontSize: '1.18rem', fontWeight: 800, color: section.color }}>
+                                                    {formatCurrency(secTotalVal)}
+                                                </div>
+                                            </div>
+
+                                            <button
+                                                className="btn btn-secondary btn-sm"
+                                                style={{
+                                                    borderRadius: '8px',
+                                                    fontSize: '0.78rem',
+                                                    fontWeight: 600,
+                                                    padding: '6px 12px',
+                                                    borderColor: section.borderAccent,
+                                                    color: section.color,
+                                                    background: 'var(--card-bg)'
+                                                }}
+                                                onClick={() => {
+                                                    setDefaultModalCategory(section.defaultCategory);
+                                                    setEditingItem(null);
+                                                    setShowModal(true);
+                                                }}
+                                            >
+                                                {section.addBtnLabel}
+                                            </button>
+
+                                            <button
+                                                className="btn btn-secondary btn-sm"
+                                                style={{ border: 'none', padding: '6px', background: 'transparent', color: 'var(--text-muted)' }}
+                                                onClick={() => toggleCollapse(section.id)}
+                                            >
+                                                <Icon name={isSecCollapsed ? "chevronDown" : "chevronUp"} />
+                                            </button>
+                                        </div>
                                     </div>
 
-                                    {!isCollapsed && (
-                                        <div className="table-responsive">
-                                            <table className="table" style={{ fontSize: '0.82rem' }}>
-                                                <thead>
-                                                    <tr>
-                                                        <th>Name</th>
-                                                        <th>Start Date</th>
-                                                        <th>Maturity / End</th>
-                                                        <th>Invested / Cost Basis</th>
-                                                        <th>Interest Rate</th>
-                                                        <th>Current Value / Balance</th>
-                                                        <th>Gain / Return</th>
-                                                        <th>Notes</th>
-                                                        <th style={{ width: '160px' }}>Actions</th>
-                                                    </tr>
-                                                </thead>
-                                                <tbody>
-                                                    {groupItems.map(it => {
-                                                        const isCreditCard = it.category === "Credit Cards" || group.kind === "liability";
-                                                        const investedAmt = Number(it.invested || 0);
-                                                        const currentVal = Number(it.value || 0);
-                                                        const gainVal = currentVal - investedAmt;
-                                                        const gainPct = investedAmt > 0 ? ((gainVal / investedAmt) * 100).toFixed(1) : null;
+                                    {/* Section Body: Category Sub-Blocks */}
+                                    {!isSecCollapsed && (
+                                        <div style={{ padding: '16px 20px' }}>
+                                            {secItems.length === 0 ? (
+                                                <div style={{
+                                                    padding: '28px 20px',
+                                                    textAlign: 'center',
+                                                    background: 'var(--bg-color)',
+                                                    borderRadius: '12px',
+                                                    border: '1px dashed var(--border-color)'
+                                                }}>
+                                                    <div style={{ fontSize: '1.8rem', marginBottom: '6px' }}>{section.icon}</div>
+                                                    <div style={{ fontWeight: 600, fontSize: '0.92rem', color: 'var(--text-main)', marginBottom: '4px' }}>No entries in {section.label}</div>
+                                                    <div style={{ fontSize: '0.82rem', color: 'var(--text-muted)', marginBottom: '12px' }}>Add entries to track your accurate balance in this section.</div>
+                                                    <button
+                                                        className="btn btn-primary btn-sm"
+                                                        onClick={() => {
+                                                            setDefaultModalCategory(section.defaultCategory);
+                                                            setEditingItem(null);
+                                                            setShowModal(true);
+                                                        }}
+                                                    >
+                                                        {section.addBtnLabel}
+                                                    </button>
+                                                </div>
+                                            ) : (
+                                                NET_WORTH_GROUPS.filter(g => section.kinds.includes(g.kind)).map(group => {
+                                                    const groupItems = items.filter(it => it.category === group.key);
+                                                    if (groupItems.length === 0) return null;
+                                                    const groupTotalValue = groupItems.reduce((s, it) => s + Number(it.value || 0), 0);
+                                                    const isCatCollapsed = collapsed[group.key];
 
-                                                        return (
-                                                            <tr key={it.id}>
-                                                                <td style={{ fontWeight: 600 }}>{it.name}</td>
-                                                                <td>{it.startDate ? formatDate(it.startDate, settings.dateFormat) : "—"}</td>
-                                                                <td>{it.endDate ? formatDate(it.endDate, settings.dateFormat) : "—"}</td>
-                                                                <td>{investedAmt ? formatCurrency(investedAmt) : "—"}</td>
-                                                                <td>{it.interestRate ? `${it.interestRate}%` : "—"}</td>
-                                                                <td style={{ fontWeight: 600, color: (group.kind === "liability" || currentVal < 0) ? "var(--danger)" : "var(--text-main)" }}>
-                                                                    {formatCurrency(currentVal)}
-                                                                </td>
-                                                                <td>
-                                                                    {investedAmt > 0 ? (
-                                                                        <span style={{ fontWeight: 600, color: gainVal >= 0 ? 'var(--success)' : 'var(--danger)' }}>
-                                                                            {gainVal >= 0 ? "+" : ""}{formatCurrency(gainVal)} {gainPct !== null && `(${gainVal >= 0 ? "+" : ""}${gainPct}%)`}
-                                                                        </span>
-                                                                    ) : (
-                                                                        <span style={{ color: 'var(--text-muted)' }}>—</span>
-                                                                    )}
-                                                                </td>
-                                                                <td style={{ color: 'var(--text-muted)' }}>{it.notes || "—"}</td>
-                                                                <td>
-                                                                    <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-                                                                        <button
-                                                                            className="btn btn-secondary btn-sm"
-                                                                            style={{
-                                                                                padding: '2px 6px',
-                                                                                fontSize: '0.85rem',
-                                                                                fontWeight: 600,
-                                                                                background: it.includeInNetWorth !== false ? 'rgba(16, 185, 129, 0.12)' : 'rgba(239, 68, 68, 0.12)',
-                                                                                color: it.includeInNetWorth !== false ? 'var(--success)' : 'var(--danger)',
-                                                                                borderColor: it.includeInNetWorth !== false ? 'rgba(16, 185, 129, 0.3)' : 'rgba(239, 68, 68, 0.3)',
-                                                                                display: 'inline-flex',
-                                                                                alignItems: 'center',
-                                                                                justifyContent: 'center'
-                                                                            }}
-                                                                            onClick={() => toggleIncludeInNetWorth(it.id)}
-                                                                            title={it.includeInNetWorth !== false ? "Included in Net Worth calculation (Click to toggle)" : "Excluded from Net Worth calculation (Click to toggle)"}
-                                                                        >
-                                                                            {it.includeInNetWorth !== false ? "✅" : "❌"}
-                                                                        </button>
-                                                                        {isCreditCard && (
-                                                                            <button
-                                                                                className="btn btn-secondary btn-sm"
-                                                                                style={{ padding: '2px 6px', fontSize: '0.72rem' }}
-                                                                                onClick={() => { setQuickBillItem(it); setQuickBillAmount(it.value ?? ""); }}
-                                                                                title="Update Statement Balance"
-                                                                            >
-                                                                                💳 Balance
-                                                                            </button>
-                                                                        )}
-                                                                        <button className="btn btn-secondary btn-sm" style={{ border: 'none', padding: '4px' }}
-                                                                            onClick={() => { setEditingItem(it); setShowModal(true); }}
-                                                                            title="Edit Entry">
-                                                                            <Icon name="edit" />
-                                                                        </button>
-                                                                        <button className="btn btn-secondary btn-sm" style={{ border: 'none', padding: '4px', color: 'var(--danger)' }}
-                                                                            onClick={() => setItemToDelete(it)}
-                                                                            title="Delete Entry">
-                                                                            <Icon name="trash" />
-                                                                        </button>
-                                                                    </div>
-                                                                </td>
-                                                            </tr>
-                                                        );
-                                                    })}
-                                                </tbody>
-                                            </table>
+                                                    return (
+                                                        <div
+                                                            key={group.key}
+                                                            style={{
+                                                                marginBottom: '16px',
+                                                                borderRadius: '12px',
+                                                                border: '1px solid var(--border-color)',
+                                                                background: 'var(--card-bg)',
+                                                                overflow: 'hidden'
+                                                            }}
+                                                        >
+                                                            {/* Category Block Header */}
+                                                            <div
+                                                                style={{
+                                                                    padding: '12px 18px',
+                                                                    background: 'var(--bg-color)',
+                                                                    display: 'flex',
+                                                                    justifyContent: 'space-between',
+                                                                    alignItems: 'center',
+                                                                    cursor: 'pointer',
+                                                                    userSelect: 'none',
+                                                                    borderBottom: isCatCollapsed ? 'none' : '1px solid var(--border-color)'
+                                                                }}
+                                                                onClick={() => toggleCollapse(group.key)}
+                                                            >
+                                                                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', fontWeight: 600, fontSize: '0.92rem' }}>
+                                                                    <span>{group.icon}</span>
+                                                                    <span>{group.label}</span>
+                                                                    <span style={{ fontSize: '0.78rem', fontWeight: 500, color: 'var(--text-muted)', background: 'var(--card-bg)', padding: '1px 8px', borderRadius: '10px', border: '1px solid var(--border-color)' }}>
+                                                                        {groupItems.length}
+                                                                    </span>
+                                                                </div>
+
+                                                                <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+                                                                    <span style={{ fontWeight: 700, fontSize: '0.92rem', color: `var(--${group.swatch})` }}>
+                                                                        {formatCurrency(groupTotalValue)}
+                                                                    </span>
+                                                                    <Icon name={isCatCollapsed ? "chevronDown" : "chevronUp"} />
+                                                                </div>
+                                                            </div>
+
+                                                            {/* Table of Items */}
+                                                            {!isCatCollapsed && (
+                                                                <div className="table-responsive">
+                                                                    <table className="table" style={{ fontSize: '0.82rem', margin: 0 }}>
+                                                                        <thead>
+                                                                            <tr>
+                                                                                <th style={{ paddingLeft: '18px' }}>Name</th>
+                                                                                <th>Start Date</th>
+                                                                                <th>Maturity / End</th>
+                                                                                <th>Invested / Basis</th>
+                                                                                <th>Interest Rate</th>
+                                                                                <th>Current Value / Balance</th>
+                                                                                <th>Gain / Return</th>
+                                                                                <th>Notes</th>
+                                                                                <th style={{ width: '160px', paddingRight: '18px' }}>Actions</th>
+                                                                            </tr>
+                                                                        </thead>
+                                                                        <tbody>
+                                                                            {groupItems.map(it => {
+                                                                                const isCreditCard = it.category === "Credit Cards" || group.kind === "liability";
+                                                                                const investedAmt = Number(it.invested || 0);
+                                                                                const currentVal = Number(it.value || 0);
+                                                                                const gainVal = currentVal - investedAmt;
+                                                                                const gainPct = investedAmt > 0 ? ((gainVal / investedAmt) * 100).toFixed(1) : null;
+
+                                                                                return (
+                                                                                    <tr key={it.id}>
+                                                                                        <td style={{ fontWeight: 600, paddingLeft: '18px' }}>{it.name}</td>
+                                                                                        <td>{it.startDate ? formatDate(it.startDate, settings.dateFormat) : "—"}</td>
+                                                                                        <td>{it.endDate ? formatDate(it.endDate, settings.dateFormat) : "—"}</td>
+                                                                                        <td>{investedAmt ? formatCurrency(investedAmt) : "—"}</td>
+                                                                                        <td>{it.interestRate ? `${it.interestRate}%` : "—"}</td>
+                                                                                        <td style={{ fontWeight: 600, color: (group.kind === "liability" || currentVal < 0) ? "var(--danger)" : "var(--text-main)" }}>
+                                                                                            {formatCurrency(currentVal)}
+                                                                                        </td>
+                                                                                        <td>
+                                                                                            {investedAmt > 0 ? (
+                                                                                                <span style={{ fontWeight: 600, color: gainVal >= 0 ? 'var(--success)' : 'var(--danger)' }}>
+                                                                                                    {gainVal >= 0 ? "+" : ""}{formatCurrency(gainVal)} {gainPct !== null && `(${gainVal >= 0 ? "+" : ""}${gainPct}%)`}
+                                                                                                </span>
+                                                                                            ) : (
+                                                                                                <span style={{ color: 'var(--text-muted)' }}>—</span>
+                                                                                            )}
+                                                                                        </td>
+                                                                                        <td style={{ color: 'var(--text-muted)' }}>{it.notes || "—"}</td>
+                                                                                        <td style={{ paddingRight: '18px' }}>
+                                                                                            <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                                                                                                <button
+                                                                                                    className="btn btn-secondary btn-sm"
+                                                                                                    style={{
+                                                                                                        padding: '2px 6px',
+                                                                                                        fontSize: '0.85rem',
+                                                                                                        fontWeight: 600,
+                                                                                                        background: it.includeInNetWorth !== false ? 'rgba(16, 185, 129, 0.12)' : 'rgba(239, 68, 68, 0.12)',
+                                                                                                        color: it.includeInNetWorth !== false ? 'var(--success)' : 'var(--danger)',
+                                                                                                        borderColor: it.includeInNetWorth !== false ? 'rgba(16, 185, 129, 0.3)' : 'rgba(239, 68, 68, 0.3)',
+                                                                                                        display: 'inline-flex',
+                                                                                                        alignItems: 'center',
+                                                                                                        justifyContent: 'center'
+                                                                                                    }}
+                                                                                                    onClick={() => toggleIncludeInNetWorth(it.id)}
+                                                                                                    title={it.includeInNetWorth !== false ? "Included in Net Worth calculation (Click to toggle)" : "Excluded from Net Worth calculation (Click to toggle)"}
+                                                                                                >
+                                                                                                    {it.includeInNetWorth !== false ? "✅" : "❌"}
+                                                                                                </button>
+                                                                                                {isCreditCard && (
+                                                                                                    <button
+                                                                                                        className="btn btn-secondary btn-sm"
+                                                                                                        style={{ padding: '2px 6px', fontSize: '0.72rem' }}
+                                                                                                        onClick={() => { setQuickBillItem(it); setQuickBillAmount(it.value ?? ""); }}
+                                                                                                        title="Update Statement Balance"
+                                                                                                    >
+                                                                                                        💳 Balance
+                                                                                                    </button>
+                                                                                                )}
+                                                                                                <button className="btn btn-secondary btn-sm" style={{ border: 'none', padding: '4px' }}
+                                                                                                    onClick={() => { setEditingItem(it); setShowModal(true); }}
+                                                                                                    title="Edit Entry">
+                                                                                                    <Icon name="edit" />
+                                                                                                </button>
+                                                                                                <button className="btn btn-secondary btn-sm" style={{ border: 'none', padding: '4px', color: 'var(--danger)' }}
+                                                                                                    onClick={() => setItemToDelete(it)}
+                                                                                                    title="Delete Entry">
+                                                                                                    <Icon name="trash" />
+                                                                                                </button>
+                                                                                            </div>
+                                                                                        </td>
+                                                                                    </tr>
+                                                                                );
+                                                                            })}
+                                                                        </tbody>
+                                                                    </table>
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                    );
+                                                })
+                                            )}
                                         </div>
                                     )}
                                 </div>
@@ -7578,10 +7987,11 @@
 
                     {showModal && (
                         <CreateNetWorthItemModal
-                            onClose={() => { setShowModal(false); setEditingItem(null); }}
+                            onClose={() => { setShowModal(false); setEditingItem(null); setDefaultModalCategory(null); }}
                             onSave={handleSave}
                             settings={settings}
                             editingItem={editingItem}
+                            defaultCategory={defaultModalCategory}
                         />
                     )}
                 </div>
@@ -7589,9 +7999,9 @@
         };
 
         // --- MODAL COMPONENT: Add/Edit Net Worth Ledger Entry ---
-        const CreateNetWorthItemModal = ({ onClose, onSave, settings, editingItem }) => {
+        const CreateNetWorthItemModal = ({ onClose, onSave, settings, editingItem, defaultCategory }) => {
             const e = editingItem || {};
-            const initialCategory = e.category || NET_WORTH_GROUPS[0].key;
+            const initialCategory = e.category || defaultCategory || NET_WORTH_GROUPS[0].key;
             const initialGroup = NET_WORTH_GROUPS.find(g => g.key === initialCategory);
             const [entryType, setEntryType] = React.useState(initialGroup?.kind === "liability" ? "liability" : "asset");
             const [category, setCategory] = React.useState(initialCategory);
