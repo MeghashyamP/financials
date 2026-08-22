@@ -111,25 +111,31 @@
             bottom: 0;
             left: 0;
             z-index: 100;
-            padding: 24px 16px;
-            transition: var(--transition);
+            padding: 24px 14px;
+            transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            overflow-x: hidden;
         }
 
         .sidebar-brand {
             display: flex;
             align-items: center;
-            gap: 10px;
-            padding: 0 12px;
+            padding: 0 6px;
             margin-bottom: 32px;
             font-weight: 700;
             font-size: 1.3rem;
             color: var(--primary);
+            height: 32px;
+            white-space: nowrap;
         }
 
+        .sidebar-brand .inline-flex,
         .sidebar-brand svg {
-            width: 28px;
-            height: 28px;
+            width: 28px !important;
+            height: 28px !important;
+            min-width: 28px;
+            min-height: 28px;
             color: var(--primary);
+            flex-shrink: 0;
         }
 
         .sidebar-nav {
@@ -139,18 +145,21 @@
             gap: 4px;
             flex: 1;
             overflow-y: auto;
+            overflow-x: hidden;
         }
 
         .sidebar-nav-item {
             display: flex;
             align-items: center;
-            gap: 12px;
-            padding: 10px 12px;
+            padding: 10px;
             border-radius: var(--radius-btn);
             color: var(--text-muted);
             font-weight: 500;
             cursor: pointer;
-            transition: var(--transition);
+            transition: background-color var(--transition), color var(--transition);
+            white-space: nowrap;
+            height: 40px;
+            box-sizing: border-box;
         }
 
         .sidebar-nav-item:hover,
@@ -159,31 +168,75 @@
             color: var(--primary);
         }
 
+        .sidebar-nav-item .inline-flex,
         .sidebar-nav-item svg {
-            width: 20px;
-            height: 20px;
+            width: 20px !important;
+            height: 20px !important;
+            min-width: 20px;
+            min-height: 20px;
             flex-shrink: 0;
+        }
+
+        .sidebar-label {
+            margin-left: 12px;
+            white-space: nowrap;
+            overflow: hidden;
+            transition: opacity 0.2s ease, max-width 0.25s ease, margin-left 0.25s ease;
+            max-width: 150px;
+            opacity: 1;
+            display: inline-block;
         }
 
         /* Collapsed Sidebar Styles */
         .sidebar.collapsed {
             width: 68px;
-            padding: 24px 10px;
+            overflow: visible;
         }
 
-        .sidebar.collapsed .sidebar-brand span,
-        .sidebar.collapsed .sidebar-nav-item span {
-            display: none;
+        .sidebar.collapsed .sidebar-nav {
+            overflow: visible;
         }
 
-        .sidebar.collapsed .sidebar-brand {
-            padding: 0;
-            justify-content: center;
+        .sidebar.collapsed .sidebar-label {
+            opacity: 0;
+            max-width: 0;
+            margin-left: 0;
+            pointer-events: none;
         }
 
+        /* Collapsed Sidebar Hover Tooltips */
+        .sidebar.collapsed .sidebar-brand,
         .sidebar.collapsed .sidebar-nav-item {
-            justify-content: center;
-            padding: 10px 0;
+            position: relative;
+        }
+
+        .sidebar.collapsed .sidebar-brand::after,
+        .sidebar.collapsed .sidebar-nav-item::after {
+            content: attr(title);
+            position: absolute;
+            left: calc(100% + 10px);
+            top: 50%;
+            transform: translateY(-50%) translateX(-4px);
+            background-color: #0f172a;
+            color: #f8fafc;
+            padding: 5px 11px;
+            border-radius: 6px;
+            font-size: 0.8rem;
+            font-weight: 500;
+            white-space: nowrap;
+            opacity: 0;
+            visibility: hidden;
+            pointer-events: none;
+            transition: opacity 0.15s ease, transform 0.15s ease;
+            box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
+            z-index: 1000;
+        }
+
+        .sidebar.collapsed .sidebar-brand:hover::after,
+        .sidebar.collapsed .sidebar-nav-item:hover::after {
+            opacity: 1;
+            visibility: visible;
+            transform: translateY(-50%) translateX(0);
         }
 
         .sidebar-toggle-btn {
@@ -191,6 +244,7 @@
             align-items: center;
             justify-content: center;
             width: 100%;
+            height: 36px;
             padding: 8px;
             margin-top: 12px;
             background: var(--bg-color);
@@ -198,7 +252,8 @@
             border-radius: var(--radius-btn);
             color: var(--text-muted);
             cursor: pointer;
-            transition: var(--transition);
+            transition: background-color var(--transition), color var(--transition);
+            flex-shrink: 0;
         }
 
         .sidebar-toggle-btn:hover {
@@ -213,7 +268,7 @@
             display: flex;
             flex-direction: column;
             min-width: 0;
-            transition: var(--transition);
+            transition: margin-left 0.3s cubic-bezier(0.4, 0, 0.2, 1);
         }
 
         .main-wrapper.sidebar-collapsed {
@@ -333,6 +388,12 @@
             max-width: 1200px;
             width: 100%;
             margin: 0 auto;
+            transition: max-width 0.3s cubic-bezier(0.4, 0, 0.2, 1), padding 0.3s ease;
+        }
+
+        .main-wrapper.sidebar-collapsed .content-body {
+            max-width: 100%;
+            width: 100%;
         }
 
         /* Page Layout Utilities */
@@ -497,12 +558,18 @@
             margin-bottom: 28px;
         }
 
-        /* Section Cards */
-        .section-card {
+        /* Section Cards & Dashboard Polish */
+        .section-card, .chart-card {
             background-color: var(--card-bg);
             border: 1px solid var(--border-color);
             border-radius: var(--radius-card);
             padding: 24px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.03), 0 1px 3px rgba(0, 0, 0, 0.02);
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+        }
+
+        .section-card:hover, .chart-card:hover {
+            box-shadow: 0 8px 28px rgba(0, 0, 0, 0.06), 0 2px 6px rgba(0, 0, 0, 0.03);
         }
 
         .section-card-title {
@@ -512,6 +579,54 @@
             display: flex;
             align-items: center;
             justify-content: space-between;
+        }
+
+        .insight-metric-card {
+            padding: 16px;
+            border-radius: 14px;
+            border: 1px solid var(--border-color);
+            background: var(--card-bg);
+            transition: all 0.2s ease;
+        }
+
+        .insight-metric-card:hover {
+            border-color: #CBD5E1;
+            transform: translateY(-2px);
+            box-shadow: var(--shadow-sm);
+        }
+
+        .progress-bar-stacked {
+            display: flex;
+            height: 10px;
+            border-radius: 6px;
+            overflow: hidden;
+            background: #E2E8F0;
+            width: 100%;
+        }
+
+        .dashboard-badge-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 4px 10px;
+            border-radius: 9999px;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+
+        .merchant-avatar {
+            width: 34px;
+            height: 34px;
+            border-radius: 10px;
+            background: linear-gradient(135deg, #6366F1 0%, #4F46E5 100%);
+            color: #FFFFFF;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 700;
+            font-size: 0.85rem;
+            box-shadow: 0 2px 6px rgba(99, 102, 241, 0.25);
+            flex-shrink: 0;
         }
 
         /* Empty state helper */
@@ -4398,9 +4513,9 @@
 
                     {/* Left Sidebar - Desktop Navigation */}
                     <aside className={`sidebar ${isSidebarCollapsed ? "collapsed" : ""}`}>
-                        <div className="sidebar-brand">
+                        <div className="sidebar-brand" title="Financials">
                             <Icon name="transactions" currency={settings.currency} />
-                            <span>Financials</span>
+                            <span className="sidebar-label">Financials</span>
                         </div>
                         <ul className="sidebar-nav">
                             {[
@@ -4421,7 +4536,7 @@
                                     onClick={() => setActivePage(item.id)}
                                 >
                                     <Icon name={item.icon} currency={settings.currency} />
-                                    <span>{item.label}</span>
+                                    <span className="sidebar-label">{item.label}</span>
                                 </li>
                             ))}
                         </ul>
@@ -5380,32 +5495,9 @@
             const incomeTx = transactions.filter(t => t.type === "income");
             const fullTx = allTransactions || transactions;
 
-            // 1. Net worth metric calculation — prefer the detailed ledger (Net Worth page) when populated,
-            // fall back to the manual single-figure entry from Settings otherwise.
-            const networthItems = settings.networthItems || [];
-            const hasLedger = networthItems.length > 0;
-            const ledgerAssets = networthItems
-                .filter(it => ["asset", "balance"].includes((NET_WORTH_GROUPS.find(g => g.key === it.category) || {}).kind))
-                .reduce((s, it) => s + Number(it.value || 0), 0);
-            const ledgerInvestments = networthItems
-                .filter(it => it.category === "Investments")
-                .reduce((s, it) => s + Number(it.value || 0), 0);
-            const ledgerLiabilities = networthItems
-                .filter(it => (NET_WORTH_GROUPS.find(g => g.key === it.category) || {}).kind === "liability")
-                .reduce((s, it) => s + Math.abs(Number(it.value || 0)), 0);
-
-            const assets = hasLedger ? (ledgerAssets + ledgerInvestments) : (settings.assetsTotal || 0);
-            const liabilities = hasLedger ? ledgerLiabilities : (settings.liabilitiesTotal || 0);
-            const netWorthVal = assets - liabilities;
-            const netWorthReady = hasLedger || settings.netWorthConfigured;
-
-            // 2. Income & Spending sums
+            // Income & Spending sums
             const incomeSum = incomeTx.reduce((s, t) => s + t.amount, 0);
             const spendingSum = expenseTx.reduce((s, t) => s + t.amount, 0);
-
-            // 3. Savings Rate calculation
-            const savingsRate = incomeSum > 0 ? (((incomeSum - spendingSum) / incomeSum) * 100) : 0;
-
             const formatCurrency = (val) => formatCurrencyVal(val, settings.currency || "INR");
 
             // Calculate category breakdown for donut chart
@@ -5414,61 +5506,50 @@
                 categoryBreakdown[t.category] = (categoryBreakdown[t.category] || 0) + t.amount;
             });
 
-            // Persist date period directly (Section 6.1)
-            const handlePeriodChange = (val) => {
-                updateSetting("selectedPeriod", val);
-            };
-
             // Sort transactions: newest 5
             const recentTx = [...transactions].sort((a, b) => new Date(b.date) - new Date(a.date)).slice(0, 5);
 
-            // Count needs review items
-            const needsReviewCount = transactions.filter(t => t.category === "Needs review").length;
-
             return (
-                <div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
                     {/* SVG Graphic Charts Row */}
-                    <div className="dashboard-charts">
+                    <div className="dashboard-charts" style={{ margin: 0 }}>
 
                         {/* Chart 1: Cash Flow Line/Area Chart */}
                         <div className="chart-card">
-                            <div className="chart-header">
-                                <span className="chart-header-title">Cash Flow Trends</span>
-                            </div>
-                            <div className="chart-container-inner">
-                                {transactions.length === 0 ? (
-                                    <div className="empty-state" style={{ width: '100%', height: '100%', border: 'none' }}>
-                                        <Icon name="home" />
-                                        <h3>No Trends Available</h3>
-                                        <p>Import or add transactions to see cash flow trends.</p>
-                                    </div>
-                                ) : (
-                                    <CashFlowSvgChart transactions={transactions} settings={settings} />
-                                )}
-                            </div>
+                            {transactions.length === 0 ? (
+                                <div className="empty-state" style={{ width: '100%', height: '100%', border: 'none' }}>
+                                    <Icon name="home" />
+                                    <h3>No Trends Available</h3>
+                                    <p>Import or add transactions to see cash flow trends.</p>
+                                </div>
+                            ) : (
+                                <CashFlowSvgChart transactions={transactions} settings={settings} />
+                            )}
                         </div>
 
                         {/* Chart 2: Category Pie/Donut Chart */}
                         <div className="chart-card">
-                            <div className="chart-header">
-                                <span className="chart-header-title">Expenses by Category</span>
-                            </div>
-                            <div className="chart-container-inner">
-                                {expenseTx.length === 0 ? (
-                                    <div className="empty-state" style={{ width: '100%', height: '100%', border: 'none' }}>
-                                        <Icon name="budgets" />
-                                        <h3>No Expenses Recorded</h3>
-                                        <p>Create expenses to visualize category spending.</p>
-                                    </div>
-                                ) : (
-                                    <CategoryDonutSvgChart breakdown={categoryBreakdown} total={spendingSum} settings={settings} />
-                                )}
-                            </div>
+                            {expenseTx.length === 0 ? (
+                                <div className="empty-state" style={{ width: '100%', height: '100%', border: 'none' }}>
+                                    <Icon name="budgets" />
+                                    <h3>No Expenses Recorded</h3>
+                                    <p>Create expenses to visualize category spending.</p>
+                                </div>
+                            ) : (
+                                <CategoryDonutSvgChart breakdown={categoryBreakdown} total={spendingSum} settings={settings} />
+                            )}
                         </div>
                     </div>
 
+                    {/* Financial Intelligence & Smart Insights Bar */}
+                    <FinancialInsightsPanel
+                        transactions={transactions}
+                        settings={settings}
+                        setActivePage={setActivePage}
+                    />
+
                     {/* Forecast & Upcoming Payments Row */}
-                    <div className="content-columns" style={{ marginBottom: '24px' }}>
+                    <div className="content-columns" style={{ margin: 0 }}>
                         <ForecastCard
                             settings={settings}
                             transactions={fullTx}
@@ -5479,92 +5560,194 @@
                         />
                     </div>
 
-                    {/* Bottom Split panel (Recent activity & Insights) */}
-                    <div className="content-columns">
-
-                        {/* List: Recent Activity */}
-                        <div className="section-card">
-                            <div className="section-card-title">
-                                <span>Recent Activities</span>
-                                <button className="btn btn-secondary btn-sm" onClick={() => setActivePage("transactions")}>View All</button>
+                    {/* Recent Activities Section */}
+                    <div className="section-card">
+                        <div className="section-card-title">
+                            <span style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                <Icon name="transactions" /> Recent Activities
+                            </span>
+                            <button className="btn btn-secondary btn-sm" onClick={() => setActivePage("transactions")}>View All</button>
+                        </div>
+                        {recentTx.length === 0 ? (
+                            <div className="empty-state">
+                                <Icon name="transactions" currency={settings.currency} />
+                                <h3>Empty Registry</h3>
+                                <p>No transactions registered for the selected period.</p>
                             </div>
-                            {recentTx.length === 0 ? (
-                                <div className="empty-state">
-                                    <Icon name="transactions" currency={settings.currency} />
-                                    <h3>Empty Registry</h3>
-                                    <p>No transactions registered for the selected period.</p>
-                                </div>
-                            ) : (
-                                <div className="table-responsive">
-                                    <table className="table">
-                                        <thead>
-                                            <tr>
-                                                <th>Date</th>
-                                                <th>Merchant</th>
-                                                <th>Category</th>
-                                                <th>Amount</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody>
-                                            {recentTx.map(t => (
-                                                <tr key={t.id}>
-                                                    <td>{formatDate(t.date, settings.dateFormat)}</td>
-                                                    <td style={{ fontWeight: 500 }}>{t.merchant}</td>
+                        ) : (
+                            <div className="table-responsive">
+                                <table className="table" style={{ margin: 0 }}>
+                                    <thead>
+                                        <tr>
+                                            <th>Merchant</th>
+                                            <th>Category</th>
+                                            <th>Date</th>
+                                            <th style={{ textAlign: 'right' }}>Amount</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {recentTx.map(t => {
+                                            const firstChar = (t.merchant || "T").trim().charAt(0).toUpperCase();
+                                            return (
+                                                <tr key={t.id} style={{ transition: 'background-color 0.15s ease' }}>
                                                     <td>
-                                                        <span className="badge" style={{ backgroundColor: '#F3F4F6', color: 'var(--text-main)' }}>
+                                                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                                            <div className="merchant-avatar" style={{
+                                                                background: t.type === "income"
+                                                                    ? "linear-gradient(135deg, #10B981 0%, #059669 100%)"
+                                                                    : "linear-gradient(135deg, #6366F1 0%, #4F46E5 100%)"
+                                                            }}>
+                                                                {firstChar}
+                                                            </div>
+                                                            <div>
+                                                                <div style={{ fontWeight: 600, color: 'var(--text-main)' }}>{t.merchant || "Transaction"}</div>
+                                                                {t.paymentMode && (
+                                                                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{t.paymentMode}</div>
+                                                                )}
+                                                            </div>
+                                                        </div>
+                                                    </td>
+                                                    <td>
+                                                        <span className="badge" style={{ backgroundColor: 'var(--bg-color)', color: 'var(--text-main)', border: '1px solid var(--border-color)', fontWeight: 500 }}>
                                                             {t.category}
                                                         </span>
                                                     </td>
-                                                    <td style={{ fontWeight: 600, color: t.type === "income" ? "var(--success)" : "var(--danger)" }}>
+                                                    <td style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>
+                                                        {formatDate(t.date, settings.dateFormat)}
+                                                    </td>
+                                                    <td style={{ textAlign: 'right', fontWeight: 700, fontSize: '0.95rem', color: t.type === "income" ? "var(--success)" : "var(--danger)" }}>
                                                         {t.type === "income" ? "+" : "-"}{formatCurrency(t.amount)}
                                                     </td>
                                                 </tr>
-                                            ))}
-                                        </tbody>
-                                    </table>
-                                </div>
-                            )}
+                                            );
+                                        })}
+                                    </tbody>
+                                </table>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        };
+
+        // --- SUB-COMPONENT: Comprehensive Financial Intelligence Panel ---
+        const FinancialInsightsPanel = ({ transactions, settings, setActivePage }) => {
+            const formatCurrency = (val) => formatCurrencyVal(val, settings.currency || "INR");
+
+            const expenseTx = transactions.filter(t => t.type === "expense");
+            const incomeTx = transactions.filter(t => t.type === "income");
+
+            const incomeSum = incomeTx.reduce((s, t) => s + t.amount, 0);
+            const spendingSum = expenseTx.reduce((s, t) => s + t.amount, 0);
+            const netCashFlow = incomeSum - spendingSum;
+            const savingsRate = incomeSum > 0 ? ((netCashFlow / incomeSum) * 100) : 0;
+
+            // Needs review count
+            const needsReviewCount = transactions.filter(t => t.category === "Needs review").length;
+
+            // Daily spend velocity calculation
+            const now = new Date();
+            const currentDay = Math.max(1, now.getDate());
+            const dailySpend = spendingSum > 0 ? spendingSum / currentDay : 0;
+
+            // Top spending category analysis
+            const categoryTotals = {};
+            expenseTx.forEach(t => {
+                categoryTotals[t.category] = (categoryTotals[t.category] || 0) + t.amount;
+            });
+            const topCategoryKey = Object.keys(categoryTotals).sort((a, b) => categoryTotals[b] - categoryTotals[a])[0];
+            const topCategoryAmount = topCategoryKey ? categoryTotals[topCategoryKey] : 0;
+            const topCategoryPct = spendingSum > 0 ? Math.round((topCategoryAmount / spendingSum) * 100) : 0;
+
+            // Largest single transaction
+            const largestTx = [...expenseTx].sort((a, b) => b.amount - a.amount)[0];
+
+            // Savings rate status grade
+            let savingsGrade = { label: "No Income", color: "var(--text-muted)", bg: "var(--bg-color)" };
+            if (incomeSum > 0) {
+                if (savingsRate >= 30) savingsGrade = { label: "Excellent Savings", color: "#059669", bg: "#ECFDF5" };
+                else if (savingsRate >= 15) savingsGrade = { label: "Healthy Savings", color: "#2563EB", bg: "#EFF6FF" };
+                else if (savingsRate >= 0) savingsGrade = { label: "Tight Cash Flow", color: "#D97706", bg: "#FFFBEB" };
+                else savingsGrade = { label: "Deficit Spending", color: "#DC2626", bg: "#FEF2F2" };
+            }
+
+            return (
+                <div className="section-card" style={{ background: 'var(--card-bg)' }}>
+                    <div className="section-card-title">
+                        <span style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <Icon name="sparkles" /> Financial Intelligence & Insights
+                        </span>
+                        {needsReviewCount > 0 ? (
+                            <button
+                                className="dashboard-badge-pill"
+                                style={{ background: '#FEF3C7', color: '#B45309', border: '1px solid #FCD34D', cursor: 'pointer' }}
+                                onClick={() => setActivePage("transactions")}
+                            >
+                                <Icon name="alert" /> {needsReviewCount} item{needsReviewCount > 1 ? 's' : ''} to review
+                            </button>
+                        ) : (
+                            <span className="dashboard-badge-pill" style={{ background: '#D1FAE5', color: '#065F46', border: '1px solid #A7F3D0' }}>
+                                <Icon name="check" /> Books Clean
+                            </span>
+                        )}
+                    </div>
+
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px' }}>
+
+                        {/* Metric 1: Financial Health & Savings Rate */}
+                        <div className="insight-metric-card">
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                                <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                                    Savings Grade
+                                </span>
+                                <span className="dashboard-badge-pill" style={{ background: savingsGrade.bg, color: savingsGrade.color }}>
+                                    {savingsGrade.label}
+                                </span>
+                            </div>
+                            <div style={{ fontSize: '1.5rem', fontWeight: 700, color: 'var(--text-main)', marginBottom: '4px' }}>
+                                {savingsRate.toFixed(1)}%
+                            </div>
+                            <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                                {netCashFlow >= 0 ? `+${formatCurrency(netCashFlow)} retained` : `${formatCurrency(Math.abs(netCashFlow))} overspent`}
+                            </div>
                         </div>
 
-                        {/* List: Insights / Pending Review */}
-                        <div className="section-card">
-                            <div className="section-card-title">Financial Insights</div>
+                        {/* Metric 2: Spend Velocity / Daily Pace */}
+                        <div className="insight-metric-card">
+                            <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '8px' }}>
+                                Daily Burn Rate
+                            </div>
+                            <div style={{ fontSize: '1.5rem', fontWeight: 700, color: 'var(--text-main)', marginBottom: '4px' }}>
+                                {formatCurrency(dailySpend)}<span style={{ fontSize: '0.85rem', fontWeight: 500, color: 'var(--text-muted)' }}>/day</span>
+                            </div>
+                            <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                                Over {currentDay} elapsed days this period
+                            </div>
+                        </div>
 
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                        {/* Metric 3: Top Expense Concentration */}
+                        <div className="insight-metric-card">
+                            <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '8px' }}>
+                                Top Category
+                            </div>
+                            <div style={{ fontSize: '1.2rem', fontWeight: 700, color: 'var(--text-main)', marginBottom: '4px', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>
+                                {topCategoryKey || "None"}
+                            </div>
+                            <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                                {topCategoryKey ? `${formatCurrency(topCategoryAmount)} (${topCategoryPct}% of total)` : 'No expense data'}
+                            </div>
+                        </div>
 
-                                {/* Needs Review Banner */}
-                                {needsReviewCount > 0 ? (
-                                    <div style={{ padding: '16px', borderRadius: '12px', backgroundColor: 'var(--warning-light)', border: '1px solid var(--warning)' }}>
-                                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 600, color: 'var(--warning)', marginBottom: '4px' }}>
-                                            <Icon name="alert" />
-                                            <span>Needs Review</span>
-                                        </div>
-                                        <p style={{ fontSize: '0.85rem', color: 'var(--text-main)' }}>
-                                            You have <strong>{needsReviewCount}</strong> transaction{needsReviewCount > 1 ? "s" : ""} flagged as "Needs review". Categorize them to fix your reports.
-                                        </p>
-                                    </div>
-                                ) : (
-                                    <div style={{ padding: '16px', borderRadius: '12px', backgroundColor: 'var(--success-light)', border: '1px solid var(--success)', color: 'var(--success)' }}>
-                                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 600, marginBottom: '4px' }}>
-                                            <Icon name="check" />
-                                            <span>Healthy Books</span>
-                                        </div>
-                                        <p style={{ fontSize: '0.85rem', color: 'var(--text-main)' }}>
-                                            All transactions are categorized! No outstanding review actions needed.
-                                        </p>
-                                    </div>
-                                )}
-
-                                {/* Budget Check insight */}
-                                <div style={{ padding: '16px', borderRadius: '12px', border: '1px solid var(--border-color)', backgroundColor: 'var(--card-bg)' }}>
-                                    <h4 style={{ fontWeight: 600, marginBottom: '4px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                                        <Icon name="infoCircle" />
-                                        <span>Pro-tip: Local Sync</span>
-                                    </h4>
-                                    <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
-                                        Authorize folder scanning under **Documents** tab to import multiple PDFs, CSVs, and receipts straight from your directory inbox.
-                                    </p>
-                                </div>
+                        {/* Metric 4: Peak Single Transaction */}
+                        <div className="insight-metric-card">
+                            <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '8px' }}>
+                                Peak Transaction
+                            </div>
+                            <div style={{ fontSize: '1.2rem', fontWeight: 700, color: 'var(--danger)', marginBottom: '4px', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>
+                                {largestTx ? formatCurrency(largestTx.amount) : "₹0"}
+                            </div>
+                            <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>
+                                {largestTx ? `${largestTx.merchant}` : "No expenses"}
                             </div>
                         </div>
 
@@ -5663,6 +5846,27 @@
                                 {" · "}
                                 {forecast.expenseOverride !== null && forecast.expenseOverride !== undefined ? "manual discretionary spend" : "average discretionary spend"}
                             </p>
+
+                            {/* Stacked Progress Bar visual */}
+                            {effectiveIncome > 0 && (
+                                <div style={{ marginBottom: '16px' }}>
+                                    <div className="progress-bar-stacked" style={{ height: '8px', marginBottom: '6px' }}>
+                                        {(() => {
+                                            const tot = Math.max(1, effectiveIncome);
+                                            const cPct = Math.min(100, Math.max(0, (commitmentsMonthly / tot) * 100));
+                                            const dPct = Math.min(100 - cPct, Math.max(0, (effectiveDiscretionary / tot) * 100));
+                                            const sPct = Math.max(0, 100 - cPct - dPct);
+                                            return (
+                                                <React.Fragment>
+                                                    <div style={{ width: `${cPct}%`, background: '#F59E0B' }} title={`Recurring (${cPct.toFixed(0)}%)`}></div>
+                                                    <div style={{ width: `${dPct}%`, background: '#EF4444' }} title={`Discretionary (${dPct.toFixed(0)}%)`}></div>
+                                                    <div style={{ width: `${sPct}%`, background: '#10B981' }} title={`Savings (${sPct.toFixed(0)}%)`}></div>
+                                                </React.Fragment>
+                                            );
+                                        })()}
+                                    </div>
+                                </div>
+                            )}
 
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', fontSize: '0.85rem' }}>
                                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
@@ -5944,11 +6148,12 @@
 
         // --- SUB-COMPONENT: Custom SVG Line/Area Cash Flow Chart ---
         const CashFlowSvgChart = ({ transactions, settings }) => {
+            const [hoveredIdx, setHoveredIdx] = React.useState(null);
+
             // Group transactions by month (last 7 months)
             const monthsNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
             const monthlyTotals = {};
 
-            // Initialize last 7 months
             const today = new Date();
             for (let i = 6; i >= 0; i--) {
                 const d = new Date(today.getFullYear(), today.getMonth() - i, 1);
@@ -5956,18 +6161,13 @@
                 monthlyTotals[label] = { income: 0, expense: 0, dateObj: d };
             }
 
-            // Fill transactions data into months
             transactions.forEach(t => {
                 const tDate = new Date(t.date);
                 if (isNaN(tDate.getTime())) return;
                 const label = `${monthsNames[tDate.getMonth()]} ${String(tDate.getFullYear()).slice(-2)}`;
-
                 if (monthlyTotals[label]) {
-                    if (t.type === "income") {
-                        monthlyTotals[label].income += t.amount;
-                    } else {
-                        monthlyTotals[label].expense += t.amount;
-                    }
+                    if (t.type === "income") monthlyTotals[label].income += t.amount;
+                    else monthlyTotals[label].expense += t.amount;
                 }
             });
 
@@ -5975,103 +6175,191 @@
             const dataPoints = keys.map(k => ({
                 label: k,
                 income: monthlyTotals[k].income,
-                expense: monthlyTotals[k].expense
+                expense: monthlyTotals[k].expense,
+                net: monthlyTotals[k].income - monthlyTotals[k].expense
             }));
 
-            // Find max value to scale chart
+            const activeIdx = hoveredIdx !== null ? hoveredIdx : dataPoints.length - 1;
+            const activePoint = dataPoints[activeIdx] || dataPoints[0];
+
             const maxVal = Math.max(
                 ...dataPoints.map(d => Math.max(d.income, d.expense)),
-                100 // fallback min height
+                100
             );
 
-            // Chart coordinate settings
             const width = 500;
-            const height = 200;
-            const paddingLeft = 40;
-            const paddingRight = 10;
-            const paddingTop = 10;
-            const paddingBottom = 25;
+            const height = 210;
+            const paddingLeft = 45;
+            const paddingRight = 15;
+            const paddingTop = 20;
+            const paddingBottom = 30;
 
             const chartWidth = width - paddingLeft - paddingRight;
             const chartHeight = height - paddingTop - paddingBottom;
 
-            // X scale: mapping month index to pixel coordinate
-            const getX = (idx) => paddingLeft + (idx / (dataPoints.length - 1)) * chartWidth;
-            // Y scale: mapping value to pixel coordinate
+            const getX = (idx) => paddingLeft + (idx / Math.max(1, dataPoints.length - 1)) * chartWidth;
             const getY = (val) => height - paddingBottom - (val / maxVal) * chartHeight;
 
-            // Path lines generator
-            let incomePoints = "";
-            let expensePoints = "";
+            // Generate smooth Bezier curve string
+            const generateSmoothPath = (points) => {
+                if (!points || points.length === 0) return "";
+                if (points.length === 1) return `M ${points[0].x} ${points[0].y}`;
+                let path = `M ${points[0].x} ${points[0].y}`;
+                for (let i = 0; i < points.length - 1; i++) {
+                    const p0 = points[i];
+                    const p1 = points[i + 1];
+                    const mx = (p0.x + p1.x) / 2;
+                    path += ` C ${mx} ${p0.y}, ${mx} ${p1.y}, ${p1.x} ${p1.y}`;
+                }
+                return path;
+            };
 
-            dataPoints.forEach((d, idx) => {
-                const x = getX(idx);
-                const yInc = getY(d.income);
-                const yExp = getY(d.expense);
+            const incomePts = dataPoints.map((d, i) => ({ x: getX(i), y: getY(d.income) }));
+            const expensePts = dataPoints.map((d, i) => ({ x: getX(i), y: getY(d.expense) }));
 
-                incomePoints += `${idx === 0 ? 'M' : 'L'} ${x} ${yInc} `;
-                expensePoints += `${idx === 0 ? 'M' : 'L'} ${x} ${yExp} `;
-            });
+            const incomePath = generateSmoothPath(incomePts);
+            const expensePath = generateSmoothPath(expensePts);
 
-            // Path area generator (closing path to bottom grid line)
+            const yBottom = getY(0);
             const x0 = getX(0);
             const xN = getX(dataPoints.length - 1);
-            const yBottom = getY(0);
 
-            const incomeArea = incomePoints ? `${incomePoints} L ${xN} ${yBottom} L ${x0} ${yBottom} Z` : "";
-            const expenseArea = expensePoints ? `${expensePoints} L ${xN} ${yBottom} L ${x0} ${yBottom} Z` : "";
+            const incomeArea = incomePath ? `${incomePath} L ${xN} ${yBottom} L ${x0} ${yBottom} Z` : "";
+            const expenseArea = expensePath ? `${expensePath} L ${xN} ${yBottom} L ${x0} ${yBottom} Z` : "";
+
+            const formatCurrency = (val) => formatCurrencyVal(val, settings.currency || "INR");
 
             return (
-                <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column' }}>
-                    <svg viewBox={`0 0 ${width} ${height}`} width="100%" height="100%">
+                <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                    {/* Header line with title and active point highlight */}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <div>
+                            <span style={{ fontWeight: 600, fontSize: '1.05rem', color: 'var(--text-main)' }}>Cash Flow Trends</span>
+                            <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginLeft: '8px' }}>
+                                ({activePoint.label})
+                            </span>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', fontSize: '0.82rem' }}>
+                            <span style={{ color: 'var(--text-muted)' }}>Net:</span>
+                            <span className="dashboard-badge-pill" style={{
+                                background: activePoint.net >= 0 ? '#ECFDF5' : '#FEF2F2',
+                                color: activePoint.net >= 0 ? '#059669' : '#DC2626',
+                                border: activePoint.net >= 0 ? '1px solid #A7F3D0' : '1px solid #FECACA'
+                            }}>
+                                {activePoint.net >= 0 ? '+' : ''}{formatCurrency(activePoint.net)}
+                            </span>
+                        </div>
+                    </div>
 
-                        {/* Horizontal Grid lines */}
-                        {[0, 0.25, 0.5, 0.75, 1].map((ratio, idx) => {
-                            const val = maxVal * ratio;
-                            const y = getY(val);
-                            return (
-                                <g key={idx}>
-                                    <line x1={paddingLeft} y1={y} x2={width - paddingRight} y2={y} stroke="var(--border-color)" strokeWidth="0.5" strokeDasharray="4 4" />
-                                    <text x={paddingLeft - 6} y={y + 3} textAnchor="end" fill="var(--text-light)" fontSize="8px">
-                                        {getCurrencySymbol(settings?.currency || "INR")}{Math.round(val)}
-                                    </text>
-                                </g>
-                            );
-                        })}
+                    <div style={{ position: 'relative', width: '100%' }}>
+                        <svg viewBox={`0 0 ${width} ${height}`} width="100%" height="100%" style={{ overflow: 'visible' }}>
+                            <defs>
+                                <linearGradient id="incGrad" x1="0" y1="0" x2="0" y2="1">
+                                    <stop offset="0%" stopColor="#10B981" stopOpacity="0.22" />
+                                    <stop offset="100%" stopColor="#10B981" stopOpacity="0.0" />
+                                </linearGradient>
+                                <linearGradient id="expGrad" x1="0" y1="0" x2="0" y2="1">
+                                    <stop offset="0%" stopColor="#F59E0B" stopOpacity="0.22" />
+                                    <stop offset="100%" stopColor="#F59E0B" stopOpacity="0.0" />
+                                </linearGradient>
+                            </defs>
 
-                        {/* Fill Area curves */}
-                        {incomeArea && <path d={incomeArea} fill="rgba(16, 185, 129, 0.08)" />}
-                        {expenseArea && <path d={expenseArea} fill="rgba(245, 158, 11, 0.08)" />}
+                            {/* Horizontal Grid lines */}
+                            {[0, 0.25, 0.5, 0.75, 1].map((ratio, idx) => {
+                                const val = maxVal * ratio;
+                                const y = getY(val);
+                                return (
+                                    <g key={idx}>
+                                        <line x1={paddingLeft} y1={y} x2={width - paddingRight} y2={y} stroke="var(--border-color)" strokeWidth="0.5" strokeDasharray="4 4" />
+                                        <text x={paddingLeft - 8} y={y + 3} textAnchor="end" fill="var(--text-light)" fontSize="8px">
+                                            {getCurrencySymbol(settings?.currency || "INR")}{Math.round(val)}
+                                        </text>
+                                    </g>
+                                );
+                            })}
 
-                        {/* Stroke lines */}
-                        {incomePoints && <path d={incomePoints} fill="none" stroke="var(--success)" strokeWidth="2" strokeLinecap="round" />}
-                        {expensePoints && <path d={expensePoints} fill="none" stroke="var(--warning)" strokeWidth="2" strokeLinecap="round" />}
+                            {/* Fill Areas */}
+                            {incomeArea && <path d={incomeArea} fill="url(#incGrad)" />}
+                            {expenseArea && <path d={expenseArea} fill="url(#expGrad)" />}
 
-                        {/* Data dots */}
-                        {dataPoints.map((d, idx) => (
-                            <g key={idx}>
-                                <circle cx={getX(idx)} cy={getY(d.income)} r="3" fill="var(--success)" stroke="#FFFFFF" strokeWidth="1" />
-                                <circle cx={getX(idx)} cy={getY(d.expense)} r="3" fill="var(--warning)" stroke="#FFFFFF" strokeWidth="1" />
-                            </g>
-                        ))}
+                            {/* Smooth Stroke Curves */}
+                            {incomePath && <path d={incomePath} fill="none" stroke="#10B981" strokeWidth="2.5" strokeLinecap="round" />}
+                            {expensePath && <path d={expensePath} fill="none" stroke="#F59E0B" strokeWidth="2.5" strokeLinecap="round" />}
 
-                        {/* Month X Labels */}
-                        {dataPoints.map((d, idx) => (
-                            <text key={idx} x={getX(idx)} y={height - 8} textAnchor="middle" fill="var(--text-muted)" fontSize="9px">
-                                {d.label}
-                            </text>
-                        ))}
-                    </svg>
+                            {/* Vertical Focus Line for hovered month */}
+                            {activeIdx !== null && (
+                                <line
+                                    x1={getX(activeIdx)}
+                                    y1={paddingTop}
+                                    x2={getX(activeIdx)}
+                                    y2={height - paddingBottom}
+                                    stroke="var(--primary)"
+                                    strokeWidth="1.5"
+                                    strokeDasharray="3 3"
+                                    opacity="0.6"
+                                />
+                            )}
 
-                    {/* Custom Legend */}
-                    <div style={{ display: 'flex', gap: '16px', justifyContent: 'center', fontSize: '0.8rem', marginTop: '10px' }}>
+                            {/* Interactive Data Dots & Month Columns */}
+                            {dataPoints.map((d, idx) => {
+                                const cx = getX(idx);
+                                const cyInc = getY(d.income);
+                                const cyExp = getY(d.expense);
+                                const isSelected = idx === activeIdx;
+
+                                return (
+                                    <g key={idx}
+                                        onMouseEnter={() => setHoveredIdx(idx)}
+                                        onMouseLeave={() => setHoveredIdx(null)}
+                                        style={{ cursor: 'pointer' }}
+                                    >
+                                        {/* Invisible wide hit target column */}
+                                        <rect
+                                            x={cx - 20}
+                                            y={paddingTop}
+                                            width="40"
+                                            height={chartHeight}
+                                            fill="transparent"
+                                        />
+
+                                        {/* Income point */}
+                                        <circle cx={cx} cy={cyInc} r={isSelected ? "5" : "3.5"} fill="#10B981" stroke="#FFFFFF" strokeWidth="1.5" />
+                                        {/* Expense point */}
+                                        <circle cx={cx} cy={cyExp} r={isSelected ? "5" : "3.5"} fill="#F59E0B" stroke="#FFFFFF" strokeWidth="1.5" />
+                                    </g>
+                                );
+                            })}
+
+                            {/* Month X Axis Labels */}
+                            {dataPoints.map((d, idx) => (
+                                <text
+                                    key={idx}
+                                    x={getX(idx)}
+                                    y={height - 8}
+                                    textAnchor="middle"
+                                    fill={idx === activeIdx ? 'var(--text-main)' : 'var(--text-muted)'}
+                                    fontWeight={idx === activeIdx ? "700" : "500"}
+                                    fontSize="9px"
+                                >
+                                    {d.label}
+                                </text>
+                            ))}
+                        </svg>
+                    </div>
+
+                    {/* Chart Legend & Focus Summary */}
+                    <div style={{ display: 'flex', gap: '20px', justifyContent: 'center', fontSize: '0.8rem', paddingTop: '4px' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                            <span style={{ width: '12px', height: '4px', backgroundColor: 'var(--success)', borderRadius: '2px' }}></span>
-                            <span style={{ color: 'var(--text-muted)', fontWeight: 500 }}>Income</span>
+                            <span style={{ width: '10px', height: '10px', backgroundColor: '#10B981', borderRadius: '50%' }}></span>
+                            <span style={{ color: 'var(--text-muted)', fontWeight: 500 }}>
+                                Income ({formatCurrency(activePoint.income)})
+                            </span>
                         </div>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                            <span style={{ width: '12px', height: '4px', backgroundColor: 'var(--warning)', borderRadius: '2px' }}></span>
-                            <span style={{ color: 'var(--text-muted)', fontWeight: 500 }}>Expenses</span>
+                            <span style={{ width: '10px', height: '10px', backgroundColor: '#F59E0B', borderRadius: '50%' }}></span>
+                            <span style={{ color: 'var(--text-muted)', fontWeight: 500 }}>
+                                Expenses ({formatCurrency(activePoint.expense)})
+                            </span>
                         </div>
                     </div>
                 </div>
@@ -6080,6 +6368,8 @@
 
         // --- SUB-COMPONENT: Custom SVG Category Donut Spend Chart ---
         const CategoryDonutSvgChart = ({ breakdown, total, settings }) => {
+            const [hoveredIndex, setHoveredIndex] = React.useState(null);
+
             const categories = Object.keys(breakdown);
             const data = categories.map(cat => ({
                 label: cat,
@@ -6087,16 +6377,13 @@
                 percentage: total > 0 ? (breakdown[cat] / total) * 100 : 0
             })).sort((a, b) => b.value - a.value);
 
-            // Palette colors for sectors
             const colors = ["#6558D3", "#3B82F6", "#10B981", "#F59E0B", "#EF4444", "#EC4899", "#8B5CF6", "#06B6D4", "#10B981", "#6B7280"];
 
-            // Render SVG Donut
             let accumulatedAngle = 0;
             const segments = data.map((d, idx) => {
                 const angle = (d.value / total) * 360;
                 const strokeDashOffset = 100 - (accumulatedAngle / 360) * 100;
                 const strokeDashArray = `${(d.value / total) * 100} ${100 - (d.value / total) * 100}`;
-
                 accumulatedAngle += angle;
                 return {
                     ...d,
@@ -6106,53 +6393,92 @@
                 };
             });
 
+            const activeSeg = hoveredIndex !== null ? segments[hoveredIndex] : null;
+            const formatCurrency = (val) => formatCurrencyVal(val, settings.currency || "INR");
+
             return (
-                <div style={{ width: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-                    <div style={{ width: '130px', height: '130px', position: 'relative' }}>
-                        <svg width="100%" height="100%" viewBox="0 0 42 42">
-                            {/* Inner gray background circle */}
-                            <circle cx="21" cy="21" r="15.915" fill="transparent" stroke="#E5E7EB" strokeWidth="3"></circle>
-
-                            {/* Colorful donut sectors */}
-                            {segments.map((seg, idx) => (
-                                <circle
-                                    key={idx}
-                                    cx="21"
-                                    cy="21"
-                                    r="15.915"
-                                    fill="transparent"
-                                    stroke={seg.color}
-                                    strokeWidth="3.5"
-                                    strokeDasharray={seg.strokeDashArray}
-                                    strokeDashoffset={seg.strokeDashOffset}
-                                    transform="rotate(-90 21 21)"
-                                ></circle>
-                            ))}
-                        </svg>
-
-                        {/* Centered Total Display text */}
-                        <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', textAlign: 'center' }}>
-                            <span style={{ fontSize: '0.7rem', textTransform: 'uppercase', color: 'var(--text-muted)', display: 'block', fontWeight: 500 }}>Total</span>
-                            <span style={{ fontSize: '0.95rem', fontWeight: 700, color: 'var(--text-main)' }}>
-                                {getCurrencySymbol(settings?.currency || "INR")}{Math.round(total)}
-                            </span>
-                        </div>
+                <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span style={{ fontWeight: 600, fontSize: '1.05rem', color: 'var(--text-main)' }}>Expenses by Category</span>
+                        <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+                            {segments.length} Categor{segments.length === 1 ? 'y' : 'ies'}
+                        </span>
                     </div>
 
-                    {/* Donut Legend */}
-                    <ul className="chart-legend">
-                        {segments.map((seg, idx) => (
-                            <li key={idx} className="chart-legend-item">
-                                <div className="legend-color-label">
-                                    <span className="legend-color-dot" style={{ backgroundColor: seg.color }}></span>
-                                    <span style={{ fontWeight: 500, color: 'var(--text-muted)' }}>{seg.label}</span>
-                                </div>
-                                <span className="legend-value-percent">
-                                    {getCurrencySymbol(settings?.currency || "INR")}{Math.round(seg.value)} ({Math.round(seg.percentage)}%)
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
+                        {/* Interactive SVG Donut */}
+                        <div style={{ width: '135px', height: '135px', position: 'relative', flexShrink: 0 }}>
+                            <svg width="100%" height="100%" viewBox="0 0 42 42" style={{ overflow: 'visible' }}>
+                                <circle cx="21" cy="21" r="15.915" fill="transparent" stroke="#F1F5F9" strokeWidth="3.5"></circle>
+
+                                {segments.map((seg, idx) => (
+                                    <circle
+                                        key={idx}
+                                        cx="21"
+                                        cy="21"
+                                        r="15.915"
+                                        fill="transparent"
+                                        stroke={seg.color}
+                                        strokeWidth={hoveredIndex === idx ? "5" : "3.8"}
+                                        strokeDasharray={seg.strokeDashArray}
+                                        strokeDashoffset={seg.strokeDashOffset}
+                                        transform="rotate(-90 21 21)"
+                                        onMouseEnter={() => setHoveredIndex(idx)}
+                                        onMouseLeave={() => setHoveredIndex(null)}
+                                        style={{ transition: 'stroke-width 0.2s ease, opacity 0.2s ease', opacity: (hoveredIndex === null || hoveredIndex === idx) ? 1 : 0.45, cursor: 'pointer' }}
+                                    ></circle>
+                                ))}
+                            </svg>
+
+                            {/* Centered Total / Focused Category Display text */}
+                            <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', textAlign: 'center', width: '80%' }}>
+                                <span style={{ fontSize: '0.65rem', textTransform: 'uppercase', color: 'var(--text-muted)', display: 'block', fontWeight: 600, letterSpacing: '0.04em' }}>
+                                    {activeSeg ? activeSeg.label : "Total Spend"}
                                 </span>
-                            </li>
-                        ))}
-                    </ul>
+                                <span style={{ fontSize: '0.9rem', fontWeight: 700, color: 'var(--text-main)', display: 'block' }}>
+                                    {formatCurrency(activeSeg ? activeSeg.value : total)}
+                                </span>
+                                {activeSeg && (
+                                    <span style={{ fontSize: '0.7rem', fontWeight: 600, color: activeSeg.color }}>
+                                        {activeSeg.percentage.toFixed(1)}%
+                                    </span>
+                                )}
+                            </div>
+                        </div>
+
+                        {/* Donut Legend */}
+                        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '150px', overflowY: 'auto' }}>
+                            {segments.slice(0, 5).map((seg, idx) => (
+                                <div
+                                    key={idx}
+                                    onMouseEnter={() => setHoveredIndex(idx)}
+                                    onMouseLeave={() => setHoveredIndex(null)}
+                                    style={{
+                                        display: 'flex',
+                                        flexDirection: 'column',
+                                        gap: '3px',
+                                        padding: '4px 6px',
+                                        borderRadius: '6px',
+                                        background: hoveredIndex === idx ? 'var(--bg-color)' : 'transparent',
+                                        cursor: 'pointer',
+                                        transition: 'background-color 0.15s ease'
+                                    }}
+                                >
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.8rem' }}>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>
+                                            <span style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: seg.color, flexShrink: 0 }}></span>
+                                            <span style={{ fontWeight: 500, color: 'var(--text-main)', textOverflow: 'ellipsis', overflow: 'hidden' }}>{seg.label}</span>
+                                        </div>
+                                        <span style={{ fontWeight: 600, color: 'var(--text-main)' }}>{seg.percentage.toFixed(0)}%</span>
+                                    </div>
+                                    {/* Mini Progress Bar */}
+                                    <div style={{ height: '3px', width: '100%', background: '#F1F5F9', borderRadius: '2px', overflow: 'hidden' }}>
+                                        <div style={{ height: '100%', width: `${seg.percentage}%`, background: seg.color, borderRadius: '2px' }}></div>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
                 </div>
             );
         };
