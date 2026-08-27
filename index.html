@@ -1951,6 +1951,176 @@
             "Others - Others ⚙️"
         ];
 
+        // Smart merchant keyword & pattern heuristic classifier for auto-categorization into 30 main categories
+        const predictBestCategory = (narration = "", type = "expense", availableCategories = DEFAULT_CATEGORIES) => {
+            const text = String(narration).toLowerCase();
+            const categoriesPool = (availableCategories && availableCategories.length > 0) ? availableCategories : DEFAULT_CATEGORIES;
+
+            const findCategory = (substring) => {
+                return categoriesPool.find(c => c.toLowerCase().includes(substring.toLowerCase()));
+            };
+
+            // Specific heuristics for income
+            if (type === "income") {
+                if (/salary|payroll|stipend|wages|employer|direct dep/i.test(text)) return findCategory("Income - Salary") || findCategory("Income");
+                if (/bonus|incentive|reward/i.test(text)) return findCategory("Income - Bonus") || findCategory("Income");
+                if (/dividend|payout|yield/i.test(text)) return findCategory("Income - Dividend") || findCategory("Income");
+                if (/interest|int\.pd|int pd|int paid/i.test(text)) return findCategory("Income - Interest") || findCategory("Income");
+                if (/freelance|upwork|fiverr|consulting|stripe|paypal/i.test(text)) return findCategory("Income - Freelance") || findCategory("Income");
+                if (/rent|tenant|lease/i.test(text)) return findCategory("Income - Rental") || findCategory("Income");
+                if (/cashback|points/i.test(text)) return findCategory("Income - Cashback") || findCategory("Income");
+                if (/refund|reimbursement|return/i.test(text)) return findCategory("Income - Refund") || findCategory("Income");
+                if (/pension|epfo|provident/i.test(text)) return findCategory("Income - Pension") || findCategory("Income");
+            }
+
+            // Transfers & Inter-account
+            if (/\b(self|own account|transfer to self)\b/i.test(text)) return findCategory("Transfer - Self") || findCategory("Transfer");
+            if (/\b(imps|neft|rtgs|upi|transfer|fund transfer|bank transfer)\b/i.test(text) && !/zomato|swiggy|uber|amazon|flipkart|airtel|jio/i.test(text)) {
+                return findCategory("Transfer - Bank") || findCategory("Transfer");
+            }
+
+            // Food & Drinks
+            if (/zomato|swiggy|ubereats|blinkit|zepto|domino|pizza|mcdonald|kfc|burger|dunkin|starbucks|cafe|coffee|chai|tea|bakery|restaurant|dining|dinner|brunch|lunch|breakfast/i.test(text)) {
+                if (/swiggy|zomato|ubereats|domino/i.test(text)) return findCategory("Food & Drinks - Delivery") || findCategory("Food & Drinks");
+                if (/coffee|starbucks|chai|tea/i.test(text)) return findCategory("Food & Drinks - Coffee") || findCategory("Food & Drinks");
+                return findCategory("Food & Drinks - Dinner") || findCategory("Food & Drinks - Lunch") || findCategory("Food & Drinks");
+            }
+
+            // Groceries
+            if (/grocer|supermarket|bigbasket|blinkit|zepto|instamart|dmart|reliance fresh|nature basket|market|vegetable|fruit|meat|milk|dairy/i.test(text)) {
+                if (/veg/i.test(text)) return findCategory("Groceries - Veggies") || findCategory("Groceries");
+                if (/fruit/i.test(text)) return findCategory("Groceries - Fruits") || findCategory("Groceries");
+                return findCategory("Groceries - Staples") || findCategory("Groceries");
+            }
+
+            // Transport
+            if (/fuel|petrol|diesel|shell|hpcl|bpcl|iocl|cng|ev charge|uber|ola|rapido|namma yatri|cab|taxi|metro|irctc|railway|train|bus|redbus|toll|fastag|parking/i.test(text)) {
+                if (/petrol|fuel|diesel|shell|hpcl|bpcl|iocl/i.test(text)) return findCategory("Transport - Fuel") || findCategory("Transport");
+                if (/uber|ola|rapido|cab|taxi/i.test(text)) return findCategory("Transport - Cab") || findCategory("Transport");
+                if (/metro|train|irctc|bus|redbus/i.test(text)) return findCategory("Transport - Metro") || findCategory("Transport - Train") || findCategory("Transport");
+                if (/fastag|toll|parking/i.test(text)) return findCategory("Transport - Tolls") || findCategory("Transport");
+                return findCategory("Transport");
+            }
+
+            // Shopping
+            if (/amazon|flipkart|myntra|ajio|zara|h&m|uniqlo|shoppers stop|croma|reliance digital|apple|samsung|electronics|gadget|shoes|nike|adidas|puma|decathlon|clothes|shopping/i.test(text)) {
+                if (/clothes|myntra|zara|h&m|ajio|uniqlo/i.test(text)) return findCategory("Shopping - Clothes") || findCategory("Shopping");
+                if (/electronics|croma|apple|samsung|gadget/i.test(text)) return findCategory("Shopping - Electronics") || findCategory("Shopping");
+                return findCategory("Shopping - Gifts") || findCategory("Shopping");
+            }
+
+            // Utilities
+            if (/electricity|power|bescom|tata power|adani power|water|gas|indane|bharat gas|hp gas|broadband|wifi|airtel|jio|vi|vodafone|act fiber|rent|maintenance|garbage|bill/i.test(text)) {
+                if (/electricity|bescom|tata power/i.test(text)) return findCategory("Utilities - Electricity") || findCategory("Utilities");
+                if (/gas|indane|bharat gas/i.test(text)) return findCategory("Utilities - Gas") || findCategory("Utilities");
+                if (/airtel|jio|wifi|broadband|act/i.test(text)) return findCategory("Utilities - Internet") || findCategory("Utilities");
+                if (/rent/i.test(text)) return findCategory("Utilities - Rent") || findCategory("Utilities");
+                return findCategory("Utilities");
+            }
+
+            // Subscriptions
+            if (/netflix|spotify|youtube|prime|disney|hbo|apple music|chatgpt|openai|anthropic|github|google one|icloud|adobe|microsoft 365|zoom|notion/i.test(text)) {
+                if (/chatgpt|openai|anthropic|github/i.test(text)) return findCategory("Subscriptions - AI") || findCategory("Subscriptions");
+                if (/netflix|youtube|prime|disney/i.test(text)) return findCategory("Subscriptions - Video") || findCategory("Subscriptions");
+                if (/spotify|apple music/i.test(text)) return findCategory("Subscriptions - Audio") || findCategory("Subscriptions");
+                return findCategory("Subscriptions");
+            }
+
+            // Health
+            if (/doctor|hospital|clinic|pharmacy|apollo|medplus|pharmeasy|1mg|practo|dentist|lab|diagnostic|blood test|medicine|skincare|derma/i.test(text)) {
+                if (/pharmacy|apollo|medplus|pharmeasy|medicine/i.test(text)) return findCategory("Health - Medicines") || findCategory("Health");
+                if (/hospital|clinic/i.test(text)) return findCategory("Health - Hospital") || findCategory("Health");
+                return findCategory("Health - Doctor") || findCategory("Health");
+            }
+
+            // Fitness
+            if (/gym|cult\.fit|fitness|sports|yoga|badminton|swimming|marathon|trainer|decathlon/i.test(text)) {
+                return findCategory("Fitness - Gym") || findCategory("Fitness");
+            }
+
+            // Entertainment
+            if (/bookmyshow|pvr|inox|cinema|movie|concert|ticket|bowling|gaming|steam|playstation|xbox/i.test(text)) {
+                return findCategory("Entertainment - Movies") || findCategory("Entertainment");
+            }
+
+            // Travel
+            if (/flight|airline|indigo|air india|vistara|spicejet|hotel|makemytrip|goibibo|airbnb|booking\.com|agoda|resort|vacation|visa/i.test(text)) {
+                if (/flight|indigo|air india|vistara/i.test(text)) return findCategory("Travel - Flights") || findCategory("Travel");
+                if (/hotel|airbnb|booking|resort/i.test(text)) return findCategory("Travel - Hotels") || findCategory("Travel");
+                return findCategory("Travel");
+            }
+
+            // Investment
+            if (/mutual fund|groww|zerodha|upstox|kuvera|coin|indmoney|sip|ppf|nps|smallcase|crypto|binance|wazirx|gold|sgb|bond/i.test(text)) {
+                if (/mutual|sip|groww/i.test(text)) return findCategory("Investment - Mutual Funds") || findCategory("Investment");
+                if (/zerodha|upstox|stocks|equity/i.test(text)) return findCategory("Investment - Stocks") || findCategory("Investment");
+                if (/crypto|binance|wazirx/i.test(text)) return findCategory("Investment - Crypto") || findCategory("Investment");
+                if (/gold|sgb/i.test(text)) return findCategory("Investment - Gold") || findCategory("Investment");
+                return findCategory("Investment");
+            }
+
+            // Insurance
+            if (/insurance|lic|hdfc ergo|icici lombard|star health|max bupa|care insurance|policybazaar/i.test(text)) {
+                if (/health/i.test(text)) return findCategory("Insurance - Health") || findCategory("Insurance");
+                if (/vehicle|car|bike/i.test(text)) return findCategory("Insurance - Vehicle") || findCategory("Insurance");
+                return findCategory("Insurance - Life") || findCategory("Insurance");
+            }
+
+            // EMI & Credit
+            if (/emi|loan|mortgage|credit card|card payment|bnpl|cred|slice|onecard|uni/i.test(text)) {
+                if (/emi|loan/i.test(text)) return findCategory("EMI - Personal") || findCategory("EMI");
+                if (/credit card|cred|card payment/i.test(text)) return findCategory("Credit - Card") || findCategory("Credit");
+                return findCategory("Credit");
+            }
+
+            // Tax & Penalties
+            if (/income tax|gst|challan|fine|penalty|late fee/i.test(text)) {
+                if (/tax|gst/i.test(text)) return findCategory("Tax - Income") || findCategory("Tax");
+                return findCategory("Hidden Charges - Fine") || findCategory("Hidden Charges");
+            }
+
+            // Fallback for both Income and Expense when no specific keyword matches:
+            return findCategory("Others - Needs Review") || "Others - Needs Review 🔍";
+        };
+
+        // Process imported transaction: predict category, apply user rules (rule overwrites), enforce category boundaries
+        const processImportedTransaction = (tx, rules = [], availableCategories = DEFAULT_CATEGORIES) => {
+            const categoriesPool = (availableCategories && availableCategories.length > 0) ? availableCategories : DEFAULT_CATEGORIES;
+            const merch = String(tx?.merchant || tx?.narration || "Unknown").trim();
+            const typeVal = tx?.type === "income" ? "income" : "expense";
+
+            // 1. Initial category prediction if missing, invalid, or generic
+            let categoryVal = tx?.category || "";
+            const isValidCategory = categoriesPool.includes(categoryVal);
+
+            if (!categoryVal || !isValidCategory || categoryVal === "Needs review" || categoryVal === "Uncategorized") {
+                categoryVal = predictBestCategory(merch, typeVal, categoriesPool);
+            }
+
+            // 2. Evaluate user categorization rules (Rules OVERWRITE initial suggestions)
+            (rules || []).forEach(rule => {
+                if (rule && rule.enabled === 1 && rule.whenText && merch.toLowerCase().includes(String(rule.whenText).toLowerCase())) {
+                    if (rule.thenText) {
+                        categoryVal = rule.thenText;
+                    }
+                }
+            });
+
+            // 3. Enforce category boundaries (cannot go beyond predefined + user custom categories)
+            if (!categoriesPool.includes(categoryVal)) {
+                const matched = categoriesPool.find(c => c.toLowerCase() === categoryVal.toLowerCase() || c.toLowerCase().includes(categoryVal.toLowerCase()));
+                categoryVal = matched || categoriesPool.find(c => c.includes("Needs Review")) || "Others - Needs Review 🔍";
+            }
+
+            return {
+                ...tx,
+                narration: merch,
+                merchant: merch,
+                type: typeVal,
+                category: categoryVal
+            };
+        };
+
         const CATEGORY_DESCRIPTIONS = {
             "Food & Drinks": "Breakfast, lunch, dinner, drinks, cafes",
             "Groceries": "Kitchen staples, veggies, fruits, pantry",
@@ -3056,11 +3226,14 @@
         };
 
         // Gemini Free Vision/PDF Bank Statement Parser API Client (Page-by-Page Multi-Chunk Extractor for 100% Accuracy)
-        const parseBankStatementWithGeminiAI = async (file, apiKey, onProgress) => {
+        const parseBankStatementWithGeminiAI = async (file, apiKey, onProgress, availableCategories = DEFAULT_CATEGORIES, rules = []) => {
             const key = (apiKey || localStorage.getItem("gemini_api_key") || "").trim();
             if (!key) {
                 throw new Error("Gemini API Key is required for AI Bank Parsing. Get a free API key at https://aistudio.google.com/app/apikey");
             }
+
+            const categoriesPool = (availableCategories && availableCategories.length > 0) ? availableCategories : DEFAULT_CATEGORIES;
+            const categoriesListStr = categoriesPool.join(", ");
 
             // 1. Dynamically query ModelService.ListModels for active models supported by user's API key
             let candidateModels = [
@@ -3133,11 +3306,11 @@ Keys required for each transaction:
 - "narration": full transaction description or merchant name (preserve full detail, UPI IDs, NEFT refs)
 - "amount": positive number
 - "type": "expense" (for debits/withdrawals) or "income" (for credits/deposits)
-- "category": category string (e.g. "Needs review", "Shopping", "Food & Dining", "Bills & Utilities", "Salary", "Transfer")
+- "category": MUST be picked strictly from this exact allowed sub-categories list: [${categoriesListStr}]. Pick the single most appropriate sub-category. If no keyword matches, use "Others - Needs Review 🔍".
 - "refId": string transaction reference/UPI/NEFT/cheque ID if present, else ""
 
 Output format example:
-[{"date":"2026-02-01","narration":"UPI-SRI SAI LEELA AMBULA","amount":1000.0,"type":"expense","category":"Needs review","refId":"0000639803414548"}]`;
+[{"date":"2026-02-01","narration":"UPI-SRI SAI LEELA AMBULA","amount":1000.0,"type":"expense","category":"Food & Drinks - Fastfood 🍔","refId":"0000639803414548"}]`;
 
                 const payload = {
                     contents: [{
@@ -3191,29 +3364,32 @@ Output format example:
 
             const bankProfile = detectBankProfile(file.name + " " + rawTextAccumulator);
 
-            return allExtractedTx.map(tx => ({
-                id: crypto.randomUUID(),
-                date: tx.date || new Date().toISOString().split('T')[0],
-                narration: tx.narration || "Bank Transaction",
-                merchant: tx.narration || "Bank Transaction",
-                amount: Math.abs(parseFloat(tx.amount) || 0),
-                type: tx.type === "income" ? "income" : "expense",
-                category: tx.category || "Needs review",
-                account: "",
-                tags: [],
-                notes: "",
-                refId: tx.refId || "",
-                source: "pdf-import",
-                receipt: false,
-                _bankProfile: bankProfile,
-                _aiParsed: true,
-                _rawColumns: {
-                    "Date": tx.date,
-                    "Description": tx.narration,
-                    "Amount": tx.amount,
-                    "Ref ID": tx.refId
-                }
-            }));
+            return allExtractedTx.map(tx => {
+                const rawItem = {
+                    id: crypto.randomUUID(),
+                    date: tx.date || new Date().toISOString().split('T')[0],
+                    narration: tx.narration || "Bank Transaction",
+                    merchant: tx.narration || "Bank Transaction",
+                    amount: Math.abs(parseFloat(tx.amount) || 0),
+                    type: tx.type === "income" ? "income" : "expense",
+                    category: tx.category || "Others - Needs Review 🔍",
+                    account: "",
+                    tags: [],
+                    notes: "",
+                    refId: tx.refId || "",
+                    source: "pdf-import",
+                    receipt: false,
+                    _bankProfile: bankProfile,
+                    _aiParsed: true,
+                    _rawColumns: {
+                        "Date": tx.date,
+                        "Description": tx.narration,
+                        "Amount": tx.amount,
+                        "Ref ID": tx.refId
+                    }
+                };
+                return processImportedTransaction(rawItem, rules, categoriesPool);
+            });
         };
 
         // Dedicated Bank Layout Profile Detector
@@ -3560,16 +3736,19 @@ Output format example:
             // Pass 4: Mathematical Balance Reconciliation & Audit Scoring
             const reconciliation = reconcileStatementBalances(transactions);
 
-            // Enrich transaction objects with Bank Profile & Audit Metadata
-            return transactions.map(tx => ({
-                ...tx,
-                _bankProfile: bankProfile,
-                _reconciliation: reconciliation,
-                _pdfMetadata: pdfMetadata,
-                _pdfFormFields: pdfFormFields,
-                _pdfPageInfos: pdfPageInfos,
-                _pdfLibPreprocessed: pdfLibPreprocessed
-            }));
+            // Enrich transaction objects with Bank Profile & Audit Metadata and auto-categorize into 30 categories
+            return transactions.map(tx => {
+                const processed = processImportedTransaction(tx, [], DEFAULT_CATEGORIES);
+                return {
+                    ...processed,
+                    _bankProfile: bankProfile,
+                    _reconciliation: reconciliation,
+                    _pdfMetadata: pdfMetadata,
+                    _pdfFormFields: pdfFormFields,
+                    _pdfPageInfos: pdfPageInfos,
+                    _pdfLibPreprocessed: pdfLibPreprocessed
+                };
+            });
         };
 
         // Advanced position-based table parser with visual baseline clustering and multi-line narration stitching
@@ -4439,6 +4618,9 @@ Output format example:
 
             const handleNavigatePage = (pageId) => {
                 setActivePage(pageId);
+                setShowAddEntryModal(false);
+                setShowImportModal(false);
+                setShowSyncModal(false);
                 window.scrollTo(0, 0);
             };
             const [transactions, setTransactions] = React.useState([]);
@@ -4624,6 +4806,7 @@ Output format example:
 
             // Insert new transaction manually / batch CSV imports
             const handleAddTransactions = async (newItems) => {
+                const availableCats = settings?.categories || DEFAULT_CATEGORIES;
                 const processed = newItems.map(t => {
                     const now = new Date().toISOString();
                     // narration is the primary description; merchant mirrors it for fingerprinting/rules
@@ -4634,9 +4817,9 @@ Output format example:
                         narration: narrationVal,
                         merchant: narrationVal,
                         refId: t.refId || "",
-                        category: t.category || "Needs review",
+                        category: t.category || "",
                         amount: Math.abs(Number(t.amount || 0)),
-                        type: t.type || "expense",
+                        type: t.type === "income" ? "income" : "expense",
                         account: t.account || "Main Checking",
                         tags: Array.isArray(t.tags) ? t.tags : (t.tags ? JSON.parse(t.tags) : []),
                         notes: t.notes || "",
@@ -4646,18 +4829,9 @@ Output format example:
                         documentId: t.documentId || null
                     };
 
-                    // Categorization Rule checking
-                    let matchedCategory = item.category;
-                    rules.forEach(rule => {
-                        if (rule.enabled === 1 && item.merchant.toLowerCase().includes(rule.whenText.toLowerCase())) {
-                            matchedCategory = rule.thenText; // Map rule trigger
-                        }
-                    });
-                    item.category = matchedCategory;
-
-                    // Compute unique fingerprint
-                    item.fingerprint = generateFingerprint(item);
-                    return item;
+                    const finalized = processImportedTransaction(item, rules, availableCats);
+                    finalized.fingerprint = generateFingerprint(finalized);
+                    return finalized;
                 });
 
                 try {
@@ -4726,21 +4900,17 @@ Output format example:
             // Called when user confirms the column mapping — builds final transactions and opens review
             const confirmPdfMapping = (mappedTransactions, filename, file) => {
                 try {
+                    const availableCats = settings?.categories || DEFAULT_CATEGORIES;
                     const finalTxs = (mappedTransactions || []).map(t => {
                         const merch = String(t?.merchant || t?.narration || "Bank Transaction");
-                        // Apply categorization rules; fall back to "Needs review"
-                        let matchedCategory = t?.category || "Needs review";
-                        (rules || []).forEach(rule => {
-                            if (rule && rule.enabled === 1 && rule.whenText && merch.toLowerCase().includes(String(rule.whenText).toLowerCase())) {
-                                matchedCategory = rule.thenText;
-                            }
-                        });
-                        return {
+                        const rawItem = {
                             ...t,
                             narration: merch,
                             merchant: merch,
-                            category: matchedCategory
+                            type: t?.type === "income" ? "income" : "expense",
+                            category: t?.category || ""
                         };
+                        return processImportedTransaction(rawItem, rules, availableCats);
                     });
                     setPdfImportData({
                         transactions: finalTxs,
@@ -5246,7 +5416,7 @@ Output format example:
                                             const fmt = (v) => formatCurrencyVal(v, settings.currency || "INR");
 
                                             const tiles = [
-                                                { id: 'networth', title: 'Net Worth', displayVal: netWorthReady ? fmt(netWorthVal) : 'Not set', icon: 'networth', color: 'var(--text-main)', iconClass: 'primary', onClick: () => setActivePage('networth'), cursor: 'pointer' },
+                                                { id: 'networth', title: 'Net Worth', displayVal: netWorthReady ? fmt(netWorthVal) : 'Not set', icon: 'networth', color: 'var(--text-main)', iconClass: 'primary', onClick: () => handleNavigatePage('networth'), cursor: 'pointer' },
                                                 { id: 'income', title: 'Income', displayVal: fmt(incomeSum), icon: 'arrowDown', color: 'var(--success)', iconClass: 'success' },
                                                 { id: 'expenses', title: 'Expenses', displayVal: fmt(spendingSum), icon: 'arrowUp', color: 'var(--warning)', iconClass: 'warning' },
                                                 { id: 'savings', title: 'Savings Rate', displayVal: `${savingsRate.toFixed(1)}%`, icon: 'goals', color: savingsRate >= 0 ? 'var(--info)' : 'var(--danger)', iconClass: 'info' }
@@ -5936,7 +6106,7 @@ Output format example:
                                     settings={settings}
                                     updateSetting={updateSetting}
                                     showToast={showToast}
-                                    setActivePage={setActivePage}
+                                    setActivePage={handleNavigatePage}
                                     subpageActionSignal={subpageActionSignal}
                                     activeSectionFilter={networthSectionFilter}
                                     setActiveSectionFilter={setNetworthSectionFilter}
@@ -7760,11 +7930,13 @@ Output format example:
             const [editingItem, setEditingItem] = React.useState(null);
             const [itemToDelete, setItemToDelete] = React.useState(null);
 
+            const prevSubpageActionSignal = React.useRef(subpageActionSignal);
             React.useEffect(() => {
-                if (subpageActionSignal > 0) {
+                if (subpageActionSignal > prevSubpageActionSignal.current) {
                     setEditingItem(null);
                     setShowModal(true);
                 }
+                prevSubpageActionSignal.current = subpageActionSignal;
             }, [subpageActionSignal]);
             const [mappedModalItem, setMappedModalItem] = React.useState(null);
 
@@ -8509,10 +8681,12 @@ Output format example:
             const budgetsList = settings.budgets || [];
             const [showCreateModal, setShowCreateModal] = React.useState(false);
 
+            const prevSubpageActionSignal = React.useRef(subpageActionSignal);
             React.useEffect(() => {
-                if (subpageActionSignal > 0) {
+                if (subpageActionSignal > prevSubpageActionSignal.current) {
                     setShowCreateModal(true);
                 }
+                prevSubpageActionSignal.current = subpageActionSignal;
             }, [subpageActionSignal]);
 
             // Filter transactions for this month to calculate budget progress
@@ -8668,10 +8842,12 @@ Output format example:
             const goalsList = settings.goals || [];
             const [showCreateModal, setShowCreateModal] = React.useState(false);
 
+            const prevSubpageActionSignal = React.useRef(subpageActionSignal);
             React.useEffect(() => {
-                if (subpageActionSignal > 0) {
+                if (subpageActionSignal > prevSubpageActionSignal.current) {
                     setShowCreateModal(true);
                 }
+                prevSubpageActionSignal.current = subpageActionSignal;
             }, [subpageActionSignal]);
 
             const formatCurrency = (val) => formatCurrencyVal(val, settings.currency || "INR");
@@ -8809,12 +8985,14 @@ Output format example:
             const activeSectionFilter = propActiveSectionFilter !== undefined ? propActiveSectionFilter : localActiveSectionFilter;
             const setActiveSectionFilter = propSetActiveSectionFilter || setLocalActiveSectionFilter;
 
+            const prevSubpageActionSignal = React.useRef(subpageActionSignal);
             React.useEffect(() => {
-                if (subpageActionSignal > 0) {
+                if (subpageActionSignal > prevSubpageActionSignal.current) {
                     setEditingItem(null);
                     setDefaultModalCategory(null);
                     setShowModal(true);
                 }
+                prevSubpageActionSignal.current = subpageActionSignal;
             }, [subpageActionSignal]);
 
             const formatCurrency = (val) => formatCurrencyVal(val, settings.currency || "INR");
@@ -9756,10 +9934,12 @@ Output format example:
         const RulesPage = ({ rules, tags, settings, onSaveRule, onDeleteRule, subpageActionSignal }) => {
             const [showCreateModal, setShowCreateModal] = React.useState(false);
 
+            const prevSubpageActionSignal = React.useRef(subpageActionSignal);
             React.useEffect(() => {
-                if (subpageActionSignal > 0) {
+                if (subpageActionSignal > prevSubpageActionSignal.current) {
                     setShowCreateModal(true);
                 }
+                prevSubpageActionSignal.current = subpageActionSignal;
             }, [subpageActionSignal]);
             const categories = settings.categories || [];
 
@@ -11688,8 +11868,8 @@ Output format example:
                                                             value={item.category}
                                                             onChange={(e) => handleFieldChange(item.tempId, "category", e.target.value)}
                                                         >
-                                                            <option value="Needs review">⚠️ Needs review</option>
-                                                            {renderCategoryOptions(rawCategories)}
+                                                            <option value="Others - Needs Review 🔍">🔍 Others - Needs Review</option>
+                                                            {renderCategoryOptions(rawCategories, item.type)}
                                                         </select>
                                                     </td>
                                                     <td>
@@ -11714,12 +11894,17 @@ Output format example:
                                                         />
                                                     </td>
                                                     <td>
-                                                        <select className="form-control" style={cellInput}
+                                                        <select className="form-control" style={{
+                                                            ...cellInput,
+                                                            fontWeight: 600,
+                                                            color: item.type === "income" ? "var(--success)" : "var(--danger)",
+                                                            background: item.type === "income" ? "rgba(16, 185, 129, 0.08)" : "rgba(239, 68, 68, 0.08)"
+                                                        }}
                                                             value={item.type}
                                                             onChange={(e) => handleFieldChange(item.tempId, "type", e.target.value)}
                                                         >
-                                                            <option value="expense">Expense</option>
-                                                            <option value="income">Income</option>
+                                                            <option value="expense">🔴 Expense</option>
+                                                            <option value="income">🟢 Income</option>
                                                         </select>
                                                     </td>
                                                     <td>
