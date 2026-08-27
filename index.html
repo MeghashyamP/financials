@@ -754,6 +754,15 @@
             min-width: 220px;
         }
 
+        /* Inline search term highlight (Ctrl+F style) */
+        mark.tx-hl {
+            background: rgba(250, 204, 21, 0.5);
+            color: inherit;
+            border-radius: 2px;
+            padding: 0 1px;
+            font-weight: inherit;
+        }
+
         /* Badge/Pill Elements */
         .badge {
             display: inline-flex;
@@ -869,7 +878,9 @@
             width: 100%;
             max-width: 500px;
             max-height: 90vh;
-            overflow-y: auto;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
             position: relative;
             animation: slideUp 0.25s cubic-bezier(0.4, 0, 0.2, 1);
         }
@@ -884,6 +895,7 @@
             justify-content: space-between;
             padding: 20px 24px;
             border-bottom: 1px solid var(--border-color);
+            flex-shrink: 0;
         }
 
         .modal-title {
@@ -912,6 +924,8 @@
 
         .modal-body {
             padding: 24px;
+            overflow-y: auto;
+            flex: 1;
         }
 
         .modal-footer {
@@ -924,6 +938,7 @@
             background-color: #F9FAFB;
             border-bottom-left-radius: var(--radius-card);
             border-bottom-right-radius: var(--radius-card);
+            flex-shrink: 0;
         }
 
         /* Form Layouts */
@@ -3087,6 +3102,44 @@
             }
         };
 
+        // Reusable date field: shows date in settings.dateFormat, opens native date picker on click/focus
+        const DatePickerField = ({ value, onChange, dateFormat, className = "form-control", style = {}, label, required }) => {
+            const displayText = value ? formatDate(value, dateFormat) : "";
+            const containerRef = React.useRef(null);
+            const handleClick = () => {
+                const inputEl = containerRef.current && containerRef.current.querySelector('input[type="date"]');
+                if (inputEl) {
+                    try { if (inputEl.showPicker) inputEl.showPicker(); else inputEl.focus(); } catch (err) { }
+                }
+            };
+            return (
+                <div ref={containerRef} style={{ position: 'relative', display: 'flex', alignItems: 'center', width: '100%' }} onClick={handleClick}>
+                    <div
+                        className={className}
+                        style={{
+                            display: 'flex', alignItems: 'center', cursor: 'pointer',
+                            userSelect: 'none', minHeight: '36px', flex: 1, width: '100%', ...style
+                        }}
+                    >
+                        <span style={{ fontWeight: 500, color: displayText ? 'inherit' : 'var(--text-muted)' }}>
+                            {displayText || (label || "Select date")}
+                        </span>
+                    </div>
+                    <input
+                        type="date"
+                        value={value || ""}
+                        onChange={(e) => onChange(e.target.value)}
+                        required={required}
+                        aria-label={label || "Date"}
+                        style={{
+                            position: 'absolute', inset: 0, width: '100%', height: '100%',
+                            opacity: 0, cursor: 'pointer', zIndex: 1
+                        }}
+                    />
+                </div>
+            );
+        };
+
         // Generates the transaction duplicate detection fingerprint
         const generateFingerprint = (t) => {
             const dateStr = String(t.date || "").trim();
@@ -3332,7 +3385,7 @@
             return pageFiles;
         };
 
-        // Gemini Free Vision/PDF Bank Statement Parser API Client (Page-by-Page Multi-Chunk Extractor for 100% Accuracy)
+        // Gemini Free Vision/PDF Bank Statement Parser API Client (Page-by-Page Multi-Chunk Extractor)
         const parseBankStatementWithGeminiAI = async (file, apiKey, onProgress, availableCategories = DEFAULT_CATEGORIES, rules = []) => {
             const key = (apiKey || localStorage.getItem("gemini_api_key") || "").trim();
             if (!key) {
@@ -5263,6 +5316,14 @@ Output format example:
                 const linkedCount = selectedTransactions.filter(t => t.linkTo).length;
                 showToast(`Import summary: ${res.inserted} transactions added, ${res.duplicates} duplicates skipped.${linkedCount ? ` ${linkedCount} linked to your ledger.` : ""}`);
 
+                // Auto-register any new account names used in this import into Settings > Accounts
+                const existingAccounts = settings?.accounts || [];
+                const newAccounts = [...new Set(itemsToInsert.map(t => t.account).filter(Boolean))]
+                    .filter(a => !existingAccounts.some(e => e.toLowerCase() === a.toLowerCase()));
+                if (newAccounts.length > 0) {
+                    await updateSetting("accounts", [...existingAccounts, ...newAccounts]);
+                }
+
                 // Save PDF document in Vault
                 await saveDocumentInDB({
                     id: docId,
@@ -5367,6 +5428,14 @@ Output format example:
 
                 const res = await handleAddTransactions(itemsToInsert);
                 showToast(`Import summary: ${res.inserted} transactions added, ${res.duplicates} duplicates skipped.`);
+
+                // Auto-register any new account names used in this import into Settings > Accounts
+                const existingAccounts = settings?.accounts || [];
+                const newAccounts = [...new Set(itemsToInsert.map(t => t.account).filter(Boolean))]
+                    .filter(a => !existingAccounts.some(e => e.toLowerCase() === a.toLowerCase()));
+                if (newAccounts.length > 0) {
+                    await updateSetting("accounts", [...existingAccounts, ...newAccounts]);
+                }
 
                 // Add CSV document metadata in vault list (Section 8.2)
                 await saveDocumentInDB({
@@ -6088,21 +6157,35 @@ Output format example:
 
                                         {/* Date range picker */}
                                         <div style={{ display: 'flex', alignItems: 'center', gap: '5px', background: 'var(--card-bg)', padding: '3px 8px', height: '34px', borderRadius: '8px', border: '1px solid var(--border-color)', boxSizing: 'border-box', flexShrink: 0 }}>
-                                            <label style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', cursor: 'pointer', margin: 0 }}>
-                                                <div className="form-control" style={{ display: 'flex', alignItems: 'center', fontSize: '0.79rem', padding: '2px 7px', height: '26px', cursor: 'pointer', background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: '6px', whiteSpace: 'nowrap', minWidth: '88px' }}>
+                                            {/* Start Date */}
+                                            <div
+                                                style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', cursor: 'pointer' }}
+                                                onClick={(e) => {
+                                                    const inputEl = e.currentTarget.querySelector('input[type="date"]');
+                                                    if (inputEl) { try { if (inputEl.showPicker) inputEl.showPicker(); else inputEl.focus(); } catch (err) { } }
+                                                }}
+                                            >
+                                                <div className="form-control" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.79rem', padding: '2px 7px', height: '26px', cursor: 'pointer', background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: '6px', whiteSpace: 'nowrap', minWidth: '88px' }}>
                                                     <span style={{ fontWeight: 500 }}>{formatDate(displayStartDate, settings.dateFormat)}</span>
                                                 </div>
                                                 <input type="date" value={displayStartDate} onChange={(e) => handleStartDateChange(e.target.value)} style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', opacity: 0, cursor: 'pointer' }} title="Start Date" />
-                                            </label>
+                                            </div>
                                             <select className="form-control" style={{ width: 'auto', minWidth: '110px', fontSize: '0.79rem', padding: '2px 5px', height: '26px', cursor: 'pointer', fontWeight: 500 }} value={normPeriodKey} onChange={(e) => handleUnifiedPeriodChange(e.target.value)}>
                                                 <PeriodSelectOptions />
                                             </select>
-                                            <label style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', cursor: 'pointer', margin: 0 }}>
-                                                <div className="form-control" style={{ display: 'flex', alignItems: 'center', fontSize: '0.79rem', padding: '2px 7px', height: '26px', cursor: 'pointer', background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: '6px', whiteSpace: 'nowrap', minWidth: '88px' }}>
+                                            {/* End Date */}
+                                            <div
+                                                style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', cursor: 'pointer' }}
+                                                onClick={(e) => {
+                                                    const inputEl = e.currentTarget.querySelector('input[type="date"]');
+                                                    if (inputEl) { try { if (inputEl.showPicker) inputEl.showPicker(); else inputEl.focus(); } catch (err) { } }
+                                                }}
+                                            >
+                                                <div className="form-control" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.79rem', padding: '2px 7px', height: '26px', cursor: 'pointer', background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: '6px', whiteSpace: 'nowrap', minWidth: '88px' }}>
                                                     <span style={{ fontWeight: 500 }}>{formatDate(displayEndDate, settings.dateFormat)}</span>
                                                 </div>
                                                 <input type="date" value={displayEndDate} onChange={(e) => handleEndDateChange(e.target.value)} style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', opacity: 0, cursor: 'pointer' }} title="End Date" />
-                                            </label>
+                                            </div>
                                         </div>
 
                                         {/* Import */}
@@ -7869,7 +7952,6 @@ Output format example:
             // 2. Global multi-word search ranking logic
             const matchesWord = (t, word) => {
                 if (!word) return true;
-                const formattedD = formatDate(t.date, settings.dateFormat).toLowerCase();
                 return (
                     (t.merchant && t.merchant.toLowerCase().includes(word)) ||
                     (t.narration && t.narration.toLowerCase().includes(word)) ||
@@ -7877,64 +7959,82 @@ Output format example:
                     (t.account && t.account.toLowerCase().includes(word)) ||
                     (t.notes && t.notes.toLowerCase().includes(word)) ||
                     (t.tags && t.tags.some(tag => tag.toLowerCase().includes(word))) ||
-                    (t.date && t.date.includes(word)) ||
-                    formattedD.includes(word) ||
                     String(t.amount || "").includes(word)
+                );
+            };
+
+            // Helper: wrap matching words with <mark> for inline highlighting
+            const highlightText = (text, words) => {
+                if (!text || !words || words.length === 0) return text;
+                const str = String(text);
+                const escaped = words.map(w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+                const pattern = new RegExp(`(${escaped.join('|')})`, 'gi');
+                const parts = str.split(pattern);
+                if (parts.length === 1) return str;
+                return parts.map((part, i) =>
+                    i % 2 === 1
+                        ? React.createElement('mark', { key: i, className: 'tx-hl' }, part)
+                        : part
                 );
             };
 
             let ranked = [];
             const q = search.toLowerCase().trim();
+            // Hoist search words so they're available in render for highlighting
+            const searchWords = q ? q.split(/\s+/).filter(Boolean) : [];
+
+            // scored: { t, score } pairs used for relevance-first sorting
+            let scoredRanked = [];
 
             if (!q) {
-                ranked = filteredBase;
+                scoredRanked = filteredBase.map(t => ({ t, score: 0 }));
             } else {
-                const words = q.split(/\s+/).filter(Boolean);
+                const words = searchWords;
                 if (words.length <= 1) {
-                    ranked = filteredBase.filter(t => matchesWord(t, words[0]));
+                    scoredRanked = filteredBase
+                        .filter(t => matchesWord(t, words[0]))
+                        .map(t => ({ t, score: 1 }));
                 } else {
-                    // Multi-word intersection first
-                    const intersection = filteredBase.filter(t => words.every(w => matchesWord(t, w)));
-                    const addedIds = new Set(intersection.map(t => t.id));
-                    ranked = [...intersection];
-
-                    // Then results for each individual word in order entered
-                    words.forEach(word => {
-                        filteredBase.forEach(t => {
-                            if (!addedIds.has(t.id) && matchesWord(t, word)) {
-                                addedIds.add(t.id);
-                                ranked.push(t);
-                            }
-                        });
-                    });
+                    // Score each transaction by how many words it matches
+                    scoredRanked = filteredBase
+                        .map(t => ({ t, score: words.filter(w => matchesWord(t, w)).length }))
+                        .filter(({ score }) => score > 0);
                 }
             }
+            ranked = scoredRanked.map(({ t }) => t);
 
-            // 3. Column sorting
-            const sorted = !sortField ? ranked : [...ranked].sort((a, b) => {
-                let valA = a[sortField];
-                let valB = b[sortField];
+            // 3. Column sorting — when multi-word search is active, score is primary; column is tiebreaker
+            const isMultiWordSearch = searchWords.length > 1;
+            const sorted = [...scoredRanked].sort((a, b) => {
+                // Primary: search score descending (only when multi-word search active)
+                if (isMultiWordSearch && a.score !== b.score) {
+                    return b.score - a.score;
+                }
+
+                // Secondary (or sole): column sort
+                if (!sortField) return 0;
+                let valA = a.t[sortField];
+                let valB = b.t[sortField];
                 if (sortField === "date") {
-                    valA = new Date(a.date).getTime();
-                    valB = new Date(b.date).getTime();
+                    valA = new Date(a.t.date).getTime();
+                    valB = new Date(b.t.date).getTime();
                 } else if (sortField === "amount") {
-                    valA = Number(a.amount || 0);
-                    valB = Number(b.amount || 0);
+                    valA = Number(a.t.amount || 0);
+                    valB = Number(b.t.amount || 0);
                 } else if (sortField === "narration") {
-                    valA = (a.narration || a.merchant || "").toLowerCase();
-                    valB = (b.narration || b.merchant || "").toLowerCase();
+                    valA = (a.t.narration || a.t.merchant || "").toLowerCase();
+                    valB = (b.t.narration || b.t.merchant || "").toLowerCase();
                 } else if (sortField === "tags") {
-                    valA = (a.tags ? a.tags.join(",") : "").toLowerCase();
-                    valB = (b.tags ? b.tags.join(",") : "").toLowerCase();
+                    valA = (a.t.tags ? a.t.tags.join(",") : "").toLowerCase();
+                    valB = (b.t.tags ? b.t.tags.join(",") : "").toLowerCase();
                 } else if (typeof valA === "string" || typeof valB === "string") {
                     valA = (valA || "").toLowerCase();
                     valB = (valB || "").toLowerCase();
                 }
-
                 if (valA < valB) return sortDirection === "asc" ? -1 : 1;
                 if (valA > valB) return sortDirection === "asc" ? 1 : -1;
                 return 0;
-            });
+            }).map(({ t }) => t);
 
             const handleRemoveTag = (tx, tagToRemove) => {
                 const updatedTags = (tx.tags || []).filter(t => t !== tagToRemove);
@@ -7958,8 +8058,8 @@ Output format example:
                             <p>Try refining your search terms or date filter options.</p>
                         </div>
                     ) : (
-                        <div className="table-responsive">
-                            <div style={{ maxHeight: 'calc(100vh - 260px)', overflowY: 'auto', overflowX: 'auto', paddingRight: '6px', scrollbarGutter: 'stable' }}>
+                        <div className="table-responsive" style={{ height: 'calc(100vh - 170px)', display: 'flex', flexDirection: 'column' }}>
+                            <div style={{ flex: 1, height: '100%', overflowY: 'auto', overflowX: 'auto', paddingRight: '6px', scrollbarGutter: 'stable' }}>
                                 <table className="table" style={{ width: '100%', tableLayout: 'fixed', borderCollapse: 'collapse' }}>
                                     <colgroup>
                                         <col style={{ width: '120px' }} />
@@ -7984,7 +8084,7 @@ Output format example:
                                                     <td style={{ fontSize: '0.82rem', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{formatDate(t.date, settings.dateFormat)}</td>
                                                     <td>
                                                         <div style={{ fontWeight: 500, fontSize: '0.88rem' }}>
-                                                            {t.narration || t.merchant}
+                                                            {highlightText(t.narration || t.merchant, searchWords)}
                                                             {t.receipt === 1 && (
                                                                 <span title="Receipt attached" style={{ marginLeft: '6px', color: 'var(--primary)', cursor: 'pointer' }}>📎</span>
                                                             )}
@@ -8002,14 +8102,14 @@ Output format example:
                                                             onClick={() => setCategoryPickerTx(t)}
                                                             title="Click to change category"
                                                         >
-                                                            <div style={{ fontWeight: 500, fontSize: '0.82rem' }}>{catParent}</div>
+                                                            <div style={{ fontWeight: 500, fontSize: '0.82rem' }}>{highlightText(catParent, searchWords)}</div>
                                                             {catSub && (
-                                                                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '2px' }}>{catSub}</div>
+                                                                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '2px' }}>{highlightText(catSub, searchWords)}</div>
                                                             )}
                                                         </div>
                                                     </td>
 
-                                                    <td style={{ fontSize: '0.82rem', textAlign: 'center' }}>{t.account}</td>
+                                                    <td style={{ fontSize: '0.82rem', textAlign: 'center' }}>{highlightText(t.account, searchWords)}</td>
 
                                                     <td>
                                                         <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'center', gap: '3px' }}>
@@ -8040,7 +8140,7 @@ Output format example:
                                                     </td>
 
                                                     <td style={{ fontSize: '0.78rem', color: 'var(--text-muted)', maxWidth: '110px', textAlign: 'center' }}>
-                                                        <span title={t.notes || ""}>{t.notes ? (t.notes.length > 35 ? t.notes.slice(0, 35) + "…" : t.notes) : "—"}</span>
+                                                        <span title={t.notes || ""}>{t.notes ? highlightText(t.notes.length > 35 ? t.notes.slice(0, 35) + "…" : t.notes, searchWords) : "—"}</span>
                                                     </td>
 
                                                     <td style={{ textAlign: 'center', paddingRight: '8px' }}>
@@ -10639,10 +10739,10 @@ Output format example:
                     <div className="section-card" style={{ borderLeft: '4px solid var(--primary)' }}>
                         <div className="section-card-title" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                             <span>⚡ Gemini AI Bank Statement Extractor (Free Tier)</span>
-                            <span style={{ fontSize: '0.75rem', background: '#D1FAE5', color: '#065F46', padding: '2px 8px', borderRadius: '10px', fontWeight: 700 }}>100% Accurate</span>
+                            <span style={{ fontSize: '0.75rem', background: '#D1FAE5', color: '#065F46', padding: '2px 8px', borderRadius: '10px', fontWeight: 700 }}>Higher Precision</span>
                         </div>
                         <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', marginBottom: '12px' }}>
-                            Passes bank statement PDFs directly to Google's Gemini Vision AI to extract 100% of transactions accurately across any bank format globally.
+                            Passes bank statement PDFs directly to Google's Gemini Vision AI to extract transactions with much higher precision across any bank format globally.
                         </p>
                         <div style={{ display: 'flex', gap: '10px', alignItems: 'center', maxWidth: '640px' }}>
                             <input
@@ -11568,20 +11668,21 @@ Output format example:
                 <div className="modal-overlay">
                     <div className="modal-container">
                         <div className="modal-header">
-                            <h3 className="modal-title">Edit Transaction</h3>
-                            <button className="modal-close-btn" onClick={onClose}>
-                                <Icon name="close" />
-                            </button>
-                        </div>
-                        <form onSubmit={handleSubmit}>
+                                <h3 className="modal-title" style={{ flex: 1, textAlign: 'center' }}>Edit Transaction</h3>
+                                <button className="modal-close-btn" onClick={onClose}>
+                                    <Icon name="close" />
+                                </button>
+                            </div>
+                            {/* Frozen sub-header: Expense / Income toggle */}
+                            <div style={{ padding: '12px 24px', borderBottom: '1px solid var(--border-color)', flexShrink: 0, background: 'var(--card-bg)' }}>
+                                <div className="segmented-control">
+                                    <button type="button" className={`segmented-btn ${type === "expense" ? "active expense" : ""}`} onClick={() => handleTypeChange("expense")}>Expense</button>
+                                    <button type="button" className={`segmented-btn ${type === "income" ? "active income" : ""}`} onClick={() => handleTypeChange("income")}>Income</button>
+                                </div>
+                            </div>
+                        <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
                             <div className="modal-body">
                                 <div className="form-grid">
-
-                                    {/* Type Selection */}
-                                    <div className="segmented-control">
-                                        <button type="button" className={`segmented-btn ${type === "expense" ? "active expense" : ""}`} onClick={() => handleTypeChange("expense")}>Expense</button>
-                                        <button type="button" className={`segmented-btn ${type === "income" ? "active income" : ""}`} onClick={() => handleTypeChange("income")}>Income</button>
-                                    </div>
 
                                     {/* Amount & Date */}
                                     <div className="form-row">
@@ -11591,7 +11692,13 @@ Output format example:
                                         </div>
                                         <div className="form-field">
                                             <label>Date</label>
-                                            <input type="date" className="form-control" value={date} onChange={(e) => setDate(e.target.value)} required />
+                                            <DatePickerField
+                                                value={date}
+                                                onChange={setDate}
+                                                dateFormat={settings.dateFormat}
+                                                label="Select date"
+                                                required
+                                            />
                                         </div>
                                     </div>
 
@@ -11601,29 +11708,11 @@ Output format example:
                                         <input type="text" className="form-control" placeholder="e.g. UPI THANNERU VENKATA NA..." value={narration} onChange={(e) => setNarration(e.target.value)} required />
                                     </div>
 
-                                    {/* Ref ID (shown in form, hidden in ledger) */}
-                                    <div className="form-field">
-                                        <label>Ref ID <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>(hidden in ledger)</span></label>
-                                        <input type="text" className="form-control" placeholder="e.g. TXN1234567" value={refId} onChange={(e) => setRefId(e.target.value)} />
-                                    </div>
-
-                                    {/* Category & Account */}
+                                    {/* Ref ID & Account — half/half */}
                                     <div className="form-row">
                                         <div className="form-field">
-                                            <label>Category</label>
-                                            <button type="button" className="category-select-trigger" onClick={() => setShowCategoryPicker(true)}>
-                                                <div className="category-trigger-content">
-                                                    {(() => {
-                                                        const parent = category.includes(" - ") ? category.split(" - ")[0] : "";
-                                                        const subAndEmoji = category.includes(" - ") ? category.split(" - ")[1] : category;
-                                                        const emojiMatch = subAndEmoji.match(/[\uD800-\uDBFF][\uDC00-\uDFFF]|\p{Emoji}/u);
-                                                        const emoji = emojiMatch ? emojiMatch[0] : "⚙️";
-                                                        const label = subAndEmoji.replace(emoji, "").trim();
-                                                        return (<><span className="category-trigger-emoji">{emoji}</span><span className="category-trigger-label">{parent ? `${parent} › ${label}` : label}</span></>);
-                                                    })()}
-                                                </div>
-                                                <span className="category-trigger-arrow">▼</span>
-                                            </button>
+                                            <label>Ref ID <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>(hidden in ledger)</span></label>
+                                            <input type="text" className="form-control" placeholder="e.g. TXN1234567" value={refId} onChange={(e) => setRefId(e.target.value)} />
                                         </div>
                                         <div className="form-field">
                                             <label>Account</label>
@@ -11631,6 +11720,24 @@ Output format example:
                                                 {settings.accounts?.map(a => <option key={a} value={a}>{a}</option>)}
                                             </select>
                                         </div>
+                                    </div>
+
+                                    {/* Category — full width */}
+                                    <div className="form-field">
+                                        <label>Category</label>
+                                        <button type="button" className="category-select-trigger" onClick={() => setShowCategoryPicker(true)}>
+                                            <div className="category-trigger-content">
+                                                {(() => {
+                                                    const parent = category.includes(" - ") ? category.split(" - ")[0] : "";
+                                                    const subAndEmoji = category.includes(" - ") ? category.split(" - ")[1] : category;
+                                                    const emojiMatch = subAndEmoji.match(/[\uD800-\uDBFF][\uDC00-\uDFFF]|\p{Emoji}/u);
+                                                    const emoji = emojiMatch ? emojiMatch[0] : "⚙️";
+                                                    const label = subAndEmoji.replace(emoji, "").trim();
+                                                    return (<><span className="category-trigger-emoji">{emoji}</span><span className="category-trigger-label">{parent ? `${parent} › ${label}` : label}</span></>);
+                                                })()}
+                                            </div>
+                                            <span className="category-trigger-arrow">▼</span>
+                                        </button>
                                     </div>
 
                                     {/* Tags Section with Clear Separation */}
@@ -11800,7 +11907,13 @@ Output format example:
             const [amount, setAmount] = React.useState("");
             const [narration, setNarration] = React.useState("");
             const [refId, setRefId] = React.useState("");
-            const [date, setDate] = React.useState(new Date().toISOString().split('T')[0]);
+            const [date, setDate] = React.useState(() => {
+                const now = new Date();
+                const y = now.getFullYear();
+                const m = String(now.getMonth() + 1).padStart(2, '0');
+                const d = String(now.getDate()).padStart(2, '0');
+                return `${y}-${m}-${d}`;
+            });
             const [category, setCategory] = React.useState(() => {
                 const valid = filterCategoriesByType(settings.categories || DEFAULT_CATEGORIES, "expense");
                 return valid[0] || "Food & Drinks - Breakfast 🍳";
@@ -11867,32 +11980,33 @@ Output format example:
                 <div className="modal-overlay">
                     <div className="modal-container">
                         <div className="modal-header">
-                            <h3 className="modal-title">Create Ledger Transaction</h3>
-                            <button className="modal-close-btn" onClick={onClose}>
-                                <Icon name="close" />
-                            </button>
-                        </div>
-                        <form onSubmit={handleSubmit}>
+                                <h3 className="modal-title" style={{ flex: 1, textAlign: 'center' }}>Create Transaction</h3>
+                                <button className="modal-close-btn" onClick={onClose}>
+                                    <Icon name="close" />
+                                </button>
+                            </div>
+                            {/* Frozen sub-header: Expense / Income toggle */}
+                            <div style={{ padding: '12px 24px', borderBottom: '1px solid var(--border-color)', flexShrink: 0, background: 'var(--card-bg)' }}>
+                                <div className="segmented-control">
+                                    <button
+                                        type="button"
+                                        className={`segmented-btn ${type === "expense" ? "active expense" : ""}`}
+                                        onClick={() => handleTypeChange("expense")}
+                                    >
+                                        Expense
+                                    </button>
+                                    <button
+                                        type="button"
+                                        className={`segmented-btn ${type === "income" ? "active income" : ""}`}
+                                        onClick={() => handleTypeChange("income")}
+                                    >
+                                        Income
+                                    </button>
+                                </div>
+                            </div>
+                        <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
                             <div className="modal-body">
                                 <div className="form-grid">
-
-                                    {/* Type Selection */}
-                                    <div className="segmented-control">
-                                        <button
-                                            type="button"
-                                            className={`segmented-btn ${type === "expense" ? "active expense" : ""}`}
-                                            onClick={() => handleTypeChange("expense")}
-                                        >
-                                            Expense
-                                        </button>
-                                        <button
-                                            type="button"
-                                            className={`segmented-btn ${type === "income" ? "active income" : ""}`}
-                                            onClick={() => handleTypeChange("income")}
-                                        >
-                                            Income
-                                        </button>
-                                    </div>
 
                                     {/* Amount & Date */}
                                     <div className="form-row">
@@ -11910,11 +12024,11 @@ Output format example:
                                         </div>
                                         <div className="form-field">
                                             <label>Date</label>
-                                            <input
-                                                type="date"
-                                                className="form-control"
+                                            <DatePickerField
                                                 value={date}
-                                                onChange={(e) => setDate(e.target.value)}
+                                                onChange={setDate}
+                                                dateFormat={settings.dateFormat}
+                                                label="Select date"
                                                 required
                                             />
                                         </div>
@@ -11933,46 +12047,17 @@ Output format example:
                                         />
                                     </div>
 
-                                    {/* Ref ID */}
-                                    <div className="form-field">
-                                        <label>Ref ID <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>(hidden in ledger)</span></label>
-                                        <input
-                                            type="text"
-                                            className="form-control"
-                                            placeholder="e.g. TXN1234567"
-                                            value={refId}
-                                            onChange={(e) => setRefId(e.target.value)}
-                                        />
-                                    </div>
-
-                                    {/* Category & Account selection */}
+                                    {/* Ref ID & Account — half/half */}
                                     <div className="form-row">
                                         <div className="form-field">
-                                            <label>Category</label>
-                                            <button
-                                                type="button"
-                                                className="category-select-trigger"
-                                                onClick={() => setShowCategoryPicker(true)}
-                                            >
-                                                <div className="category-trigger-content">
-                                                    {(() => {
-                                                        const parent = category.includes(" - ") ? category.split(" - ")[0] : "";
-                                                        const subAndEmoji = category.includes(" - ") ? category.split(" - ")[1] : category;
-                                                        const emojiMatch = subAndEmoji.match(/[\uD800-\uDBFF][\uDC00-\uDFFF]|\p{Emoji}/u);
-                                                        const emoji = emojiMatch ? emojiMatch[0] : "⚙️";
-                                                        const label = subAndEmoji.replace(emoji, "").trim();
-                                                        return (
-                                                            <>
-                                                                <span className="category-trigger-emoji">{emoji}</span>
-                                                                <span className="category-trigger-label">
-                                                                    {parent ? `${parent} › ${label}` : label}
-                                                                </span>
-                                                            </>
-                                                        );
-                                                    })()}
-                                                </div>
-                                                <span className="category-trigger-arrow">▼</span>
-                                            </button>
+                                            <label>Ref ID <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>(hidden in ledger)</span></label>
+                                            <input
+                                                type="text"
+                                                className="form-control"
+                                                placeholder="e.g. TXN1234567"
+                                                value={refId}
+                                                onChange={(e) => setRefId(e.target.value)}
+                                            />
                                         </div>
                                         <div className="form-field">
                                             <label>Account</label>
@@ -11980,6 +12065,35 @@ Output format example:
                                                 {settings.accounts?.map(a => <option key={a} value={a}>{a}</option>)}
                                             </select>
                                         </div>
+                                    </div>
+
+                                    {/* Category — full width */}
+                                    <div className="form-field">
+                                        <label>Category</label>
+                                        <button
+                                            type="button"
+                                            className="category-select-trigger"
+                                            onClick={() => setShowCategoryPicker(true)}
+                                        >
+                                            <div className="category-trigger-content">
+                                                {(() => {
+                                                    const parent = category.includes(" - ") ? category.split(" - ")[0] : "";
+                                                    const subAndEmoji = category.includes(" - ") ? category.split(" - ")[1] : category;
+                                                    const emojiMatch = subAndEmoji.match(/[\uD800-\uDBFF][\uDC00-\uDFFF]|\p{Emoji}/u);
+                                                    const emoji = emojiMatch ? emojiMatch[0] : "⚙️";
+                                                    const label = subAndEmoji.replace(emoji, "").trim();
+                                                    return (
+                                                        <>
+                                                            <span className="category-trigger-emoji">{emoji}</span>
+                                                            <span className="category-trigger-label">
+                                                                {parent ? `${parent} › ${label}` : label}
+                                                            </span>
+                                                        </>
+                                                    );
+                                                })()}
+                                            </div>
+                                            <span className="category-trigger-arrow">▼</span>
+                                        </button>
                                     </div>
 
                                     {/* Tags Setup with Clear Separation */}
@@ -12291,7 +12405,7 @@ Output format example:
                                                 onClick={() => setPdfEngine("ai")}
                                                 style={{ fontSize: '0.75rem', padding: '3px 9px' }}
                                             >
-                                                ⚡ Gemini AI (100% Accurate)
+                                                ⚡ Gemini AI (Higher Precision)
                                             </button>
                                             <button
                                                 type="button"
