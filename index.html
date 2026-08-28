@@ -876,6 +876,10 @@
             animation: fadeIn 0.2s ease-out;
         }
 
+        .confirm-modal-overlay {
+            z-index: 2000 !important;
+        }
+
         .modal-container {
             background-color: var(--card-bg);
             border-radius: var(--radius-card);
@@ -971,10 +975,10 @@
             font-size: 0.85rem;
         }
 
-        /* Segmented control buttons for Expense / Income */
+        /* Segmented Control Component */
         .segmented-control {
             display: grid;
-            grid-template-columns: 1fr 1fr;
+            grid-template-columns: 1fr 1fr 1fr;
             background-color: var(--bg-color);
             border: 1px solid var(--border-color);
             border-radius: 8px;
@@ -993,13 +997,20 @@
             color: var(--text-muted);
         }
 
-        .segmented-btn.active.expense {
-            background-color: var(--warning);
+        .segmented-btn.active.expense,
+        .segmented-btn.active.outflow {
+            background-color: var(--danger);
             color: #FFFFFF;
         }
 
-        .segmented-btn.active.income {
+        .segmented-btn.active.income,
+        .segmented-btn.active.inflow {
             background-color: var(--success);
+            color: #FFFFFF;
+        }
+
+        .segmented-btn.active.neutral {
+            background-color: var(--info);
             color: #FFFFFF;
         }
 
@@ -1159,13 +1170,15 @@
             position: fixed;
             bottom: 24px;
             right: 24px;
-            z-index: 1100;
+            z-index: 9999 !important;
             display: flex;
             flex-direction: column;
             gap: 10px;
+            pointer-events: none;
         }
 
         .toast {
+            pointer-events: auto;
             background-color: #1F2937;
             color: #FFFFFF;
             padding: 12px 20px;
@@ -2007,6 +2020,7 @@
             "Donation - NGO 🌐",
             "Donation - Help 🤝",
             "Donation - Cause 🎗️",
+            "Donation - Tip 🪙",
             "Donation - Others ⚙️",
 
             // 27. Business
@@ -2030,7 +2044,6 @@
             "Legal - Others ⚙️",
 
             // 29. Misc
-            "Misc - Tip 🪙",
             "Misc - Adjust ⏱️",
             "Misc - Roundoff 🪙",
             "Misc - Others ⚙️",
@@ -2237,10 +2250,10 @@
             "Insurance": "Health, life, vehicle, home insurance",
             "Tax": "Income tax, GST, property tax",
             "Hidden Charges": "Bank fines, late fees, interest, challans",
-            "Donation": "Charity, NGO, tithes, help",
+            "Donation": "Charity, NGO, tithes, help, tips",
             "Business": "Payroll, inventory, marketing, office expenses",
             "Legal": "Lawyer, court, legal documentation, disputes",
-            "Misc": "Tips, adjustments, roundoffs",
+            "Misc": "Adjustments, roundoffs",
             "Others": "Uncategorized items & items needing review"
         };
 
@@ -2297,15 +2310,19 @@
                 const parent = c.includes(" - ") ? c.split(" - ")[0] : "Others";
                 const customType = (categoryTypes || {})[c] || (categoryTypes || {})[parent];
                 if (customType) {
-                    if (typeFilter === "income") return customType === "income" || customType === "neutral";
-                    if (typeFilter === "expense") return customType === "expense" || customType === "neutral";
+                    if (typeFilter === "income") return customType === "income";
+                    if (typeFilter === "expense") return customType === "expense";
+                    if (typeFilter === "neutral") return customType === "neutral";
                     return true;
                 }
                 if (typeFilter === "income") {
-                    return incomeParents.includes(parent) || neutralParents.includes(parent);
+                    return incomeParents.includes(parent);
                 }
                 if (typeFilter === "expense") {
-                    return !incomeParents.includes(parent);
+                    return !incomeParents.includes(parent) && !neutralParents.includes(parent);
+                }
+                if (typeFilter === "neutral") {
+                    return neutralParents.includes(parent);
                 }
                 return true;
             });
@@ -2350,17 +2367,30 @@
             ));
         };
 
-        // --- Hook to close popups/modals on Escape key press ---
+        // --- Hook to close popups/modals on Escape key press (LIFO Stack to close only top-most modal) ---
+        const escapeStack = [];
         const useEscapeKey = (onClose) => {
             React.useEffect(() => {
                 if (!onClose) return;
+
                 const handleKeyDown = (e) => {
                     if (e.key === "Escape" || e.key === "Esc") {
-                        onClose();
+                        if (escapeStack.length > 0 && escapeStack[escapeStack.length - 1] === onClose) {
+                            onClose();
+                        }
                     }
                 };
+
+                escapeStack.push(onClose);
                 window.addEventListener("keydown", handleKeyDown);
-                return () => window.removeEventListener("keydown", handleKeyDown);
+
+                return () => {
+                    const idx = escapeStack.lastIndexOf(onClose);
+                    if (idx !== -1) {
+                        escapeStack.splice(idx, 1);
+                    }
+                    window.removeEventListener("keydown", handleKeyDown);
+                };
             }, [onClose]);
         };
 
@@ -2659,6 +2689,14 @@
             return tx.objectStore(storeName);
         };
 
+        // Default Tags
+        const DEFAULT_TAGS = [
+            { name: "Tag1", color: "#FF0000", createdAt: new Date().toISOString() },
+            { name: "Tag2", color: "#00FF00", createdAt: new Date().toISOString() },
+            { name: "Tag3", color: "#0000FF", createdAt: new Date().toISOString() },
+            { name: "Tag4", color: "#FFFF00", createdAt: new Date().toISOString() }
+        ];
+
         // Read unified state from IndexedDB
         const fetchStateFromDB = async () => {
             const db = await initDB();
@@ -2674,10 +2712,18 @@
             };
 
             const transactions = await readStore("transactions");
-            const tags = await readStore("tags");
+            let tags = await readStore("tags");
             const rules = await readStore("rules");
             const settingsRows = await readStore("settings");
             const documents = await readStore("documents");
+
+            // Seed default tags if empty
+            if (!tags || tags.length === 0) {
+                tags = DEFAULT_TAGS;
+                for (const tag of DEFAULT_TAGS) {
+                    await saveTagInDB(tag);
+                }
+            }
 
             // Convert settings array of {key, value} to a hash map
             const settings = {};
@@ -2694,7 +2740,7 @@
                 currency: "INR",
                 dateFormat: "24/Jun/2002 Sun",
                 categories: DEFAULT_CATEGORIES,
-                accounts: ["Main Checking", "Everyday Visa", "Rewards Card", "Cash"],
+                accounts: ["Bank 1", "Bank 2", "Credit Card 1"],
                 selectedPeriod: "this_month",
                 netWorthConfigured: false,
                 assetsTotal: 0,
@@ -2716,6 +2762,12 @@
                     settings[key] = defaultSettings[key];
                 }
             });
+
+            // Ensure accounts default
+            if (!settings.accounts || settings.accounts.length === 0 || JSON.stringify(settings.accounts) === JSON.stringify(["Main Checking", "Everyday Visa", "Rewards Card", "Cash"])) {
+                settings.accounts = ["Bank 1", "Bank 2", "Credit Card 1"];
+                saveSettingInDB("accounts", ["Bank 1", "Bank 2", "Credit Card 1"]);
+            }
 
             // If selectedPeriod is the old default "all-time", update to "this_month"
             if (settings.selectedPeriod === "all-time") {
@@ -3031,7 +3083,7 @@
                     const emptySettings = [
                         { key: "currency", value: JSON.stringify("INR") },
                         { key: "categories", value: JSON.stringify(DEFAULT_CATEGORIES) },
-                        { key: "accounts", value: JSON.stringify(["Main Checking", "Everyday Visa", "Rewards Card", "Cash"]) },
+                        { key: "accounts", value: JSON.stringify(["Bank 1", "Bank 2", "Credit Card 1"]) },
                         { key: "selectedPeriod", value: JSON.stringify("this_month") },
                         { key: "netWorthConfigured", value: JSON.stringify(false) },
                         { key: "assetsTotal", value: JSON.stringify(0) },
@@ -3050,6 +3102,11 @@
                     emptySettings.forEach(s => {
                         store.put({ key: s.key, value: s.value, updatedAt: now });
                     });
+
+                    // Seed default tags
+                    const tagTx = db.transaction("tags", "readwrite");
+                    const tagStore = tagTx.objectStore("tags");
+                    DEFAULT_TAGS.forEach(t => tagStore.put(t));
 
                     setTx.oncomplete = () => resolve();
                     setTx.onerror = () => reject(setTx.error);
@@ -4317,10 +4374,13 @@ Output format example:
 
 
         // --- Recurring & Subscription Detection Algorithm (Section 9) ---
-        const detectRecurringTransactions = (transactions, rules, dismissedPatterns = []) => {
+        const detectRecurringTransactions = (transactions, rules, dismissedPatterns = [], existingRecurring = []) => {
             // Group expenses only
             const expenses = transactions.filter(t => t.type === "expense");
             const groups = {};
+
+            // Existing confirmed recurring merchant names
+            const existingNormNames = existingRecurring.map(r => normalizeMerchantName(r.name || "")).filter(Boolean);
 
             // 1. Merchant Normalization & Candidate Grouping
             expenses.forEach(t => {
@@ -4341,6 +4401,9 @@ Output format example:
 
                 // Skip if dismissed/ignored
                 if (dismissedPatterns.includes(merchantName)) return;
+
+                // Skip if already in confirmed recurring items
+                if (existingNormNames.some(existing => existing === merchantName || merchantName.includes(existing) || existing.includes(merchantName))) return;
 
                 // Calculate consecutive intervals (in days)
                 const dates = txList.map(t => new Date(t.date));
@@ -5498,7 +5561,7 @@ Output format example:
                         category: t.category || "",
                         amount: Math.abs(Number(t.amount || 0)),
                         type: t.type === "income" ? "income" : "expense",
-                        account: t.account || "Main Checking",
+                        account: t.account || "Bank 1",
                         tags: Array.isArray(t.tags) ? t.tags : (t.tags ? JSON.parse(t.tags) : []),
                         notes: t.notes || "",
                         receipt: t.receipt ? 1 : 0,
@@ -5964,7 +6027,7 @@ Output format example:
             const filteredTx = filterTransactionsByPeriod(transactions, activePeriod, calcCustomStart, calcCustomEnd);
 
             // Suggested recurring lists derived from algorithm
-            const suggestedRecurring = detectRecurringTransactions(transactions, rules, settings.dismissedPatterns || []);
+            const suggestedRecurring = detectRecurringTransactions(transactions, rules, settings.dismissedPatterns || [], settings.recurring || []);
 
             return (
                 <div className="app-container">
@@ -6546,6 +6609,20 @@ Output format example:
                                             </div>
                                         </div>
 
+                                        {/* Type Filter */}
+                                        <select
+                                            className="form-control"
+                                            style={{ height: '34px', fontSize: '0.83rem', padding: '0 8px', flexShrink: 0, width: '120px' }}
+                                            value={txTypeFilter}
+                                            onChange={(e) => setTxTypeFilter(e.target.value)}
+                                            title="Filter by Transaction Type"
+                                        >
+                                            <option value="all">All Types</option>
+                                            <option value="expense">Outflow</option>
+                                            <option value="income">Inflow</option>
+                                            <option value="neutral">Neutral</option>
+                                        </select>
+
                                         {/* Import */}
                                         <button className="btn btn-secondary" style={{ height: '34px', padding: '0 12px', flexShrink: 0, display: 'flex', alignItems: 'center', gap: '5px', fontSize: '0.83rem' }} onClick={() => setShowImportModal(true)}>
                                             <Icon name="download" />
@@ -6858,6 +6935,7 @@ Output format example:
                                     onAddTag={handleSaveTag}
                                     onDeleteTag={handleDeleteTag}
                                     onUpdateTag={handleUpdateTag}
+                                    onUpdateTransactions={setTransactions}
                                     onWipe={async () => {
                                         await wipeDatabase();
                                         await loadState();
@@ -7074,8 +7152,8 @@ Output format example:
                                                     <td style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>
                                                         {formatDate(t.date, settings.dateFormat)}
                                                     </td>
-                                                    <td style={{ textAlign: 'right', fontWeight: 700, fontSize: '0.95rem', color: t.type === "income" ? "var(--success)" : "var(--danger)" }}>
-                                                        {t.type === "income" ? "+" : "-"}{formatCurrency(t.amount)}
+                                                    <td style={{ textAlign: 'right', fontWeight: 700, fontSize: '0.95rem', color: t.type === "neutral" ? "var(--info)" : (t.type === "income" ? "var(--success)" : "var(--danger)") }}>
+                                                        {t.type === "neutral" ? (t.neutralSign === "-" ? "-" : "+") : (t.type === "income" ? "+" : "-")}{formatCurrency(t.amount)}
                                                     </td>
                                                 </tr>
                                             );
@@ -7620,7 +7698,7 @@ Output format example:
                             amount: item.amount,
                             type: item.type || "expense",
                             category: item.category || "Subscriptions",
-                            account: "Main Checking",
+                            account: "Bank 1",
                             linkedRecurringId: item.id,
                             tags: [],
                             notes: `Marked as paid from Dashboard on ${new Date().toLocaleDateString()}`
@@ -7727,8 +7805,8 @@ Output format example:
                                             </div>
                                         </div>
                                         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                                            <span style={{ fontWeight: 700, fontSize: '0.9rem', color: item.type === 'income' ? 'var(--success)' : 'var(--danger)' }}>
-                                                {item.type === 'income' ? '+' : '-'}{formatCurrency(item.amount)}
+                                            <span style={{ fontWeight: 700, fontSize: '0.9rem', color: item.type === 'neutral' ? 'var(--info)' : (item.type === 'income' ? 'var(--success)' : 'var(--danger)') }}>
+                                                {item.type === 'neutral' ? (item.neutralSign === '-' ? '-' : '+') : (item.type === 'income' ? '+' : '-')}{formatCurrency(item.amount)}
                                             </span>
                                             <button className="btn btn-secondary btn-sm" style={{ fontSize: '0.72rem', padding: '3px 8px' }} onClick={() => { setMarkPaidModalItem(item); setSelectedTxIdToLink(null); }}>
                                                 Mark Paid
@@ -8372,8 +8450,8 @@ Output format example:
                                     <span style={{
                                         fontSize: '0.71rem',
                                         fontWeight: 700,
-                                        color: '#ffffff',
-                                        textShadow: '0 1px 2px rgba(0,0,0,0.5)',
+                                        color: '#FFFFFF',
+                                        textShadow: '0 1px 2px rgba(255,255,255,0.4)',
                                         whiteSpace: 'nowrap',
                                         overflow: 'hidden',
                                         textOverflow: 'ellipsis',
@@ -8399,110 +8477,110 @@ Output format example:
                         padding: '4px 6px 10px 4px',
                         boxSizing: 'border-box'
                     }}>
-                            {segments.map((seg, idx) => {
-                                const isHovered = hoveredIndex === idx;
-                                const canDrill = !isSubView && seg.subCount > 0;
-                                return (
-                                    <div
-                                        key={idx}
-                                        onMouseEnter={() => setHoveredIndex(idx)}
-                                        onMouseLeave={() => setHoveredIndex(null)}
-                                        onClick={() => {
-                                            if (canDrill) {
-                                                setSelectedMainCategory(seg.key);
-                                                setHoveredIndex(null);
-                                            }
-                                        }}
-                                        style={{
-                                            padding: '12px 14px',
-                                            borderRadius: '12px',
-                                            background: isHovered ? 'var(--card-bg)' : 'var(--bg-color)',
-                                            border: `1px solid ${isHovered ? seg.color : 'var(--border-color)'}`,
-                                            boxShadow: isHovered ? `0 4px 14px ${seg.color}20` : 'var(--shadow-xs)',
-                                            transform: isHovered ? 'translateY(-2px)' : 'none',
-                                            cursor: canDrill ? 'pointer' : 'default',
-                                            transition: 'all 0.2s ease',
-                                            boxSizing: 'border-box',
-                                            display: 'flex',
-                                            flexDirection: 'column',
-                                            gap: '8px'
-                                        }}
-                                    >
-                                        {/* Header Row: Dot + Title & Percentage Badge */}
-                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', overflow: 'hidden', minWidth: 0 }}>
-                                                <span style={{
-                                                    width: '8px',
-                                                    height: '8px',
-                                                    borderRadius: '50%',
-                                                    backgroundColor: seg.color,
-                                                    flexShrink: 0,
-                                                    boxShadow: `0 0 5px ${seg.color}88`
-                                                }}></span>
-                                                <span style={{ fontWeight: 700, fontSize: '0.88rem', color: 'var(--text-main)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={seg.key}>
-                                                    {seg.displayLabel}
-                                                </span>
-                                            </div>
+                        {segments.map((seg, idx) => {
+                            const isHovered = hoveredIndex === idx;
+                            const canDrill = !isSubView && seg.subCount > 0;
+                            return (
+                                <div
+                                    key={idx}
+                                    onMouseEnter={() => setHoveredIndex(idx)}
+                                    onMouseLeave={() => setHoveredIndex(null)}
+                                    onClick={() => {
+                                        if (canDrill) {
+                                            setSelectedMainCategory(seg.key);
+                                            setHoveredIndex(null);
+                                        }
+                                    }}
+                                    style={{
+                                        padding: '12px 14px',
+                                        borderRadius: '12px',
+                                        background: isHovered ? 'var(--card-bg)' : 'var(--bg-color)',
+                                        border: `1px solid ${isHovered ? seg.color : 'var(--border-color)'}`,
+                                        boxShadow: isHovered ? `0 4px 14px ${seg.color}20` : 'var(--shadow-xs)',
+                                        transform: isHovered ? 'translateY(-2px)' : 'none',
+                                        cursor: canDrill ? 'pointer' : 'default',
+                                        transition: 'all 0.2s ease',
+                                        boxSizing: 'border-box',
+                                        display: 'flex',
+                                        flexDirection: 'column',
+                                        gap: '8px'
+                                    }}
+                                >
+                                    {/* Header Row: Dot + Title & Percentage Badge */}
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', overflow: 'hidden', minWidth: 0 }}>
                                             <span style={{
-                                                fontSize: '0.74rem',
-                                                fontWeight: 700,
-                                                color: seg.color,
-                                                background: seg.color + '18',
-                                                padding: '2px 7px',
-                                                borderRadius: '10px',
-                                                flexShrink: 0
-                                            }}>
-                                                {seg.percentage.toFixed(1)}%
+                                                width: '8px',
+                                                height: '8px',
+                                                borderRadius: '50%',
+                                                backgroundColor: seg.color,
+                                                flexShrink: 0,
+                                                boxShadow: `0 0 5px ${seg.color}88`
+                                            }}></span>
+                                            <span style={{ fontWeight: 700, fontSize: '0.88rem', color: 'var(--text-main)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={seg.key}>
+                                                {seg.displayLabel}
                                             </span>
                                         </div>
-
-                                        {/* Amount & Txn count Button Row */}
-                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '2px' }}>
-                                            <span style={{ fontWeight: 800, fontSize: '1.02rem', color: 'var(--text-main)', display: 'block', lineHeight: 1.2 }}>
-                                                {formatCurrency(seg.value)}
-                                            </span>
-
-                                            {onViewTransactions && seg.count > 0 && (
-                                                <button
-                                                    style={{
-                                                        fontSize: '0.74rem',
-                                                        padding: '3px 9px',
-                                                        borderRadius: '8px',
-                                                        fontWeight: 700,
-                                                        whiteSpace: 'nowrap',
-                                                        flexShrink: 0,
-                                                        background: 'var(--card-bg)',
-                                                        border: '1.5px solid var(--border-color)',
-                                                        color: 'var(--text-main)',
-                                                        cursor: 'pointer',
-                                                        transition: 'all 0.2s ease',
-                                                        boxShadow: '0 1px 2px rgba(0,0,0,0.05)'
-                                                    }}
-                                                    onMouseEnter={(e) => {
-                                                        e.currentTarget.style.background = 'var(--primary)';
-                                                        e.currentTarget.style.color = '#ffffff';
-                                                        e.currentTarget.style.borderColor = 'var(--primary)';
-                                                    }}
-                                                    onMouseLeave={(e) => {
-                                                        e.currentTarget.style.background = 'var(--card-bg)';
-                                                        e.currentTarget.style.color = 'var(--text-main)';
-                                                        e.currentTarget.style.borderColor = 'var(--border-color)';
-                                                    }}
-                                                    onClick={(e) => {
-                                                        e.stopPropagation();
-                                                        onViewTransactions(seg.key);
-                                                    }}
-                                                    title={`View ${seg.count} transaction${seg.count > 1 ? 's' : ''} for ${seg.key}`}
-                                                >
-                                                    {seg.count} ➔
-                                                </button>
-                                            )}
-                                        </div>
+                                        <span style={{
+                                            fontSize: '0.74rem',
+                                            fontWeight: 700,
+                                            color: seg.color,
+                                            background: seg.color + '18',
+                                            padding: '2px 7px',
+                                            borderRadius: '10px',
+                                            flexShrink: 0
+                                        }}>
+                                            {seg.percentage.toFixed(1)}%
+                                        </span>
                                     </div>
-                                );
-                            })}
-                        </div>
+
+                                    {/* Amount & Txn count Button Row */}
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '2px' }}>
+                                        <span style={{ fontWeight: 800, fontSize: '1.02rem', color: 'var(--text-main)', display: 'block', lineHeight: 1.2 }}>
+                                            {formatCurrency(seg.value)}
+                                        </span>
+
+                                        {onViewTransactions && seg.count > 0 && (
+                                            <button
+                                                style={{
+                                                    fontSize: '0.74rem',
+                                                    padding: '3px 9px',
+                                                    borderRadius: '8px',
+                                                    fontWeight: 700,
+                                                    whiteSpace: 'nowrap',
+                                                    flexShrink: 0,
+                                                    background: 'var(--card-bg)',
+                                                    border: '1.5px solid var(--border-color)',
+                                                    color: 'var(--text-main)',
+                                                    cursor: 'pointer',
+                                                    transition: 'all 0.2s ease',
+                                                    boxShadow: '0 1px 2px rgba(0,0,0,0.05)'
+                                                }}
+                                                onMouseEnter={(e) => {
+                                                    e.currentTarget.style.background = 'var(--primary)';
+                                                    e.currentTarget.style.color = '#ffffff';
+                                                    e.currentTarget.style.borderColor = 'var(--primary)';
+                                                }}
+                                                onMouseLeave={(e) => {
+                                                    e.currentTarget.style.background = 'var(--card-bg)';
+                                                    e.currentTarget.style.color = 'var(--text-main)';
+                                                    e.currentTarget.style.borderColor = 'var(--border-color)';
+                                                }}
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    onViewTransactions(seg.key);
+                                                }}
+                                                title={`View ${seg.count} transaction${seg.count > 1 ? 's' : ''} for ${seg.key}`}
+                                            >
+                                                {seg.count} ➔
+                                            </button>
+                                        )}
+                                    </div>
+                                </div>
+                            );
+                        })}
                     </div>
+                </div>
             );
         };
 
@@ -8712,6 +8790,10 @@ Output format example:
                                             const catSub = formatCategorySubIconFirst(catSubRaw);
                                             const linkedRec = recurringList.find(r => r.id === t.linkedRecurringId);
 
+                                            const customType = (settings.categoryTypes || {})[t.category] || (settings.categoryTypes || {})[catParent];
+                                            const isNeutralTx = t.type === "neutral" || customType === "neutral" || (!customType && ["Transfer", "Misc", "Others"].includes(catParent));
+                                            const isIncomeTx = !isNeutralTx && (t.type === "income" || customType === "income" || (!customType && catParent === "Income"));
+
                                             return (
                                                 <tr key={t.id}>
                                                     <td style={{ fontSize: '0.82rem', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{formatDate(t.date, settings.dateFormat)}</td>
@@ -8768,8 +8850,8 @@ Output format example:
                                                         </div>
                                                     </td>
 
-                                                    <td style={{ fontWeight: 600, color: t.type === "income" ? "var(--success)" : "var(--danger)", whiteSpace: 'nowrap', textAlign: 'center' }}>
-                                                        {t.type === "income" ? "+" : "-"}{formatCurrency(t.amount)}
+                                                    <td style={{ fontWeight: 600, color: isNeutralTx ? "var(--info)" : (isIncomeTx ? "var(--success)" : "var(--danger)"), whiteSpace: 'nowrap', textAlign: 'center' }}>
+                                                        {isNeutralTx ? (t.neutralSign === "-" ? "-" : "+") : (isIncomeTx ? "+" : "-")}{formatCurrency(t.amount)}
                                                     </td>
 
                                                     <td style={{ fontSize: '0.78rem', color: 'var(--text-muted)', maxWidth: '110px', textAlign: 'center' }}>
@@ -8898,7 +8980,7 @@ Output format example:
 
                     {/* Delete Transaction Confirmation Modal */}
                     {txToDelete && (
-                        <div className="modal-overlay">
+                        <div className="modal-overlay confirm-modal-overlay">
                             <div className="modal-container">
                                 <div className="modal-header">
                                     <h3 className="modal-title" style={{ color: 'var(--danger)' }}>Confirm Transaction Deletion</h3>
@@ -8943,17 +9025,28 @@ Output format example:
                     )}
 
                     {/* Category Picker Modal */}
-                    {categoryPickerTx && (
-                        <CategoryPickerModal
-                            categories={filterCategoriesByType(categories, categoryPickerTx.type)}
-                            selected={categoryPickerTx.category}
-                            onSelect={async (newCat) => {
-                                await onPatch(categoryPickerTx.id, { category: newCat });
-                                setCategoryPickerTx(null);
-                            }}
-                            onClose={() => setCategoryPickerTx(null)}
-                        />
-                    )}
+                    {categoryPickerTx && (() => {
+                        const catParent = categoryPickerTx.category ? categoryPickerTx.category.split(" - ")[0] : "";
+                        const customType = (settings.categoryTypes || {})[categoryPickerTx.category] || (settings.categoryTypes || {})[catParent];
+                        let pickerType = categoryPickerTx.type;
+                        if (pickerType !== "neutral" && pickerType !== "income") {
+                            if (customType) pickerType = customType;
+                            else if (["Transfer", "Misc", "Others"].includes(catParent)) pickerType = "neutral";
+                            else if (catParent === "Income") pickerType = "income";
+                            else pickerType = pickerType || "expense";
+                        }
+                        return (
+                            <CategoryPickerModal
+                                categories={filterCategoriesByType(categories, pickerType, settings.categoryTypes)}
+                                selected={categoryPickerTx.category}
+                                onSelect={async (newCat) => {
+                                    await onPatch(categoryPickerTx.id, { category: newCat });
+                                    setCategoryPickerTx(null);
+                                }}
+                                onClose={() => setCategoryPickerTx(null)}
+                            />
+                        );
+                    })()}
                 </div>
             );
         };
@@ -9091,6 +9184,12 @@ Output format example:
                     excludeFromMonthlyCalculations: false
                 }];
                 await updateSetting("recurring", updatedList);
+                if (item.merchantNormalized) {
+                    const dismissed = settings.dismissedPatterns || [];
+                    if (!dismissed.includes(item.merchantNormalized)) {
+                        await updateSetting("dismissedPatterns", [...dismissed, item.merchantNormalized]);
+                    }
+                }
                 showToast(`Kept suggestion for "${item.merchantDisplay}"`);
             };
 
@@ -9448,7 +9547,7 @@ Output format example:
 
                     {/* Delete Confirmation Modal for Recurring Entries */}
                     {itemToDelete && (
-                        <div className="modal-overlay">
+                        <div className="modal-overlay confirm-modal-overlay">
                             <div className="modal-container" style={{ maxWidth: '420px' }}>
                                 <div className="modal-header">
                                     <h3 className="modal-title" style={{ color: 'var(--danger)' }}>Confirm Deletion</h3>
@@ -9523,8 +9622,8 @@ Output format example:
                                                         <div style={{ fontWeight: 600, fontSize: '0.88rem' }}>{t.narration || t.merchant}</div>
                                                         <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{formatDate(t.date, settings.dateFormat)} · {t.account}</div>
                                                     </div>
-                                                    <span style={{ fontWeight: 700, fontSize: '0.9rem', color: t.type === 'income' ? 'var(--success)' : 'var(--danger)' }}>
-                                                        {t.type === 'income' ? '+' : '-'}{formatCurrency(t.amount)}
+                                                    <span style={{ fontWeight: 700, fontSize: '0.9rem', color: t.type === 'neutral' ? '#0000ff' : (t.type === 'income' ? 'var(--success)' : 'var(--danger)') }}>
+                                                        {t.type === 'neutral' ? (t.neutralSign === '-' ? '-' : '+') : (t.type === 'income' ? '+' : '-')}{formatCurrency(t.amount)}
                                                     </span>
                                                 </div>
                                             ))}
@@ -10522,7 +10621,7 @@ Output format example:
 
                     {/* Delete Ledger Entry Confirmation Modal */}
                     {itemToDelete && (
-                        <div className="modal-overlay">
+                        <div className="modal-overlay confirm-modal-overlay">
                             <div className="modal-container" style={{ maxWidth: '420px' }}>
                                 <div className="modal-header">
                                     <h3 className="modal-title" style={{ color: 'var(--danger)' }}>Confirm Deletion</h3>
@@ -10928,7 +11027,7 @@ Output format example:
 
                     {/* Delete File Confirmation Modal */}
                     {docToDelete && (
-                        <div className="modal-overlay">
+                        <div className="modal-overlay confirm-modal-overlay">
                             <div className="modal-container">
                                 <div className="modal-header">
                                     <h3 className="modal-title" style={{ color: 'var(--danger)' }}>
@@ -11072,7 +11171,7 @@ Output format example:
 
 
         // --- SUB-PAGE: Settings (Section 16) ---
-        const SettingsPage = ({ settings, updateSetting, onWipe, showToast, tags = [], transactions = [], onAddTag, onDeleteTag, onUpdateTag }) => {
+        const SettingsPage = ({ settings, updateSetting, onWipe, showToast, tags = [], transactions = [], onAddTag, onDeleteTag, onUpdateTag, onUpdateTransactions }) => {
 
             // Net worth configurations
             const [assets, setAssets] = React.useState(settings.assetsTotal || 0);
@@ -11109,9 +11208,22 @@ Output format example:
                 return counts;
             }, [transactions]);
 
+            const categoryUsageCounts = React.useMemo(() => {
+                const counts = {};
+                if (transactions) {
+                    transactions.forEach(t => {
+                        if (t.category) {
+                            counts[t.category] = (counts[t.category] || 0) + 1;
+                        }
+                    });
+                }
+                return counts;
+            }, [transactions]);
+
             const [wipeConfirmation, setWipeConfirmation] = React.useState("");
             const [showWipeModal, setShowWipeModal] = React.useState(false);
             const [confirmDeleteTag, setConfirmDeleteTag] = React.useState(null);
+            const [confirmDeleteCategory, setConfirmDeleteCategory] = React.useState(null);
 
             const categories = settings.categories || [];
             const accounts = settings.accounts || [];
@@ -11163,7 +11275,11 @@ Output format example:
                 }
 
                 const updatedCategories = [...categories, fullName];
-                const updatedTypes = { ...(settings.categoryTypes || {}), [fullName]: newCategoryType, [parent]: newCategoryType };
+                const isDefaultParent = ["Food & Drinks", "Groceries", "Transport", "Shopping", "Personal", "Utilities", "Subscriptions", "Health", "Entertainment", "Fitness", "Home", "Services", "Support", "Income", "Transfer", "Misc", "Others"].includes(parent);
+                const updatedTypes = { ...(settings.categoryTypes || {}), [fullName]: newCategoryType };
+                if (!isDefaultParent && selectedParentCategory === "NEW") {
+                    updatedTypes[parent] = newCategoryType;
+                }
 
                 await updateSetting("categories", updatedCategories);
                 await updateSetting("categoryTypes", updatedTypes);
@@ -11191,7 +11307,23 @@ Output format example:
                 delete updatedTypes[cat];
                 await updateSetting("categories", updated);
                 await updateSetting("categoryTypes", updatedTypes);
-                showToast(`Category "${cat}" removed`);
+
+                // Remove category from transactions that use this category
+                let count = 0;
+                const updatedTxList = await Promise.all(transactions.map(async t => {
+                    if (t.category === cat || (t.category && t.category.startsWith(cat + " - "))) {
+                        count++;
+                        const updatedTx = { ...t, category: "" };
+                        await updateTransactionInDB(updatedTx);
+                        return updatedTx;
+                    }
+                    return t;
+                }));
+                if (count > 0 && typeof onUpdateTransactions === "function") {
+                    onUpdateTransactions(updatedTxList);
+                }
+
+                showToast(`Category "${cat}" removed${count > 0 ? ` and unlinked from ${count} transaction(s)` : ''}`);
             };
 
             const handleAddAccount = async () => {
@@ -11235,6 +11367,10 @@ Output format example:
 
             const groupedCategories = React.useMemo(() => {
                 const groups = {};
+                const DEFAULT_EXPENSE_PARENTS = ["Food & Drinks", "Groceries", "Transport", "Shopping", "Personal", "Utilities", "Subscriptions", "Health", "Entertainment", "Fitness", "Home", "Services", "Support"];
+                const DEFAULT_INCOME_PARENTS = ["Income"];
+                const DEFAULT_NEUTRAL_PARENTS = ["Transfer", "Misc", "Others"];
+
                 categories.forEach(c => {
                     const parent = c.includes(" - ") ? c.split(" - ")[0] : "Others";
                     const subAndEmoji = c.includes(" - ") ? c.split(" - ")[1] : c;
@@ -11244,18 +11380,19 @@ Output format example:
                     const emoji = emojiMatch ? emojiMatch[0] : "⚙️";
                     const label = subAndEmoji.replace(emoji, "").trim();
 
-                    const customType = (settings.categoryTypes || {})[c] || (settings.categoryTypes || {})[parent];
-                    let defaultType = "expense";
-                    if (["Income"].includes(parent)) defaultType = "income";
-                    else if (["Transfer", "Misc", "Others"].includes(parent)) defaultType = "neutral";
-                    const catType = customType || defaultType;
+                    let parentType = "expense";
+                    if (DEFAULT_INCOME_PARENTS.includes(parent)) parentType = "income";
+                    else if (DEFAULT_NEUTRAL_PARENTS.includes(parent)) parentType = "neutral";
+                    else if (DEFAULT_EXPENSE_PARENTS.includes(parent)) parentType = "expense";
+                    else parentType = (settings.categoryTypes || {})[parent] || "expense";
 
                     const isDefault = DEFAULT_CATEGORIES.includes(c);
+                    const itemType = isDefault ? parentType : ((settings.categoryTypes || {})[c] || parentType);
 
                     if (!groups[parent]) {
                         groups[parent] = {
                             name: parent,
-                            type: catType,
+                            type: parentType,
                             description: CATEGORY_DESCRIPTIONS[parent] || "",
                             items: []
                         };
@@ -11265,11 +11402,32 @@ Output format example:
                         label: label,
                         emoji: emoji,
                         isDefault: isDefault,
-                        type: catType
+                        type: itemType
                     });
                 });
                 return groups;
             }, [categories, settings.categoryTypes]);
+
+            const filteredParentCategories = React.useMemo(() => {
+                return parentCategories.filter(p => {
+                    const pGroup = groupedCategories[p];
+                    const pType = pGroup ? pGroup.type : (
+                        (settings.categoryTypes || {})[p] ||
+                        (["Income"].includes(p) ? "income" : ["Transfer", "Misc", "Others"].includes(p) ? "neutral" : "expense")
+                    );
+                    return pType === newCategoryType;
+                });
+            }, [parentCategories, groupedCategories, settings.categoryTypes, newCategoryType]);
+
+            const displayParentCategories = filteredParentCategories.length > 0 ? filteredParentCategories : parentCategories;
+
+            React.useEffect(() => {
+                if (selectedParentCategory !== "NEW") {
+                    if (displayParentCategories.length > 0 && !displayParentCategories.includes(selectedParentCategory)) {
+                        setSelectedParentCategory(displayParentCategories[0]);
+                    }
+                }
+            }, [newCategoryType, displayParentCategories]);
 
             const customCategoryCount = React.useMemo(() => categories.filter(c => !DEFAULT_CATEGORIES.includes(c)).length, [categories]);
             const defaultCategoryCount = categories.length - customCategoryCount;
@@ -11278,6 +11436,26 @@ Output format example:
                 const query = categorySearch.toLowerCase().trim();
                 let groupList = Object.values(groupedCategories);
 
+                // When user types a search query, search across ALL categories & subcategories regardless of selected tab below
+                if (query) {
+                    const result = [];
+                    groupList.forEach(g => {
+                        const isParentMatch = g.name.toLowerCase().includes(query) || (g.description && g.description.toLowerCase().includes(query));
+                        const matchingItems = g.items.filter(item => item.label.toLowerCase().includes(query) || item.full.toLowerCase().includes(query));
+
+                        if (isParentMatch) {
+                            result.push(g);
+                        } else if (matchingItems.length > 0) {
+                            result.push({
+                                ...g,
+                                items: matchingItems
+                            });
+                        }
+                    });
+                    return result;
+                }
+
+                // When no search query, filter by selected tab
                 if (categoryTab === "custom") {
                     groupList = groupList.map(g => ({
                         ...g,
@@ -11289,32 +11467,25 @@ Output format example:
                         items: g.items.filter(item => item.isDefault)
                     })).filter(g => g.items.length > 0);
                 } else if (categoryTab === "expense") {
-                    groupList = groupList.filter(g => g.type === "expense");
+                    groupList = groupList.map(g => ({
+                        ...g,
+                        items: g.items.filter(item => item.type === "expense")
+                    })).filter(g => g.items.length > 0);
                 } else if (categoryTab === "income") {
-                    groupList = groupList.filter(g => g.type === "income");
+                    groupList = groupList.map(g => ({
+                        ...g,
+                        items: g.items.filter(item => item.type === "income")
+                    })).filter(g => g.items.length > 0);
                 } else if (categoryTab === "neutral") {
-                    groupList = groupList.filter(g => g.type === "neutral");
+                    groupList = groupList.map(g => ({
+                        ...g,
+                        items: g.items.filter(item => item.type === "neutral")
+                    })).filter(g => g.items.length > 0);
                 } else if (categoryTab !== "all") {
                     groupList = groupList.filter(g => g.name === categoryTab);
                 }
 
-                if (!query) return groupList;
-
-                const result = [];
-                groupList.forEach(g => {
-                    const isParentMatch = g.name.toLowerCase().includes(query) || (g.description && g.description.toLowerCase().includes(query));
-                    const matchingItems = g.items.filter(item => item.label.toLowerCase().includes(query) || item.full.toLowerCase().includes(query));
-
-                    if (isParentMatch) {
-                        result.push(g);
-                    } else if (matchingItems.length > 0) {
-                        result.push({
-                            ...g,
-                            items: matchingItems
-                        });
-                    }
-                });
-                return result;
+                return groupList;
             }, [groupedCategories, categorySearch, categoryTab]);
 
             return (
@@ -11405,22 +11576,30 @@ Output format example:
 
                         {/* Manage Categories */}
                         <div className="section-card">
-                            <div className="section-card-title" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                <span>Categories & Subcategories Setup</span>
-                                <span className="badge badge-info" style={{ fontSize: '0.75rem', padding: '3px 10px', borderRadius: '12px' }}>
-                                    {categories.length} Categories Total
+                            <div className="section-card-title" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
+                                <span style={{ fontWeight: 700 }}>🏷️ Categories & Subcategories</span>
+                                <span className="badge badge-info" style={{ fontSize: '0.75rem', padding: '4px 10px', borderRadius: '12px' }}>
+                                    {categories.length} Total
                                 </span>
                             </div>
-                            <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', marginBottom: '16px' }}>
-                                View, search, and manage default and custom categories, subcategories, and type classifications (Income, Expense, Neutral).
+                            <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', marginBottom: '12px', lineHeight: '1.45' }}>
+                                View, search, and manage default and custom categories, subcategories, and type classifications (Inflow, Outflow, Neutral). Pre-determined categories are protected and cannot be deleted, while custom categories can be freely created and managed.
                             </p>
+                            <div style={{ display: 'flex', gap: '8px', marginBottom: '16px', flexWrap: 'wrap' }}>
+                                <span className="badge badge-success" style={{ fontSize: '0.72rem', padding: '3px 8px', borderRadius: '10px' }}>
+                                    ⭐ {customCategoryCount} Custom
+                                </span>
+                                <span className="badge badge-secondary" style={{ fontSize: '0.72rem', padding: '3px 8px', borderRadius: '10px' }}>
+                                    🔒 {defaultCategoryCount} Default
+                                </span>
+                            </div>
                             <button
                                 type="button"
                                 className="btn btn-primary"
                                 onClick={() => setShowCategoryModal(true)}
-                                style={{ display: 'inline-flex', alignItems: 'center', gap: '8px' }}
+                                style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', fontWeight: 700, padding: '12px 20px', fontSize: '0.92rem', borderRadius: '10px', boxShadow: '0 2px 8px rgba(79, 70, 229, 0.2)' }}
                             >
-                                ⚙️ Manage Categories & Subcategories
+                                ⚙️ View & Manage Categories
                             </button>
                         </div>
 
@@ -11429,7 +11608,7 @@ Output format example:
                             <div className="category-picker-overlay" onClick={() => setShowCategoryModal(false)}>
                                 <div
                                     className="category-picker-container"
-                                    style={{ maxWidth: '920px', width: '95vw', maxHeight: '90vh', display: 'flex', flexDirection: 'column', padding: 0 }}
+                                    style={{ maxWidth: '1240px', width: '96vw', maxHeight: '92vh', display: 'flex', flexDirection: 'column', padding: 0 }}
                                     onClick={(e) => e.stopPropagation()}
                                 >
                                     {/* Modal Header */}
@@ -11466,112 +11645,166 @@ Output format example:
 
                                     {/* Modal Scrollable Content Area */}
                                     <div style={{ overflowY: 'auto', padding: '20px', flex: 1, display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                                        <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', margin: 0 }}>
-                                            Pre-determined categories are protected and cannot be deleted. You can add new custom categories and subcategories with custom classification (Income, Expense, or Neutral).
-                                        </p>
 
-                                        {/* Form: Add New Category / Subcategory */}
-                                        <div style={{ backgroundColor: 'var(--bg-main, #F8FAFC)', padding: '16px', borderRadius: '12px', border: '1px solid var(--border-color)' }}>
-                                            <div style={{ fontWeight: 600, fontSize: '0.88rem', marginBottom: '12px', color: 'var(--text-main)' }}>
-                                                ➕ Add New Category / Subcategory
-                                            </div>
-                                            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '10px' }}>
-                                                    <div>
-                                                        <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '4px' }}>Main Category</label>
-                                                        <select
-                                                            className="form-control"
-                                                            style={{ width: '100%' }}
-                                                            value={selectedParentCategory}
-                                                            onChange={(e) => setSelectedParentCategory(e.target.value)}
-                                                        >
-                                                            {parentCategories.map(p => (
-                                                                <option key={p} value={p}>{p}</option>
-                                                            ))}
-                                                            <option value="NEW">+ Create New Main Category...</option>
-                                                        </select>
-                                                    </div>
-
-                                                    {selectedParentCategory === "NEW" && (
-                                                        <div>
-                                                            <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '4px' }}>New Main Category Name</label>
-                                                            <input
-                                                                type="text"
-                                                                className="form-control"
-                                                                placeholder="e.g. Subscriptions & Tools"
-                                                                value={customParentCategory}
-                                                                onChange={(e) => setCustomParentCategory(e.target.value)}
-                                                                style={{ width: '100%' }}
-                                                            />
-                                                        </div>
-                                                    )}
-
-                                                    <div>
-                                                        <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '4px' }}>Subcategory Name</label>
-                                                        <input
-                                                            type="text"
-                                                            className="form-control"
-                                                            placeholder="e.g. Netflix"
-                                                            value={newSubcategoryName}
-                                                            onChange={(e) => setNewSubcategoryName(e.target.value)}
-                                                            style={{ width: '100%' }}
-                                                        />
-                                                    </div>
-
-                                                    <div>
-                                                        <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '4px' }}>Emoji Icon</label>
-                                                        <input
-                                                            type="text"
-                                                            className="form-control"
-                                                            placeholder="e.g. 🍿"
-                                                            value={newSubcategoryEmoji}
-                                                            onChange={(e) => setNewSubcategoryEmoji(e.target.value)}
-                                                            style={{ width: '100%' }}
-                                                        />
-                                                    </div>
-                                                </div>
-
-                                                {/* Category Type selector */}
-                                                <div style={{ display: 'flex', alignItems: 'center', gap: '16px', flexWrap: 'wrap', paddingTop: '4px' }}>
-                                                    <span style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-main)' }}>Category Type:</span>
-                                                    <label style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '0.82rem', cursor: 'pointer' }}>
-                                                        <input
-                                                            type="radio"
-                                                            name="newCategoryType"
-                                                            value="expense"
-                                                            checked={newCategoryType === "expense"}
-                                                            onChange={(e) => setNewCategoryType(e.target.value)}
-                                                        />
-                                                        <span>💸 Expense</span>
-                                                    </label>
-                                                    <label style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '0.82rem', cursor: 'pointer' }}>
-                                                        <input
-                                                            type="radio"
-                                                            name="newCategoryType"
-                                                            value="income"
-                                                            checked={newCategoryType === "income"}
-                                                            onChange={(e) => setNewCategoryType(e.target.value)}
-                                                        />
-                                                        <span>💰 Income</span>
-                                                    </label>
-                                                    <label style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '0.82rem', cursor: 'pointer' }}>
-                                                        <input
-                                                            type="radio"
-                                                            name="newCategoryType"
-                                                            value="neutral"
-                                                            checked={newCategoryType === "neutral"}
-                                                            onChange={(e) => setNewCategoryType(e.target.value)}
-                                                        />
-                                                        <span>🔄 Neutral (Income & Expense)</span>
-                                                    </label>
+                                        {/* Form: Add New Category / Subcategory - Ultra-Compact Layout */}
+                                        <div style={{
+                                            backgroundColor: 'var(--bg-main, #F8FAFC)',
+                                            padding: '12px 16px',
+                                            borderRadius: '12px',
+                                            border: '1px solid var(--border-color)',
+                                            display: 'flex',
+                                            flexDirection: 'column',
+                                            gap: '10px'
+                                        }}>
+                                            {/* Row 1: Mode Switcher (Heading/Selection) + Category Type Selection */}
+                                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '10px' }}>
+                                                {/* Mode Switcher */}
+                                                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                                                     <button
-                                                        className="btn btn-primary"
-                                                        onClick={handleAddCategory}
-                                                        style={{ marginLeft: 'auto', padding: '6px 18px' }}
+                                                        type="button"
+                                                        onClick={() => {
+                                                            if (selectedParentCategory === "NEW") {
+                                                                setSelectedParentCategory(parentCategories[0] || "");
+                                                            }
+                                                        }}
+                                                        style={{
+                                                            border: selectedParentCategory !== "NEW" ? '1px solid #6366F1' : '1px solid #CBD5E1',
+                                                            background: selectedParentCategory !== "NEW" ? '#EEF2FF' : '#FFFFFF',
+                                                            color: selectedParentCategory !== "NEW" ? '#4338CA' : '#64748B',
+                                                            fontWeight: selectedParentCategory !== "NEW" ? 700 : 500,
+                                                            fontSize: '0.78rem',
+                                                            padding: '4px 10px',
+                                                            borderRadius: '6px',
+                                                            cursor: 'pointer'
+                                                        }}
+                                                        title="Add a subcategory to an existing main category"
                                                     >
-                                                        Add Category
+                                                        📁 Existing Main Category
+                                                    </button>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setSelectedParentCategory("NEW")}
+                                                        style={{
+                                                            border: selectedParentCategory === "NEW" ? '1px solid #6366F1' : '1px solid #CBD5E1',
+                                                            background: selectedParentCategory === "NEW" ? '#EEF2FF' : '#FFFFFF',
+                                                            color: selectedParentCategory === "NEW" ? '#4338CA' : '#64748B',
+                                                            fontWeight: selectedParentCategory === "NEW" ? 700 : 500,
+                                                            fontSize: '0.78rem',
+                                                            padding: '4px 10px',
+                                                            borderRadius: '6px',
+                                                            cursor: 'pointer'
+                                                        }}
+                                                        title="Create a new main category"
+                                                    >
+                                                        🌟 New Main Category
                                                     </button>
                                                 </div>
+
+                                                {/* Type Selector (styled identically to mode switcher buttons) */}
+                                                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                                    <span style={{ fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-muted)', marginRight: '2px' }}>Transaction Type:</span>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setNewCategoryType("expense")}
+                                                        style={{
+                                                            border: newCategoryType === "expense" ? '1px solid #6366F1' : '1px solid #CBD5E1',
+                                                            background: newCategoryType === "expense" ? '#EEF2FF' : '#FFFFFF',
+                                                            color: newCategoryType === "expense" ? '#4338CA' : '#64748B',
+                                                            fontWeight: newCategoryType === "expense" ? 700 : 500,
+                                                            fontSize: '0.78rem',
+                                                            padding: '4px 10px',
+                                                            borderRadius: '6px',
+                                                            cursor: 'pointer'
+                                                        }}
+                                                    >
+                                                        💸 Outflow
+                                                    </button>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setNewCategoryType("income")}
+                                                        style={{
+                                                            border: newCategoryType === "income" ? '1px solid #6366F1' : '1px solid #CBD5E1',
+                                                            background: newCategoryType === "income" ? '#EEF2FF' : '#FFFFFF',
+                                                            color: newCategoryType === "income" ? '#4338CA' : '#64748B',
+                                                            fontWeight: newCategoryType === "income" ? 700 : 500,
+                                                            fontSize: '0.78rem',
+                                                            padding: '4px 10px',
+                                                            borderRadius: '6px',
+                                                            cursor: 'pointer'
+                                                        }}
+                                                    >
+                                                        💰 Inflow
+                                                    </button>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setNewCategoryType("neutral")}
+                                                        style={{
+                                                            border: newCategoryType === "neutral" ? '1px solid #6366F1' : '1px solid #CBD5E1',
+                                                            background: newCategoryType === "neutral" ? '#EEF2FF' : '#FFFFFF',
+                                                            color: newCategoryType === "neutral" ? '#4338CA' : '#64748B',
+                                                            fontWeight: newCategoryType === "neutral" ? 700 : 500,
+                                                            fontSize: '0.78rem',
+                                                            padding: '4px 10px',
+                                                            borderRadius: '6px',
+                                                            cursor: 'pointer'
+                                                        }}
+                                                    >
+                                                        🔄 Neutral
+                                                    </button>
+                                                </div>
+                                            </div>
+
+                                            {/* Row 2: Inputs + Add Button */}
+                                            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(140px, 1fr) minmax(160px, 1fr) 90px auto', gap: '8px', alignItems: 'center' }}>
+                                                {selectedParentCategory !== "NEW" ? (
+                                                    <select
+                                                        className="form-control"
+                                                        style={{ width: '100%', padding: '5px 8px', fontSize: '0.82rem' }}
+                                                        value={selectedParentCategory}
+                                                        onChange={(e) => setSelectedParentCategory(e.target.value)}
+                                                    >
+                                                        {displayParentCategories.map(p => (
+                                                            <option key={p} value={p}>{p}</option>
+                                                        ))}
+                                                    </select>
+                                                ) : (
+                                                    <input
+                                                        type="text"
+                                                        className="form-control"
+                                                        placeholder="New Main Category Name..."
+                                                        value={customParentCategory}
+                                                        onChange={(e) => setCustomParentCategory(e.target.value)}
+                                                        style={{ width: '100%', padding: '5px 8px', fontSize: '0.82rem' }}
+                                                        autoFocus
+                                                    />
+                                                )}
+
+                                                <input
+                                                    type="text"
+                                                    className="form-control"
+                                                    placeholder="Subcategory Name (e.g. Netflix)"
+                                                    value={newSubcategoryName}
+                                                    onChange={(e) => setNewSubcategoryName(e.target.value)}
+                                                    style={{ width: '100%', padding: '5px 8px', fontSize: '0.82rem' }}
+                                                />
+
+                                                <input
+                                                    type="text"
+                                                    className="form-control"
+                                                    placeholder="Emoji (🍿)"
+                                                    value={newSubcategoryEmoji}
+                                                    onChange={(e) => setNewSubcategoryEmoji(e.target.value)}
+                                                    style={{ width: '100%', padding: '5px 8px', fontSize: '0.82rem' }}
+                                                />
+
+                                                <button
+                                                    type="button"
+                                                    className="btn btn-primary"
+                                                    onClick={handleAddCategory}
+                                                    style={{ padding: '6px 16px', fontSize: '0.82rem', fontWeight: 600, whiteSpace: 'nowrap' }}
+                                                >
+                                                    Add Category
+                                                </button>
                                             </div>
                                         </div>
 
@@ -11610,13 +11843,13 @@ Output format example:
                                                     className={`category-picker-tab ${categoryTab === "expense" ? "active" : ""}`}
                                                     onClick={() => setCategoryTab("expense")}
                                                 >
-                                                    💸 Expense
+                                                    💸 Outflow
                                                 </div>
                                                 <div
                                                     className={`category-picker-tab ${categoryTab === "income" ? "active" : ""}`}
                                                     onClick={() => setCategoryTab("income")}
                                                 >
-                                                    💰 Income
+                                                    💰 Inflow
                                                 </div>
                                                 <div
                                                     className={`category-picker-tab ${categoryTab === "neutral" ? "active" : ""}`}
@@ -11637,7 +11870,7 @@ Output format example:
                                         </div>
 
                                         {/* Category List Grid Body */}
-                                        <div style={{ maxHeight: '420px', overflowY: 'auto', border: '1px solid var(--border-color)', borderRadius: '12px', padding: '16px', backgroundColor: '#FFFFFF' }}>
+                                        <div style={{ flex: 1, minHeight: '380px', maxHeight: '560px', overflowY: 'auto', border: '1px solid var(--border-color)', borderRadius: '12px', padding: '16px', backgroundColor: '#FFFFFF' }}>
                                             {filteredCategoryGroups.length === 0 ? (
                                                 <div style={{ textAlign: 'center', padding: '40px 0', color: 'var(--text-muted)' }}>
                                                     {categoryTab === "custom"
@@ -11651,7 +11884,7 @@ Output format example:
                                                             <div className="category-group-info" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                                                                 <span className="category-group-title" style={{ fontSize: '0.95rem' }}>{g.name}</span>
                                                                 <span className={`badge ${g.type === 'income' ? 'badge-success' : g.type === 'neutral' ? 'badge-info' : 'badge-secondary'}`} style={{ fontSize: '0.68rem', padding: '2px 8px', textTransform: 'capitalize' }}>
-                                                                    {g.type === 'income' ? '💰 Income' : g.type === 'neutral' ? '🔄 Neutral' : '💸 Expense'}
+                                                                    {g.type === 'income' ? '💰 Inflow' : g.type === 'neutral' ? '🔄 Neutral' : '💸 Outflow'}
                                                                 </span>
                                                                 {g.description && <span className="category-group-desc">• {g.description}</span>}
                                                             </div>
@@ -11681,24 +11914,7 @@ Output format example:
                                                                         {item.emoji}
                                                                     </div>
                                                                     <span className="subcategory-label" style={{ fontWeight: 500 }}>{item.label}</span>
-                                                                    {item.isDefault ? (
-                                                                        <span
-                                                                            title="Pre-determined category cannot be deleted"
-                                                                            style={{
-                                                                                fontSize: '0.68rem',
-                                                                                color: 'var(--text-muted)',
-                                                                                background: '#E2E8F0',
-                                                                                padding: '2px 6px',
-                                                                                borderRadius: '10px',
-                                                                                display: 'inline-flex',
-                                                                                alignItems: 'center',
-                                                                                gap: '3px',
-                                                                                marginLeft: '4px'
-                                                                            }}
-                                                                        >
-                                                                            🔒 Default
-                                                                        </span>
-                                                                    ) : (
+                                                                    {!item.isDefault && (
                                                                         <div style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', marginLeft: '4px' }}>
                                                                             <span
                                                                                 style={{
@@ -11723,7 +11939,7 @@ Output format example:
                                                                                     display: 'inline-flex',
                                                                                     alignItems: 'center'
                                                                                 }}
-                                                                                onClick={() => handleRemoveCategory(item.full)}
+                                                                                onClick={() => setConfirmDeleteCategory(item.full)}
                                                                             >
                                                                                 <Icon name="trash" />
                                                                             </button>
@@ -11939,9 +12155,43 @@ Output format example:
                         </button>
                     </div>
 
+                    {/* Category Delete Confirmation Modal */}
+                    {confirmDeleteCategory && (
+                        <div className="modal-overlay confirm-modal-overlay">
+                            <div className="modal-container" style={{ maxWidth: '440px' }}>
+                                <div className="modal-header">
+                                    <h3 className="modal-title" style={{ color: 'var(--danger)' }}>Confirm Category Deletion</h3>
+                                    <button className="modal-close-btn" onClick={() => setConfirmDeleteCategory(null)}>
+                                        <Icon name="close" />
+                                    </button>
+                                </div>
+                                <div className="modal-body">
+                                    <p style={{ fontSize: '0.9rem', color: 'var(--text-main)', marginBottom: '8px' }}>
+                                        Are you sure you want to delete category <strong>"{confirmDeleteCategory}"</strong>?
+                                    </p>
+                                    <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '12px', lineHeight: 1.4 }}>
+                                        This category will be permanently deleted and removed from <strong>{categoryUsageCounts[confirmDeleteCategory] || 0} transaction(s)</strong>.
+                                    </p>
+                                </div>
+                                <div className="modal-footer">
+                                    <button className="btn btn-secondary" onClick={() => setConfirmDeleteCategory(null)}>Cancel</button>
+                                    <button
+                                        className="btn btn-danger"
+                                        onClick={async () => {
+                                            await handleRemoveCategory(confirmDeleteCategory);
+                                            setConfirmDeleteCategory(null);
+                                        }}
+                                    >
+                                        Delete Category
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
                     {/* Tag Delete Confirmation Modal */}
                     {confirmDeleteTag && (
-                        <div className="modal-overlay">
+                        <div className="modal-overlay confirm-modal-overlay">
                             <div className="modal-container" style={{ maxWidth: '420px' }}>
                                 <div className="modal-header">
                                     <h3 className="modal-title" style={{ color: 'var(--danger)' }}>Confirm Tag Deletion</h3>
@@ -11978,7 +12228,7 @@ Output format example:
 
                     {/* Wipe confirmation modal */}
                     {showWipeModal && (
-                        <div className="modal-overlay">
+                        <div className="modal-overlay confirm-modal-overlay">
                             <div className="modal-container">
                                 <div className="modal-header">
                                     <h3 className="modal-title" style={{ color: 'var(--danger)' }}>Erase Database Vault?</h3>
@@ -12070,27 +12320,31 @@ Output format example:
                 const query = search.toLowerCase().trim();
                 let groupValues = Object.values(grouped);
 
+                // When user types a search query, search across ALL categories & subcategories regardless of selected tab below
+                if (query) {
+                    const result = [];
+                    groupValues.forEach(g => {
+                        const isParentMatch = g.name.toLowerCase().includes(query) || (g.description && g.description.toLowerCase().includes(query));
+                        const matchingItems = g.items.filter(item => item.label.toLowerCase().includes(query) || item.full.toLowerCase().includes(query));
+
+                        if (isParentMatch) {
+                            result.push(g);
+                        } else if (matchingItems.length > 0) {
+                            result.push({
+                                ...g,
+                                items: matchingItems
+                            });
+                        }
+                    });
+                    return result;
+                }
+
+                // When no search query, filter by selected tab
                 if (activeTab !== "all") {
                     groupValues = groupValues.filter(g => g.name === activeTab);
                 }
 
-                if (!query) return groupValues;
-
-                const result = [];
-                groupValues.forEach(g => {
-                    const isParentMatch = g.name.toLowerCase().includes(query) || g.description.toLowerCase().includes(query);
-                    const matchingItems = g.items.filter(item => item.label.toLowerCase().includes(query) || item.full.toLowerCase().includes(query));
-
-                    if (isParentMatch) {
-                        result.push(g);
-                    } else if (matchingItems.length > 0) {
-                        result.push({
-                            ...g,
-                            items: matchingItems
-                        });
-                    }
-                });
-                return result;
+                return groupValues;
             }, [grouped, search, activeTab]);
 
             // Total category item count available in view
@@ -12153,8 +12407,10 @@ Output format example:
                         {/* Modal Body */}
                         <div className="category-picker-body">
                             {filteredGroups.length === 0 ? (
-                                <div style={{ textAlign: 'center', padding: '40px 0', color: 'var(--text-muted)' }}>
-                                    No matching categories found for "{search}".
+                                <div style={{ textAlign: 'center', padding: '30px 20px', color: 'var(--text-muted)' }}>
+                                    <p style={{ marginBottom: '0', fontSize: '0.9rem' }}>
+                                        No matching categories found for "<strong>{search}</strong>".
+                                    </p>
                                 </div>
                             ) : (
                                 filteredGroups.map(g => {
@@ -12235,7 +12491,21 @@ Output format example:
         // --- MODAL COMPONENT: Edit Transaction ---
         const EditTransactionModal = ({ tx, onClose, onSave, settings, tags = [], onAddTag }) => {
             useEscapeKey(onClose);
-            const [type, setType] = React.useState(tx.type || "expense");
+            const initialType = React.useMemo(() => {
+                if (tx.type === "neutral") return "neutral";
+                if (tx.type === "income") return "income";
+                const catParent = tx.category ? tx.category.split(" - ")[0] : "";
+                const customType = (settings?.categoryTypes || {})[tx.category] || (settings?.categoryTypes || {})[catParent];
+                if (customType === "neutral") return "neutral";
+                if (customType === "income") return "income";
+                if (customType === "expense") return "expense";
+                if (["Transfer", "Misc", "Others"].includes(catParent)) return "neutral";
+                if (catParent === "Income") return "income";
+                return tx.type || "expense";
+            }, [tx, settings]);
+
+            const [type, setType] = React.useState(initialType);
+            const [neutralSign, setNeutralSign] = React.useState(tx.neutralSign || "+");
             const [amount, setAmount] = React.useState(String(tx.amount || ""));
             const [narration, setNarration] = React.useState(tx.narration || tx.merchant || "");
             const [refId, setRefId] = React.useState(tx.refId || "");
@@ -12265,7 +12535,7 @@ Output format example:
 
             const handleTypeChange = (newType) => {
                 setType(newType);
-                const validCats = filterCategoriesByType(settings.categories || DEFAULT_CATEGORIES, newType);
+                const validCats = filterCategoriesByType(settings.categories || DEFAULT_CATEGORIES, newType, settings.categoryTypes);
                 if (!validCats.includes(category)) {
                     setCategory(validCats[0] || "Others - Others ⚙️");
                 }
@@ -12285,6 +12555,7 @@ Output format example:
 
                 onSave({
                     type,
+                    neutralSign: type === "neutral" ? neutralSign : undefined,
                     amount: parseFloat(amount),
                     narration,
                     merchant: narration, // keep merchant in sync for fingerprinting/rules
@@ -12306,11 +12577,12 @@ Output format example:
                                 <Icon name="close" />
                             </button>
                         </div>
-                        {/* Frozen sub-header: Expense / Income toggle */}
+                        {/* Frozen sub-header: Outflow / Inflow / Neutral toggle */}
                         <div style={{ padding: '12px 24px', borderBottom: '1px solid var(--border-color)', flexShrink: 0, background: 'var(--card-bg)' }}>
                             <div className="segmented-control">
-                                <button type="button" className={`segmented-btn ${type === "expense" ? "active expense" : ""}`} onClick={() => handleTypeChange("expense")}>Expense</button>
-                                <button type="button" className={`segmented-btn ${type === "income" ? "active income" : ""}`} onClick={() => handleTypeChange("income")}>Income</button>
+                                <button type="button" className={`segmented-btn ${type === "expense" ? "active expense" : ""}`} onClick={() => handleTypeChange("expense")}>Outflow</button>
+                                <button type="button" className={`segmented-btn ${type === "income" ? "active income" : ""}`} onClick={() => handleTypeChange("income")}>Inflow</button>
+                                <button type="button" className={`segmented-btn ${type === "neutral" ? "active neutral" : ""}`} onClick={() => handleTypeChange("neutral")}>Neutral</button>
                             </div>
                         </div>
                         <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
@@ -12321,7 +12593,70 @@ Output format example:
                                     <div className="form-row">
                                         <div className="form-field">
                                             <label>Amount ({getCurrencySymbol(settings?.currency || "INR")})</label>
-                                            <input type="number" step="0.01" className="form-control" placeholder="0.00" value={amount} onChange={(e) => setAmount(e.target.value)} required />
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                                {type === "neutral" ? (
+                                                    <button
+                                                        type="button"
+                                                        style={{
+                                                            width: '38px',
+                                                            height: '38px',
+                                                            borderRadius: '8px',
+                                                            border: `1px solid ${neutralSign === '+' ? 'var(--success)' : 'var(--danger)'}`,
+                                                            backgroundColor: neutralSign === '+' ? 'var(--success)' : 'var(--danger)',
+                                                            color: '#FFFFFF',
+                                                            fontWeight: 800,
+                                                            fontSize: '1.2rem',
+                                                            cursor: 'pointer',
+                                                            display: 'flex',
+                                                            alignItems: 'center',
+                                                            justifyContent: 'center',
+                                                            flexShrink: 0,
+                                                            boxShadow: 'var(--shadow-sm)',
+                                                            userSelect: 'none',
+                                                            transition: 'all 0.15s ease'
+                                                        }}
+                                                        onClick={() => setNeutralSign(neutralSign === "+" ? "-" : "+")}
+                                                        title={`Click to toggle sign (currently ${neutralSign === "+" ? "Positive (+)" : "Negative (-)"})`}
+                                                    >
+                                                        {neutralSign}
+                                                    </button>
+                                                ) : (
+                                                    <div
+                                                        style={{
+                                                            width: '38px',
+                                                            height: '38px',
+                                                            borderRadius: '8px',
+                                                            border: `1px solid ${type === 'income' ? 'var(--success)' : 'var(--danger)'}`,
+                                                            backgroundColor: type === 'income' ? 'var(--success)' : 'var(--danger)',
+                                                            color: '#FFFFFF',
+                                                            fontWeight: 800,
+                                                            fontSize: '1.2rem',
+                                                            display: 'flex',
+                                                            alignItems: 'center',
+                                                            justifyContent: 'center',
+                                                            flexShrink: 0,
+                                                            userSelect: 'none'
+                                                        }}
+                                                        title={type === 'income' ? 'Inflow (+)' : 'Outflow (-)'}
+                                                    >
+                                                        {type === 'income' ? '+' : '-'}
+                                                    </div>
+                                                )}
+                                                <input
+                                                    type="number"
+                                                    step="0.01"
+                                                    className="form-control"
+                                                    placeholder="0.00"
+                                                    value={amount}
+                                                    onChange={(e) => setAmount(e.target.value)}
+                                                    required
+                                                    style={{
+                                                        fontWeight: 700,
+                                                        fontSize: '1.05rem',
+                                                        color: (type === 'neutral' ? neutralSign === '+' : type === 'income') ? 'var(--success)' : 'var(--danger)'
+                                                    }}
+                                                />
+                                            </div>
                                         </div>
                                         <div className="form-field">
                                             <label>Date</label>
@@ -12521,7 +12856,7 @@ Output format example:
 
                         {showCategoryPicker && (
                             <CategoryPickerModal
-                                categories={filterCategoriesByType(settings.categories || DEFAULT_CATEGORIES, type)}
+                                categories={filterCategoriesByType(settings.categories || DEFAULT_CATEGORIES, type, settings.categoryTypes)}
                                 selected={category}
                                 onSelect={(cat) => { setCategory(cat); setShowCategoryPicker(false); }}
                                 onClose={() => setShowCategoryPicker(false)}
@@ -12537,6 +12872,7 @@ Output format example:
         const AddEntryModal = ({ onClose, onSave, settings, tags, onAddTag }) => {
             useEscapeKey(onClose);
             const [type, setType] = React.useState("expense");
+            const [neutralSign, setNeutralSign] = React.useState("+");
             const [amount, setAmount] = React.useState("");
             const [narration, setNarration] = React.useState("");
             const [refId, setRefId] = React.useState("");
@@ -12548,17 +12884,17 @@ Output format example:
                 return `${y}-${m}-${d}`;
             });
             const [category, setCategory] = React.useState(() => {
-                const valid = filterCategoriesByType(settings.categories || DEFAULT_CATEGORIES, "expense");
+                const valid = filterCategoriesByType(settings.categories || DEFAULT_CATEGORIES, "expense", settings.categoryTypes);
                 return valid[0] || "Food & Drinks - Breakfast 🍳";
             });
-            const [account, setAccount] = React.useState(settings.accounts?.[0] || "Main Checking");
+            const [account, setAccount] = React.useState(settings.accounts?.[0] || "Bank 1");
             const [selectedTags, setSelectedTags] = React.useState([]);
             const [notes, setNotes] = React.useState("");
             const [showCategoryPicker, setShowCategoryPicker] = React.useState(false);
 
             const handleTypeChange = (newType) => {
                 setType(newType);
-                const validCats = filterCategoriesByType(settings.categories || DEFAULT_CATEGORIES, newType);
+                const validCats = filterCategoriesByType(settings.categories || DEFAULT_CATEGORIES, newType, settings.categoryTypes);
                 if (!validCats.includes(category)) {
                     setCategory(validCats[0] || "Food & Drinks - Breakfast 🍳");
                 }
@@ -12596,6 +12932,7 @@ Output format example:
 
                 onSave({
                     type,
+                    neutralSign: type === "neutral" ? neutralSign : undefined,
                     amount: parseFloat(amount),
                     narration,
                     merchant: narration, // keep merchant in sync for fingerprinting/rules
@@ -12618,7 +12955,7 @@ Output format example:
                                 <Icon name="close" />
                             </button>
                         </div>
-                        {/* Frozen sub-header: Expense / Income toggle */}
+                        {/* Frozen sub-header: Outflow / Inflow / Neutral toggle */}
                         <div style={{ padding: '12px 24px', borderBottom: '1px solid var(--border-color)', flexShrink: 0, background: 'var(--card-bg)' }}>
                             <div className="segmented-control">
                                 <button
@@ -12626,14 +12963,21 @@ Output format example:
                                     className={`segmented-btn ${type === "expense" ? "active expense" : ""}`}
                                     onClick={() => handleTypeChange("expense")}
                                 >
-                                    Expense
+                                    Outflow
                                 </button>
                                 <button
                                     type="button"
                                     className={`segmented-btn ${type === "income" ? "active income" : ""}`}
                                     onClick={() => handleTypeChange("income")}
                                 >
-                                    Income
+                                    Inflow
+                                </button>
+                                <button
+                                    type="button"
+                                    className={`segmented-btn ${type === "neutral" ? "active neutral" : ""}`}
+                                    onClick={() => handleTypeChange("neutral")}
+                                >
+                                    Neutral
                                 </button>
                             </div>
                         </div>
@@ -12645,15 +12989,70 @@ Output format example:
                                     <div className="form-row">
                                         <div className="form-field">
                                             <label>Amount ({getCurrencySymbol(settings?.currency || "INR")})</label>
-                                            <input
-                                                type="number"
-                                                step="0.01"
-                                                className="form-control"
-                                                placeholder="0.00"
-                                                value={amount}
-                                                onChange={(e) => setAmount(e.target.value)}
-                                                required
-                                            />
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                                {type === "neutral" ? (
+                                                    <button
+                                                        type="button"
+                                                        style={{
+                                                            width: '38px',
+                                                            height: '38px',
+                                                            borderRadius: '8px',
+                                                            border: `1px solid ${neutralSign === '+' ? 'var(--success)' : 'var(--danger)'}`,
+                                                            backgroundColor: neutralSign === '+' ? 'var(--success)' : 'var(--danger)',
+                                                            color: '#FFFFFF',
+                                                            fontWeight: 800,
+                                                            fontSize: '1.2rem',
+                                                            cursor: 'pointer',
+                                                            display: 'flex',
+                                                            alignItems: 'center',
+                                                            justifyContent: 'center',
+                                                            flexShrink: 0,
+                                                            boxShadow: 'var(--shadow-sm)',
+                                                            userSelect: 'none',
+                                                            transition: 'all 0.15s ease'
+                                                        }}
+                                                        onClick={() => setNeutralSign(neutralSign === "+" ? "-" : "+")}
+                                                        title={`Click to toggle sign (currently ${neutralSign === "+" ? "Positive (+)" : "Negative (-)"})`}
+                                                    >
+                                                        {neutralSign}
+                                                    </button>
+                                                ) : (
+                                                    <div
+                                                        style={{
+                                                            width: '38px',
+                                                            height: '38px',
+                                                            borderRadius: '8px',
+                                                            border: `1px solid ${type === 'income' ? 'var(--success)' : 'var(--danger)'}`,
+                                                            backgroundColor: type === 'income' ? 'var(--success)' : 'var(--danger)',
+                                                            color: '#FFFFFF',
+                                                            fontWeight: 800,
+                                                            fontSize: '1.2rem',
+                                                            display: 'flex',
+                                                            alignItems: 'center',
+                                                            justifyContent: 'center',
+                                                            flexShrink: 0,
+                                                            userSelect: 'none'
+                                                        }}
+                                                        title={type === 'income' ? 'Inflow (+)' : 'Outflow (-)'}
+                                                    >
+                                                        {type === 'income' ? '+' : '-'}
+                                                    </div>
+                                                )}
+                                                <input
+                                                    type="number"
+                                                    step="0.01"
+                                                    className="form-control"
+                                                    placeholder="0.00"
+                                                    value={amount}
+                                                    onChange={(e) => setAmount(e.target.value)}
+                                                    required
+                                                    style={{
+                                                        fontWeight: 700,
+                                                        fontSize: '1.05rem',
+                                                        color: (type === 'neutral' ? neutralSign === '+' : type === 'income') ? 'var(--success)' : 'var(--danger)'
+                                                    }}
+                                                />
+                                            </div>
                                         </div>
                                         <div className="form-field">
                                             <label>Date</label>
@@ -12884,7 +13283,7 @@ Output format example:
 
                     {showCategoryPicker && (
                         <CategoryPickerModal
-                            categories={filterCategoriesByType(settings.categories || DEFAULT_CATEGORIES, type)}
+                            categories={filterCategoriesByType(settings.categories || DEFAULT_CATEGORIES, type, settings.categoryTypes)}
                             selected={category}
                             onSelect={(cat) => {
                                 setCategory(cat);
@@ -12910,7 +13309,7 @@ Output format example:
             const [processing, setProcessing] = React.useState(false);
             const [statusMsg, setStatusMsg] = React.useState("Extracting text and identifying transactions…");
 
-            const accounts = settings?.accounts || ["Main Checking"];
+            const accounts = settings?.accounts || ["Bank 1", "Bank 2", "Credit Card 1"];
             const [selectedAccount, setSelectedAccount] = React.useState(accounts[0] || "");
             const [customAccount, setCustomAccount] = React.useState("");
             const isCustom = selectedAccount === "__custom__";
@@ -13131,7 +13530,7 @@ Output format example:
                 { key: "date", label: "Date", icon: "📅", desc: "Transaction date", multi: true },
                 { key: "narration", label: "Narration", icon: "📝", desc: "Description / merchant / payee", multi: true },
                 { key: "amount", label: "Amount", icon: "💰", desc: "Transaction value", multi: true },
-                { key: "type", label: "Type", icon: "↕️", desc: "Income or Expense indicator", multi: false },
+                { key: "type", label: "Type", icon: "↕️", desc: "Inflow or Outflow indicator", multi: false },
                 { key: "refId", label: "Ref ID", icon: "🔑", desc: "Reference / cheque / UPI number", multi: true },
                 { key: "account", label: "Account", icon: "🏦", desc: "Bank account or wallet", multi: false },
                 { key: "category", label: "Category", icon: "🗂️", desc: "Auto-matched from rules", multi: false },
@@ -13199,10 +13598,10 @@ Output format example:
                     return "Needs review (auto from rules)";
                 }
                 if (fieldKey === "type") {
-                    if (mapping.type === "expense") return "Expense";
-                    if (mapping.type === "income") return "Income";
-                    if (t.type === "income") return "Income (Credit)";
-                    return "Expense (Debit)";
+                    if (mapping.type === "expense") return "Outflow";
+                    if (mapping.type === "income") return "Inflow";
+                    if (t.type === "income") return "Inflow (Credit)";
+                    return "Outflow (Debit)";
                 }
 
                 if (fieldKey === "amount") {
@@ -13407,8 +13806,8 @@ Output format example:
                                                     onChange={e => setMapping(prev => ({ ...prev, type: e.target.value }))}
                                                 >
                                                     <option value="__auto__">⚡ Auto-detect from Withdrawal/Deposit columns</option>
-                                                    <option value="expense">🔴 Always Expense (Debit)</option>
-                                                    <option value="income">🟢 Always Income (Credit)</option>
+                                                    <option value="expense">🔴 Always Outflow (Debit)</option>
+                                                    <option value="income">🟢 Always Inflow (Credit)</option>
                                                 </select>
                                             ) : field.key === "account" ? (
                                                 <span style={{ fontSize: '0.82rem', color: 'var(--primary)', fontWeight: 600, background: 'var(--primary-light)', padding: '4px 10px', borderRadius: '6px' }}>
@@ -13803,8 +14202,8 @@ Output format example:
                                                             value={item.type}
                                                             onChange={(e) => handleFieldChange(item.tempId, "type", e.target.value)}
                                                         >
-                                                            <option value="expense">🔴 Expense</option>
-                                                            <option value="income">🟢 Income</option>
+                                                            <option value="expense">🔴 Outflow</option>
+                                                            <option value="income">🟢 Inflow</option>
                                                         </select>
                                                     </td>
                                                     <td>
@@ -13945,7 +14344,7 @@ Output format example:
                                             </div>
 
                                             <div className="form-field">
-                                                <label>Income/Expense Flag Column (Optional)</label>
+                                                <label>Inflow/Outflow Flag Column (Optional)</label>
                                                 <select
                                                     className="form-control"
                                                     value={mappings.type}
@@ -13959,7 +14358,7 @@ Output format example:
                                     ) : (
                                         <>
                                             <div className="form-field">
-                                                <label>Debit Amount Column (Expenses)</label>
+                                                <label>Debit Amount Column (Outflows)</label>
                                                 <select
                                                     className="form-control"
                                                     value={mappings.debit}
@@ -13971,7 +14370,7 @@ Output format example:
                                             </div>
 
                                             <div className="form-field">
-                                                <label>Credit Amount Column (Incomes)</label>
+                                                <label>Credit Amount Column (Inflows)</label>
                                                 <select
                                                     className="form-control"
                                                     value={mappings.credit}
