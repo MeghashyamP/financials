@@ -84,6 +84,11 @@
             font-size: inherit;
         }
 
+        input[type="date"]::-webkit-calendar-picker-indicator {
+            display: none;
+            -webkit-appearance: none;
+        }
+
         a {
             color: var(--primary);
             text-decoration: none;
@@ -1297,6 +1302,10 @@
 
             .dashboard-charts {
                 grid-template-columns: 1fr;
+            }
+
+            .category-breakdown-grid {
+                grid-template-columns: 1fr !important;
             }
         }
 
@@ -2686,7 +2695,7 @@
                 dateFormat: "24/Jun/2002 Sun",
                 categories: DEFAULT_CATEGORIES,
                 accounts: ["Main Checking", "Everyday Visa", "Rewards Card", "Cash"],
-                selectedPeriod: "all-time",
+                selectedPeriod: "this_month",
                 netWorthConfigured: false,
                 assetsTotal: 0,
                 liabilitiesTotal: 0,
@@ -2707,6 +2716,12 @@
                     settings[key] = defaultSettings[key];
                 }
             });
+
+            // If selectedPeriod is the old default "all-time", update to "this_month"
+            if (settings.selectedPeriod === "all-time") {
+                settings.selectedPeriod = "this_month";
+                saveSettingInDB("selectedPeriod", "this_month");
+            }
 
             // Migrate categories if needed
             const isOld = !settings.categories || settings.categories.length === 0 ||
@@ -3017,7 +3032,7 @@
                         { key: "currency", value: JSON.stringify("INR") },
                         { key: "categories", value: JSON.stringify(DEFAULT_CATEGORIES) },
                         { key: "accounts", value: JSON.stringify(["Main Checking", "Everyday Visa", "Rewards Card", "Cash"]) },
-                        { key: "selectedPeriod", value: JSON.stringify("all-time") },
+                        { key: "selectedPeriod", value: JSON.stringify("this_month") },
                         { key: "netWorthConfigured", value: JSON.stringify(false) },
                         { key: "assetsTotal", value: JSON.stringify(0) },
                         { key: "liabilitiesTotal", value: JSON.stringify(0) },
@@ -4419,21 +4434,25 @@ Output format example:
         const PeriodSelectOptions = () => (
             <React.Fragment>
                 <optgroup label="Past Periods">
-                    <option value="last_month">Previous Month</option>
-                    <option value="last_3_months">Previous 3 Months</option>
-                    <option value="last_6_months">Previous 6 Months</option>
-                    <option value="last_12_months">Previous 12 Months</option>
+                    <option value="prev_7_days">Past 7 Days</option>
+                    <option value="prev_15_days">Past 15 Days</option>
+                    <option value="prev_month">Previous Month</option>
+                    <option value="prev_3_months">Previous 3 Months</option>
+                    <option value="prev_6_months">Previous 6 Months</option>
+                    <option value="prev_12_months">Previous Year</option>
                 </optgroup>
                 <optgroup label="Current Period">
                     <option value="this_month">Current Month</option>
                     <option value="this_year">Current Year</option>
                 </optgroup>
                 <optgroup label="Future Projections">
+                    <option value="next_7_days">Next 7 Days</option>
+                    <option value="next_15_days">Next 15 Days</option>
                     <option value="next_30_days">Next 30 Days</option>
                     <option value="next_month">Next Month</option>
                     <option value="next_3_months">Next 3 Months</option>
                     <option value="next_6_months">Next 6 Months</option>
-                    <option value="next_12_months">Next 12 Months</option>
+                    <option value="next_12_months">Next Year</option>
                 </optgroup>
                 <optgroup label="General / Custom">
                     <option value="all_time">All Time</option>
@@ -4455,71 +4474,192 @@ Output format example:
             const key = (periodKey || "this_month").toLowerCase().replace(/-/g, "_");
 
             switch (key) {
-                // --- Past Periods ---
-                case "last_month":
+                // --- Single Day ---
+                case "prev_day":
+                case "last_day":
+                case "yesterday":
+                    startDate = new Date(today);
+                    startDate.setDate(startDate.getDate() - 1);
+                    endDate = new Date(startDate);
+                    break;
+                case "this_day":
+                case "today":
+                case "current_day":
+                    startDate = new Date(today);
+                    endDate = new Date(today);
+                    break;
+                case "next_day":
+                case "tomorrow":
+                    startDate = new Date(today);
+                    startDate.setDate(startDate.getDate() + 1);
+                    endDate = new Date(startDate);
+                    break;
+
+                // --- 7 Days ---
+                case "prev_7_days":
+                case "last_7_days":
+                case "past_7_days":
+                case "7_days":
+                    startDate = new Date(today);
+                    startDate.setDate(startDate.getDate() - 6);
+                    endDate = new Date(today);
+                    break;
+                case "this_7_days":
+                    startDate = new Date(today);
+                    startDate.setDate(startDate.getDate() - 3);
+                    endDate = new Date(today);
+                    endDate.setDate(endDate.getDate() + 3);
+                    break;
+                case "next_7_days":
+                    startDate = new Date(today);
+                    endDate = new Date(today);
+                    endDate.setDate(endDate.getDate() + 6);
+                    break;
+
+                // --- Calendar Week ---
+                case "prev_week":
+                case "last_week": {
+                    const dayOfWeek = today.getDay() || 7;
+                    startDate = new Date(today);
+                    startDate.setDate(today.getDate() - dayOfWeek - 6);
+                    endDate = new Date(today);
+                    endDate.setDate(today.getDate() - dayOfWeek);
+                    break;
+                }
+                case "this_week":
+                case "week": {
+                    const dayOfWeek = today.getDay() || 7;
+                    startDate = new Date(today);
+                    startDate.setDate(today.getDate() - dayOfWeek + 1);
+                    endDate = new Date(today);
+                    endDate.setDate(today.getDate() + (7 - dayOfWeek));
+                    break;
+                }
+                case "next_week": {
+                    const dayOfWeek = today.getDay() || 7;
+                    startDate = new Date(today);
+                    startDate.setDate(today.getDate() + (8 - dayOfWeek));
+                    endDate = new Date(today);
+                    endDate.setDate(today.getDate() + (14 - dayOfWeek));
+                    break;
+                }
+
+                // --- 15 Days ---
+                case "prev_15_days":
+                case "last_15_days":
+                case "past_15_days":
+                case "15_days":
+                case "15days":
+                    startDate = new Date(today);
+                    startDate.setDate(startDate.getDate() - 14);
+                    endDate = new Date(today);
+                    break;
+                case "this_15_days":
+                    startDate = new Date(today);
+                    startDate.setDate(startDate.getDate() - 7);
+                    endDate = new Date(today);
+                    endDate.setDate(endDate.getDate() + 7);
+                    break;
+                case "next_15_days":
+                    startDate = new Date(today);
+                    endDate = new Date(today);
+                    endDate.setDate(endDate.getDate() + 14);
+                    break;
+
+                // --- 30 Days ---
+                case "prev_30_days":
+                case "last_30_days":
+                case "past_30_days":
+                case "30_days":
+                    startDate = new Date(today);
+                    startDate.setDate(startDate.getDate() - 29);
+                    endDate = new Date(today);
+                    break;
+                case "this_30_days":
+                    startDate = new Date(today);
+                    startDate.setDate(startDate.getDate() - 15);
+                    endDate = new Date(today);
+                    endDate.setDate(endDate.getDate() + 14);
+                    break;
+                case "next_30_days":
+                    startDate = new Date(today);
+                    endDate = new Date(today);
+                    endDate.setDate(endDate.getDate() + 29);
+                    break;
+
+                // --- Month ---
                 case "prev_month":
+                case "last_month":
                 case "previous_month":
                     startDate = new Date(year, month - 1, 1);
                     endDate = new Date(year, month, 0);
                     break;
-                case "last_3_months":
-                case "prev_3_months":
-                case "previous_3_months":
-                    startDate = new Date(year, month - 3, 1);
-                    endDate = new Date(year, month, 0);
-                    break;
-                case "last_6_months":
-                case "prev_6_months":
-                case "previous_6_months":
-                    startDate = new Date(year, month - 6, 1);
-                    endDate = new Date(year, month, 0);
-                    break;
-                case "last_12_months":
-                case "prev_12_months":
-                case "previous_12_months":
-                case "last_year":
-                case "past_year":
-                    startDate = new Date(year, month - 12, 1);
-                    endDate = new Date(year, month, 0);
-                    break;
-
-                // --- Current Period ---
                 case "this_month":
                 case "current_month":
                 case "monthly":
                     startDate = new Date(year, month, 1);
                     endDate = new Date(year, month + 1, 0);
                     break;
-                case "this_year":
-                case "current_year":
-                    startDate = new Date(year, 0, 1);
-                    endDate = new Date(year, 11, 31);
-                    break;
-
-                // --- Future Projections ---
-                case "next_30_days":
-                    startDate = new Date(today);
-                    endDate = new Date(today);
-                    endDate.setDate(endDate.getDate() + 30);
-                    break;
                 case "next_month":
                     startDate = new Date(year, month + 1, 1);
                     endDate = new Date(year, month + 2, 0);
+                    break;
+
+                // --- 3 Months ---
+                case "prev_3_months":
+                case "last_3_months":
+                case "previous_3_months":
+                    startDate = new Date(year, month - 3, 1);
+                    endDate = new Date(year, month, 0);
+                    break;
+                case "this_3_months":
+                case "this_quarter":
+                    startDate = new Date(year, month, 1);
+                    endDate = new Date(year, month + 3, 0);
                     break;
                 case "next_3_months":
                 case "next_quarter":
                     startDate = new Date(year, month + 1, 1);
                     endDate = new Date(year, month + 4, 0);
                     break;
+
+                // --- 6 Months ---
+                case "prev_6_months":
+                case "last_6_months":
+                case "previous_6_months":
+                    startDate = new Date(year, month - 6, 1);
+                    endDate = new Date(year, month, 0);
+                    break;
+                case "this_6_months":
+                case "this_half_year":
+                    startDate = new Date(year, month, 1);
+                    endDate = new Date(year, month + 6, 0);
+                    break;
                 case "next_6_months":
                 case "next_half_year":
                     startDate = new Date(year, month + 1, 1);
                     endDate = new Date(year, month + 7, 0);
                     break;
+
+                // --- 12 Months / Year ---
+                case "prev_12_months":
+                case "last_12_months":
+                case "previous_12_months":
+                case "last_year":
+                case "past_year":
+                    startDate = new Date(year - 1, 0, 1);
+                    endDate = new Date(year - 1, 11, 31);
+                    break;
+                case "this_12_months":
+                case "this_year":
+                case "current_year":
+                    startDate = new Date(year, 0, 1);
+                    endDate = new Date(year, 11, 31);
+                    break;
                 case "next_12_months":
                 case "next_year":
-                    startDate = new Date(year, month + 1, 1);
-                    endDate = new Date(year, month + 13, 0);
+                    startDate = new Date(year + 1, 0, 1);
+                    endDate = new Date(year + 1, 11, 31);
                     break;
 
                 // --- All Time & Custom ---
@@ -4553,6 +4693,231 @@ Output format example:
                 pEndStr: fmt(endDate),
                 displayRange: key === "all_time" || key === "all" ? "All Time" : `${fmt(startDate)} to ${fmt(endDate)}`
             };
+        };
+
+        // --- SUB-COMPONENT: Modern Segmented Date Filter Popover ---
+        const ModernDateFilterPicker = ({ value, onChange }) => {
+            const [isOpen, setIsOpen] = React.useState(false);
+            const containerRef = React.useRef(null);
+
+            React.useEffect(() => {
+                const handleClickOutside = (e) => {
+                    if (containerRef.current && !containerRef.current.contains(e.target)) {
+                        setIsOpen(false);
+                    }
+                };
+                document.addEventListener("mousedown", handleClickOutside);
+                return () => document.removeEventListener("mousedown", handleClickOutside);
+            }, []);
+
+            const parseKey = (keyStr) => {
+                const k = (keyStr || "this_month").toLowerCase().replace(/-/g, "_");
+                if (k === "all_time" || k === "all") return { direction: "all", duration: "all" };
+                if (k === "custom" || k === "custom_range") return { direction: "custom", duration: "custom" };
+
+                let direction = "current";
+                if (k.startsWith("last_") || k.startsWith("prev_") || k.startsWith("previous_") || k.includes("past")) {
+                    direction = "previous";
+                } else if (k.startsWith("next_") || k.startsWith("future_")) {
+                    direction = "next";
+                } else if (k.startsWith("this_") || k.startsWith("current_")) {
+                    direction = "current";
+                }
+
+                let duration = "month";
+                if (k.includes("day") && !k.includes("days")) duration = "day";
+                else if (k.includes("7_days") || k.includes("7days")) duration = "7_days";
+                else if (k.includes("week")) duration = "week";
+                else if (k.includes("15_days") || k.includes("15days")) duration = "15_days";
+                else if (k.includes("30_days") || k.includes("30days")) duration = "30_days";
+                else if (k.includes("3_months") || k.includes("quarter")) duration = "3_months";
+                else if (k.includes("6_months") || k.includes("half_year")) duration = "6_months";
+                else if (k.includes("12_months") || k.includes("year")) duration = "12_months";
+                else if (k.includes("month")) duration = "month";
+
+                return { direction, duration };
+            };
+
+            const { direction, duration } = parseKey(value);
+
+            const getDisplayLabel = (keyStr) => {
+                const { direction: dir, duration: dur } = parseKey(keyStr);
+                if (dir === "all") return "All Time";
+                if (dir === "custom") return "Custom Range";
+
+                const dirLabel = dir === "previous" ? "Previous" : dir === "next" ? "Next" : "Current";
+                const durLabelMap = {
+                    day: "Day",
+                    "7_days": "7 Days",
+                    week: "Week",
+                    "15_days": "15 Days",
+                    "30_days": "30 Days",
+                    month: "Month",
+                    "3_months": "3 Months",
+                    "6_months": "6 Months",
+                    "12_months": "Year"
+                };
+
+                return `${dirLabel} ${durLabelMap[dur] || "Month"}`;
+            };
+
+            const handleSelectCombination = (newDir, newDur) => {
+                if (newDir === "all") {
+                    onChange("all_time");
+                } else if (newDir === "custom") {
+                    onChange("custom");
+                } else {
+                    const dirPrefixMap = { previous: "prev", current: "this", next: "next" };
+                    const prefix = dirPrefixMap[newDir] || "this";
+                    const targetKey = `${prefix}_${newDur}`;
+                    onChange(targetKey);
+                }
+                setIsOpen(false);
+            };
+
+            const directions = [
+                { id: "previous", label: "Previous" },
+                { id: "current", label: "Current" },
+                { id: "next", label: "Next" },
+                { id: "all", label: "All Time" },
+                { id: "custom", label: "Custom" }
+            ];
+
+            const durations = [
+                { id: "day", label: "Day" },
+                { id: "7_days", label: "7 Days" },
+                { id: "week", label: "Week" },
+                { id: "15_days", label: "15 Days" },
+                { id: "30_days", label: "30 Days" },
+                { id: "month", label: "Month" },
+                { id: "3_months", label: "3 Months" },
+                { id: "6_months", label: "6 Months" },
+                { id: "12_months", label: "Year" }
+            ];
+
+            return (
+                <div ref={containerRef} style={{ position: 'relative', display: 'inline-block' }}>
+                    {/* Trigger Button */}
+                    <button
+                        type="button"
+                        onClick={() => setIsOpen(!isOpen)}
+                        style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            width: '145px',
+                            minWidth: '145px',
+                            maxWidth: '145px',
+                            height: '28px',
+                            padding: '2px 10px',
+                            fontSize: '0.81rem',
+                            fontWeight: 600,
+                            borderRadius: '6px',
+                            background: 'var(--card-bg)',
+                            border: '1px solid var(--border-color)',
+                            color: 'var(--text-main)',
+                            cursor: 'pointer',
+                            boxShadow: 'var(--shadow-sm)',
+                            whiteSpace: 'nowrap'
+                        }}
+                    >
+                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', flex: 1, textAlign: 'center' }}>{getDisplayLabel(value)}</span>
+                        <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)', marginLeft: '4px', flexShrink: 0 }}>▼</span>
+                    </button>
+
+                    {/* Popover Menu */}
+                    {isOpen && (
+                        <div style={{
+                            position: 'absolute',
+                            top: 'calc(100% + 6px)',
+                            left: 0,
+                            zIndex: 1000,
+                            width: '340px',
+                            padding: '14px',
+                            borderRadius: '12px',
+                            background: 'var(--card-bg)',
+                            border: '1px solid var(--border-color)',
+                            boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.2), 0 8px 10px -6px rgba(0, 0, 0, 0.1)',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: '14px'
+                        }}>
+                            {/* Section 1: Scope / Direction */}
+                            <div>
+                                <div style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '8px' }}>
+                                    Period Scope
+                                </div>
+                                <div style={{ display: 'flex', background: 'var(--bg-color)', padding: '3px', borderRadius: '8px', gap: '2px' }}>
+                                    {directions.map(d => {
+                                        const active = direction === d.id;
+                                        return (
+                                            <button
+                                                key={d.id}
+                                                type="button"
+                                                onClick={() => {
+                                                    if (d.id === "all" || d.id === "custom") {
+                                                        handleSelectCombination(d.id, duration);
+                                                    } else {
+                                                        handleSelectCombination(d.id, duration === "all" || duration === "custom" ? "month" : duration);
+                                                    }
+                                                }}
+                                                style={{
+                                                    flex: 1,
+                                                    padding: '5px 4px',
+                                                    fontSize: '0.74rem',
+                                                    fontWeight: active ? 700 : 500,
+                                                    border: 'none',
+                                                    borderRadius: '6px',
+                                                    background: active ? 'var(--primary)' : 'transparent',
+                                                    color: active ? '#FFFFFF' : 'var(--text-main)',
+                                                    cursor: 'pointer',
+                                                    transition: 'all 0.15s ease'
+                                                }}
+                                            >
+                                                {d.label}
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                            </div>
+
+                            {/* Section 2: Duration / Interval */}
+                            {direction !== "all" && direction !== "custom" && (
+                                <div>
+                                    <div style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '8px' }}>
+                                        Duration Interval
+                                    </div>
+                                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '6px' }}>
+                                        {durations.map(durItem => {
+                                            const active = duration === durItem.id;
+                                            return (
+                                                <button
+                                                    key={durItem.id}
+                                                    type="button"
+                                                    onClick={() => handleSelectCombination(direction === "all" || direction === "custom" ? "current" : direction, durItem.id)}
+                                                    style={{
+                                                        padding: '6px 8px',
+                                                        fontSize: '0.78rem',
+                                                        fontWeight: active ? 700 : 500,
+                                                        border: active ? '1px solid var(--primary)' : '1px solid var(--border-color)',
+                                                        borderRadius: '8px',
+                                                        background: active ? 'rgba(99, 102, 241, 0.15)' : 'var(--bg-color)',
+                                                        color: active ? 'var(--primary)' : 'var(--text-main)',
+                                                        cursor: 'pointer',
+                                                        transition: 'all 0.15s ease'
+                                                    }}
+                                                >
+                                                    {durItem.label}
+                                                </button>
+                                            );
+                                        })}
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    )}
+                </div>
+            );
         };
 
         const getOccurrencesInPeriod = (item, pStartStr, pEndStr) => {
@@ -5783,7 +6148,7 @@ Output format example:
                                     {/* Line 2: Period (center aligned) */}
                                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: '100%' }}>
                                         {/* Unified Date Selector controls */}
-                                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'nowrap', background: 'var(--card-bg)', padding: '3px 8px', height: '36px', borderRadius: '8px', border: '1px solid var(--border-color)', boxShadow: '0 1px 3px rgba(0,0,0,0.04)', boxSizing: 'border-box' }}>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'nowrap', background: 'var(--card-bg)', padding: '3px 8px', height: '36px', borderRadius: '8px', border: '1px solid var(--border-color)', boxShadow: '0 1px 3px rgba(0,0,0,0.04)', boxSizing: 'border-box', width: '403px', minWidth: '403px', maxWidth: '403px' }}>
                                             {/* Left: Start Date Picker */}
                                             <div
                                                 style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', cursor: 'pointer' }}
@@ -5797,7 +6162,7 @@ Output format example:
                                                     }
                                                 }}
                                             >
-                                                <div className="form-control" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.8rem', padding: '2px 8px', height: '28px', cursor: 'pointer', background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: '6px', whiteSpace: 'nowrap', minWidth: '95px' }}>
+                                                <div className="form-control" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.8rem', padding: '2px 8px', height: '28px', cursor: 'pointer', background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: '6px', whiteSpace: 'nowrap', width: '115px', minWidth: '115px', maxWidth: '115px' }}>
                                                     <span style={{ fontWeight: 500 }}>{formatDate(displayStartDate, settings.dateFormat)}</span>
                                                 </div>
                                                 <input
@@ -5809,15 +6174,11 @@ Output format example:
                                                 />
                                             </div>
 
-                                            {/* Center: Selected Period Dropdown */}
-                                            <select
-                                                className="form-control"
-                                                style={{ width: 'auto', minWidth: '150px', fontSize: '0.82rem', padding: '2px 8px', height: '28px', cursor: 'pointer', fontWeight: 500 }}
+                                            {/* Center: Selected Period Selector */}
+                                            <ModernDateFilterPicker
                                                 value={normPeriodKey}
-                                                onChange={(e) => handleUnifiedPeriodChange(e.target.value)}
-                                            >
-                                                <PeriodSelectOptions />
-                                            </select>
+                                                onChange={handleUnifiedPeriodChange}
+                                            />
 
                                             {/* Right: End Date Picker */}
                                             <div
@@ -5832,7 +6193,7 @@ Output format example:
                                                     }
                                                 }}
                                             >
-                                                <div className="form-control" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.8rem', padding: '2px 8px', height: '28px', cursor: 'pointer', background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: '6px', whiteSpace: 'nowrap', minWidth: '95px' }}>
+                                                <div className="form-control" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.8rem', padding: '2px 8px', height: '28px', cursor: 'pointer', background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: '6px', whiteSpace: 'nowrap', width: '115px', minWidth: '115px', maxWidth: '115px' }}>
                                                     <span style={{ fontWeight: 500 }}>{formatDate(displayEndDate, settings.dateFormat)}</span>
                                                 </div>
                                                 <input
@@ -6067,7 +6428,7 @@ Output format example:
                                         </div>
 
                                         {/* Unified Period Selector */}
-                                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'nowrap', background: 'var(--card-bg)', padding: '3px 8px', height: '36px', borderRadius: '8px', border: '1px solid var(--border-color)', boxShadow: '0 1px 3px rgba(0,0,0,0.04)', boxSizing: 'border-box' }}>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'nowrap', background: 'var(--card-bg)', padding: '3px 8px', height: '36px', borderRadius: '8px', border: '1px solid var(--border-color)', boxShadow: '0 1px 3px rgba(0,0,0,0.04)', boxSizing: 'border-box', width: '403px', minWidth: '403px', maxWidth: '403px' }}>
                                             <div
                                                 style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', cursor: 'pointer' }}
                                                 onClick={(e) => {
@@ -6080,7 +6441,7 @@ Output format example:
                                                     }
                                                 }}
                                             >
-                                                <div className="form-control" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.8rem', padding: '2px 8px', height: '28px', cursor: 'pointer', background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: '6px', whiteSpace: 'nowrap', minWidth: '95px' }}>
+                                                <div className="form-control" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.8rem', padding: '2px 8px', height: '28px', cursor: 'pointer', background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: '6px', whiteSpace: 'nowrap', width: '115px', minWidth: '115px', maxWidth: '115px' }}>
                                                     <span style={{ fontWeight: 500 }}>{formatDate(displayStartDate, settings.dateFormat)}</span>
                                                 </div>
                                                 <input
@@ -6092,14 +6453,10 @@ Output format example:
                                                 />
                                             </div>
 
-                                            <select
-                                                className="form-control"
-                                                style={{ width: 'auto', minWidth: '120px', fontSize: '0.82rem', padding: '2px 6px', height: '28px', cursor: 'pointer', fontWeight: 500 }}
+                                            <ModernDateFilterPicker
                                                 value={normPeriodKey}
-                                                onChange={(e) => handleUnifiedPeriodChange(e.target.value)}
-                                            >
-                                                <PeriodSelectOptions />
-                                            </select>
+                                                onChange={handleUnifiedPeriodChange}
+                                            />
 
                                             <div
                                                 style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', cursor: 'pointer' }}
@@ -6113,7 +6470,7 @@ Output format example:
                                                     }
                                                 }}
                                             >
-                                                <div className="form-control" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.8rem', padding: '2px 8px', height: '28px', cursor: 'pointer', background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: '6px', whiteSpace: 'nowrap', minWidth: '95px' }}>
+                                                <div className="form-control" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.8rem', padding: '2px 8px', height: '28px', cursor: 'pointer', background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: '6px', whiteSpace: 'nowrap', width: '115px', minWidth: '115px', maxWidth: '115px' }}>
                                                     <span style={{ fontWeight: 500 }}>{formatDate(displayEndDate, settings.dateFormat)}</span>
                                                 </div>
                                                 <input
@@ -6156,7 +6513,7 @@ Output format example:
                                         </div>
 
                                         {/* Date range picker */}
-                                        <div style={{ display: 'flex', alignItems: 'center', gap: '5px', background: 'var(--card-bg)', padding: '3px 8px', height: '34px', borderRadius: '8px', border: '1px solid var(--border-color)', boxSizing: 'border-box', flexShrink: 0 }}>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '5px', background: 'var(--card-bg)', padding: '3px 8px', height: '34px', borderRadius: '8px', border: '1px solid var(--border-color)', boxSizing: 'border-box', flexShrink: 0, width: '403px', minWidth: '403px', maxWidth: '403px' }}>
                                             {/* Start Date */}
                                             <div
                                                 style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', cursor: 'pointer' }}
@@ -6165,14 +6522,15 @@ Output format example:
                                                     if (inputEl) { try { if (inputEl.showPicker) inputEl.showPicker(); else inputEl.focus(); } catch (err) { } }
                                                 }}
                                             >
-                                                <div className="form-control" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.79rem', padding: '2px 7px', height: '26px', cursor: 'pointer', background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: '6px', whiteSpace: 'nowrap', minWidth: '88px' }}>
+                                                <div className="form-control" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.79rem', padding: '2px 7px', height: '26px', cursor: 'pointer', background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: '6px', whiteSpace: 'nowrap', width: '115px', minWidth: '115px', maxWidth: '115px' }}>
                                                     <span style={{ fontWeight: 500 }}>{formatDate(displayStartDate, settings.dateFormat)}</span>
                                                 </div>
                                                 <input type="date" value={displayStartDate} onChange={(e) => handleStartDateChange(e.target.value)} style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', opacity: 0, cursor: 'pointer' }} title="Start Date" />
                                             </div>
-                                            <select className="form-control" style={{ width: 'auto', minWidth: '110px', fontSize: '0.79rem', padding: '2px 5px', height: '26px', cursor: 'pointer', fontWeight: 500 }} value={normPeriodKey} onChange={(e) => handleUnifiedPeriodChange(e.target.value)}>
-                                                <PeriodSelectOptions />
-                                            </select>
+                                            <ModernDateFilterPicker
+                                                value={normPeriodKey}
+                                                onChange={handleUnifiedPeriodChange}
+                                            />
                                             {/* End Date */}
                                             <div
                                                 style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', cursor: 'pointer' }}
@@ -6181,7 +6539,7 @@ Output format example:
                                                     if (inputEl) { try { if (inputEl.showPicker) inputEl.showPicker(); else inputEl.focus(); } catch (err) { } }
                                                 }}
                                             >
-                                                <div className="form-control" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.79rem', padding: '2px 7px', height: '26px', cursor: 'pointer', background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: '6px', whiteSpace: 'nowrap', minWidth: '88px' }}>
+                                                <div className="form-control" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.79rem', padding: '2px 7px', height: '26px', cursor: 'pointer', background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: '6px', whiteSpace: 'nowrap', width: '115px', minWidth: '115px', maxWidth: '115px' }}>
                                                     <span style={{ fontWeight: 500 }}>{formatDate(displayEndDate, settings.dateFormat)}</span>
                                                 </div>
                                                 <input type="date" value={displayEndDate} onChange={(e) => handleEndDateChange(e.target.value)} style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', opacity: 0, cursor: 'pointer' }} title="End Date" />
@@ -6286,7 +6644,7 @@ Output format example:
                                         </>
                                     )}
                                     {activePage === "budgets" && (
-                                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'nowrap', background: 'var(--card-bg)', padding: '4px 8px', height: '40px', borderRadius: '8px', border: '1px solid var(--border-color)', boxShadow: '0 1px 3px rgba(0,0,0,0.04)', boxSizing: 'border-box' }}>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'nowrap', background: 'var(--card-bg)', padding: '4px 8px', height: '40px', borderRadius: '8px', border: '1px solid var(--border-color)', boxShadow: '0 1px 3px rgba(0,0,0,0.04)', boxSizing: 'border-box', width: '403px', minWidth: '403px', maxWidth: '403px' }}>
                                             {/* Left: Start Date Picker */}
                                             <div
                                                 style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', cursor: 'pointer' }}
@@ -6300,7 +6658,7 @@ Output format example:
                                                     }
                                                 }}
                                             >
-                                                <div className="form-control" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.8rem', padding: '2px 10px', height: '30px', cursor: 'pointer', background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: '6px', whiteSpace: 'nowrap', minWidth: '105px' }}>
+                                                <div className="form-control" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.8rem', padding: '2px 10px', height: '30px', cursor: 'pointer', background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: '6px', whiteSpace: 'nowrap', width: '115px', minWidth: '115px', maxWidth: '115px' }}>
                                                     <span style={{ fontWeight: 500 }}>{formatDate(displayStartDate, settings.dateFormat)}</span>
                                                 </div>
                                                 <input
@@ -6312,15 +6670,11 @@ Output format example:
                                                 />
                                             </div>
 
-                                            {/* Center: Selected Period Dropdown */}
-                                            <select
-                                                className="form-control"
-                                                style={{ width: 'auto', minWidth: '150px', fontSize: '0.82rem', padding: '2px 8px', height: '30px', cursor: 'pointer', fontWeight: 500 }}
+                                            {/* Center: Selected Period Selector */}
+                                            <ModernDateFilterPicker
                                                 value={normPeriodKey}
-                                                onChange={(e) => handleUnifiedPeriodChange(e.target.value)}
-                                            >
-                                                <PeriodSelectOptions />
-                                            </select>
+                                                onChange={handleUnifiedPeriodChange}
+                                            />
 
                                             {/* Right: End Date Picker */}
                                             <div
@@ -6335,7 +6689,7 @@ Output format example:
                                                     }
                                                 }}
                                             >
-                                                <div className="form-control" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.8rem', padding: '2px 10px', height: '30px', cursor: 'pointer', background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: '6px', whiteSpace: 'nowrap', minWidth: '105px' }}>
+                                                <div className="form-control" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.8rem', padding: '2px 10px', height: '30px', cursor: 'pointer', background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: '6px', whiteSpace: 'nowrap', width: '115px', minWidth: '115px', maxWidth: '115px' }}>
                                                     <span style={{ fontWeight: 500 }}>{formatDate(displayEndDate, settings.dateFormat)}</span>
                                                 </div>
                                                 <input
@@ -6381,6 +6735,7 @@ Output format example:
                                     updateSetting={updateSetting}
                                     loadState={loadState}
                                     showToast={showToast}
+                                    setTxCategoryFilter={setTxCategoryFilter}
                                 />
                             )}
                             {activePage === "transactions" && (
@@ -6579,7 +6934,7 @@ Output format example:
         };
 
         // --- SUB-PAGE: Dashboard ---
-        const DashboardPage = ({ transactions, allTransactions, settings, setActivePage, updateSetting, loadState, showToast }) => {
+        const DashboardPage = ({ transactions, allTransactions, settings, setActivePage, updateSetting, loadState, showToast, setTxCategoryFilter }) => {
             const expenseTx = transactions.filter(t => t.type === "expense");
             const incomeTx = transactions.filter(t => t.type === "income");
             const fullTx = allTransactions || transactions;
@@ -6591,10 +6946,24 @@ Output format example:
             const spendingSum = expenseTx.reduce((s, t) => s + t.amount, 0);
             const formatCurrency = (val) => formatCurrencyVal(val, settings.currency || "INR");
 
-            // Calculate category breakdown for donut chart
-            const categoryBreakdown = {};
+            // Calculate main category breakdown, transaction counts, and subcategory mappings
+            const mainCategoryBreakdown = {};
+            const mainCategoryTxCounts = {};
+            const subcategoryMap = {};
+
             expenseTx.forEach(t => {
-                categoryBreakdown[t.category] = (categoryBreakdown[t.category] || 0) + t.amount;
+                const fullCat = t.category || "Uncategorized";
+                const mainCat = fullCat.includes(" - ") ? fullCat.split(" - ")[0] : fullCat;
+
+                mainCategoryBreakdown[mainCat] = (mainCategoryBreakdown[mainCat] || 0) + t.amount;
+                mainCategoryTxCounts[mainCat] = (mainCategoryTxCounts[mainCat] || 0) + 1;
+
+                if (!subcategoryMap[mainCat]) subcategoryMap[mainCat] = {};
+                if (!subcategoryMap[mainCat][fullCat]) {
+                    subcategoryMap[mainCat][fullCat] = { amount: 0, count: 0 };
+                }
+                subcategoryMap[mainCat][fullCat].amount += t.amount;
+                subcategoryMap[mainCat][fullCat].count += 1;
             });
 
             // Sort transactions: newest 5
@@ -6602,34 +6971,23 @@ Output format example:
 
             return (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-                    {/* SVG Graphic Charts Row */}
-                    <div className="dashboard-charts" style={{ margin: 0 }}>
-
-                        {/* Chart 1: Cash Flow Line/Area Chart */}
-                        <div className="chart-card">
-                            {transactions.length === 0 ? (
-                                <div className="empty-state" style={{ width: '100%', height: '100%', border: 'none' }}>
-                                    <Icon name="home" />
-                                    <h3>No Trends Available</h3>
-                                    <p>Import or add transactions to see cash flow trends.</p>
-                                </div>
-                            ) : (
-                                <CashFlowSvgChart transactions={transactions} settings={settings} />
-                            )}
-                        </div>
-
-                        {/* Chart 2: Category Pie/Donut Chart */}
-                        <div className="chart-card">
-                            {expenseTx.length === 0 ? (
-                                <div className="empty-state" style={{ width: '100%', height: '100%', border: 'none' }}>
-                                    <Icon name="budgets" />
-                                    <h3>No Expenses Recorded</h3>
-                                    <p>Create expenses to visualize category spending.</p>
-                                </div>
-                            ) : (
-                                <CategoryDonutSvgChart breakdown={categoryBreakdown} total={spendingSum} settings={settings} />
-                            )}
-                        </div>
+                    {/* Expanded Category Spending Breakdown Section */}
+                    <div className="section-card" style={{ background: 'var(--card-bg)', margin: 0, padding: '24px' }}>
+                        <CategoryDonutSvgChart
+                            mainBreakdown={mainCategoryBreakdown}
+                            mainTxCounts={mainCategoryTxCounts}
+                            subBreakdownMap={subcategoryMap}
+                            total={spendingSum}
+                            settings={settings}
+                            onViewTransactions={(catName) => {
+                                if (setTxCategoryFilter) {
+                                    setTxCategoryFilter(catName);
+                                }
+                                if (setActivePage) {
+                                    setActivePage("transactions");
+                                }
+                            }}
+                        />
                     </div>
 
                     {/* Financial Intelligence & Smart Insights Bar */}
@@ -7756,24 +8114,67 @@ Output format example:
             );
         };
 
-        // --- SUB-COMPONENT: Custom SVG Category Donut Spend Chart ---
-        const CategoryDonutSvgChart = ({ breakdown, total, settings }) => {
+        // --- SUB-COMPONENT: Custom SVG Category Donut Spend Chart (Main Category Rollup & Subcategory Drill-down) ---
+        const CategoryDonutSvgChart = ({ mainBreakdown = {}, mainTxCounts = {}, subBreakdownMap = {}, total = 0, settings, onViewTransactions }) => {
+            const [selectedMainCategory, setSelectedMainCategory] = React.useState(null);
             const [hoveredIndex, setHoveredIndex] = React.useState(null);
 
-            const categories = Object.keys(breakdown);
-            const data = categories.map(cat => ({
-                label: cat,
-                value: breakdown[cat],
-                percentage: total > 0 ? (breakdown[cat] / total) * 100 : 0
-            })).sort((a, b) => b.value - a.value);
+            const formatCurrency = (val) => formatCurrencyVal(val, settings?.currency || "INR");
 
-            const colors = ["#6558D3", "#3B82F6", "#10B981", "#F59E0B", "#EF4444", "#EC4899", "#8B5CF6", "#06B6D4", "#10B981", "#6B7280"];
+            const isSubView = selectedMainCategory !== null;
+
+            // Determine data set based on view mode
+            let currentBreakdown = {};
+            let currentTxCounts = {};
+            let viewTotal = total;
+
+            if (isSubView) {
+                const subObj = subBreakdownMap[selectedMainCategory] || {};
+                Object.keys(subObj).forEach(subKey => {
+                    currentBreakdown[subKey] = subObj[subKey].amount;
+                    currentTxCounts[subKey] = subObj[subKey].count;
+                });
+                viewTotal = mainBreakdown[selectedMainCategory] || 0;
+            } else {
+                currentBreakdown = mainBreakdown;
+                currentTxCounts = mainTxCounts;
+            }
+
+            const categories = Object.keys(currentBreakdown);
+            const data = categories.map(catKey => {
+                const val = currentBreakdown[catKey];
+                const count = currentTxCounts[catKey] || 0;
+                const percentage = viewTotal > 0 ? (val / viewTotal) * 100 : 0;
+
+                let displayLabel = catKey;
+                if (isSubView && catKey.includes(" - ")) {
+                    displayLabel = catKey.split(" - ")[1];
+                }
+
+                const subCount = !isSubView && subBreakdownMap[catKey] ? Object.keys(subBreakdownMap[catKey]).length : 0;
+
+                return {
+                    key: catKey,
+                    label: catKey,
+                    displayLabel: displayLabel,
+                    value: val,
+                    count: count,
+                    percentage: percentage,
+                    subCount: subCount
+                };
+            }).sort((a, b) => b.value - a.value);
+
+            const colors = [
+                "#EF4444", "#F59E0B", "#10B981", "#3B82F6", "#8B5CF6",
+                "#EC4899", "#06B6D4", "#F97316", "#14B8A6", "#84CC16",
+                "#64748B"
+            ];
 
             let accumulatedAngle = 0;
             const segments = data.map((d, idx) => {
-                const angle = (d.value / total) * 360;
+                const angle = viewTotal > 0 ? (d.value / viewTotal) * 360 : 0;
                 const strokeDashOffset = 100 - (accumulatedAngle / 360) * 100;
-                const strokeDashArray = `${(d.value / total) * 100} ${100 - (d.value / total) * 100}`;
+                const strokeDashArray = `${viewTotal > 0 ? (d.value / viewTotal) * 100 : 0} ${100 - (viewTotal > 0 ? (d.value / viewTotal) * 100 : 0)}`;
                 accumulatedAngle += angle;
                 return {
                     ...d,
@@ -7784,92 +8185,324 @@ Output format example:
             });
 
             const activeSeg = hoveredIndex !== null ? segments[hoveredIndex] : null;
-            const formatCurrency = (val) => formatCurrencyVal(val, settings.currency || "INR");
+
+            if (segments.length === 0 || total <= 0) {
+                return (
+                    <div className="empty-state" style={{ width: '100%', padding: '40px 20px', border: 'none', background: 'transparent' }}>
+                        <Icon name="budgets" />
+                        <h3 style={{ marginTop: '12px', fontSize: '1.1rem' }}>No Expenses Recorded</h3>
+                        <p style={{ color: 'var(--text-muted)', fontSize: '0.88rem' }}>Create or import expenses to visualize category spending.</p>
+                    </div>
+                );
+            }
+
+            const topCategory = segments[0];
+            const totalTxCount = segments.reduce((sum, s) => sum + s.count, 0);
 
             return (
-                <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <span style={{ fontWeight: 600, fontSize: '1.05rem', color: 'var(--text-main)' }}>Expenses by Category</span>
-                        <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
-                            {segments.length} Categor{segments.length === 1 ? 'y' : 'ies'}
-                        </span>
-                    </div>
-
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
-                        {/* Interactive SVG Donut */}
-                        <div style={{ width: '135px', height: '135px', position: 'relative', flexShrink: 0 }}>
-                            <svg width="100%" height="100%" viewBox="0 0 42 42" style={{ overflow: 'visible' }}>
-                                <circle cx="21" cy="21" r="15.915" fill="transparent" stroke="#F1F5F9" strokeWidth="3.5"></circle>
-
-                                {segments.map((seg, idx) => (
-                                    <circle
-                                        key={idx}
-                                        cx="21"
-                                        cy="21"
-                                        r="15.915"
-                                        fill="transparent"
-                                        stroke={seg.color}
-                                        strokeWidth={hoveredIndex === idx ? "5" : "3.8"}
-                                        strokeDasharray={seg.strokeDashArray}
-                                        strokeDashoffset={seg.strokeDashOffset}
-                                        transform="rotate(-90 21 21)"
-                                        onMouseEnter={() => setHoveredIndex(idx)}
-                                        onMouseLeave={() => setHoveredIndex(null)}
-                                        style={{ transition: 'stroke-width 0.2s ease, opacity 0.2s ease', opacity: (hoveredIndex === null || hoveredIndex === idx) ? 1 : 0.45, cursor: 'pointer' }}
-                                    ></circle>
-                                ))}
-                            </svg>
-
-                            {/* Centered Total / Focused Category Display text */}
-                            <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', textAlign: 'center', width: '80%' }}>
-                                <span style={{ fontSize: '0.65rem', textTransform: 'uppercase', color: 'var(--text-muted)', display: 'block', fontWeight: 600, letterSpacing: '0.04em' }}>
-                                    {activeSeg ? activeSeg.label : "Total Spend"}
+                <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                    {/* Header bar with title, centered back button & summary chips */}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
+                        {/* Left side: Icon & Title */}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                            <div style={{
+                                width: '36px',
+                                height: '36px',
+                                borderRadius: '10px',
+                                background: 'linear-gradient(135deg, rgba(99, 102, 241, 0.15), rgba(59, 130, 246, 0.15))',
+                                border: '1px solid rgba(99, 102, 241, 0.3)',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                color: 'var(--primary)'
+                            }}>
+                                <Icon name="budgets" />
+                            </div>
+                            <div>
+                                <h3 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 700, color: 'var(--text-main)', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                    {isSubView ? `${selectedMainCategory} Subcategories` : "Category Spending Breakdown"}
+                                </h3>
+                                <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+                                    {isSubView
+                                        ? `Subcategory distribution for ${selectedMainCategory} (${formatCurrency(viewTotal)})`
+                                        : `Distribution across ${segments.length} main categor${segments.length === 1 ? 'y' : 'ies'}`
+                                    }
                                 </span>
-                                <span style={{ fontSize: '0.9rem', fontWeight: 700, color: 'var(--text-main)', display: 'block' }}>
-                                    {formatCurrency(activeSeg ? activeSeg.value : total)}
-                                </span>
-                                {activeSeg && (
-                                    <span style={{ fontSize: '0.7rem', fontWeight: 600, color: activeSeg.color }}>
-                                        {activeSeg.percentage.toFixed(1)}%
-                                    </span>
-                                )}
                             </div>
                         </div>
 
-                        {/* Donut Legend */}
-                        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '150px', overflowY: 'auto' }}>
-                            {segments.slice(0, 5).map((seg, idx) => (
+                        {/* Center Column: Prominent Centered Back Button (if inspecting subcategories) */}
+                        {isSubView && (
+                            <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', flex: 1, minWidth: '200px' }}>
+                                <button
+                                    className="btn btn-secondary btn-sm"
+                                    onClick={() => {
+                                        setSelectedMainCategory(null);
+                                        setHoveredIndex(null);
+                                    }}
+                                    style={{
+                                        display: 'inline-flex',
+                                        alignItems: 'center',
+                                        gap: '6px',
+                                        padding: '7px 16px',
+                                        borderRadius: '20px',
+                                        fontWeight: 700,
+                                        fontSize: '0.84rem',
+                                        background: 'var(--bg-color)',
+                                        border: '1.5px solid var(--primary)',
+                                        color: 'var(--primary)',
+                                        boxShadow: '0 2px 8px rgba(79, 70, 229, 0.15)',
+                                        cursor: 'pointer',
+                                        transition: 'all 0.2s ease'
+                                    }}
+                                >
+                                    ← Back to Main Categories
+                                </button>
+                            </div>
+                        )}
+
+                        {/* Right side summary chips with total transaction count */}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+                            <div style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '6px',
+                                padding: '5px 12px',
+                                borderRadius: '20px',
+                                background: 'var(--bg-color)',
+                                border: '1px solid var(--border-color)',
+                                fontSize: '0.8rem'
+                            }}>
+                                <span style={{ color: 'var(--text-muted)' }}>Category:</span>
+                                <span style={{ fontWeight: 700, color: 'var(--primary)' }}>
+                                    {isSubView ? selectedMainCategory : "All Categories"}
+                                </span>
+                            </div>
+                            <div style={{
+                                padding: '5px 12px',
+                                borderRadius: '20px',
+                                background: 'var(--bg-color)',
+                                border: '1px solid var(--border-color)',
+                                fontSize: '0.8rem',
+                                color: 'var(--text-main)',
+                                fontWeight: 600
+                            }}>
+                                <span style={{ color: 'var(--text-muted)' }}>Transactions:</span> <span style={{ color: 'var(--primary)', fontWeight: 700 }}>{totalTxCount}</span>
+                            </div>
+                            <div style={{
+                                padding: '5px 12px',
+                                borderRadius: '20px',
+                                background: 'var(--bg-color)',
+                                border: '1px solid var(--border-color)',
+                                fontSize: '0.8rem',
+                                color: 'var(--text-main)',
+                                fontWeight: 600
+                            }}>
+                                <span style={{ color: 'var(--text-muted)' }}>Spend:</span> <span style={{ color: 'var(--danger)', fontWeight: 700 }}>{formatCurrency(viewTotal)}</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Full Width Top Horizontal Distribution Ratio Bar with direct labels */}
+                    <div style={{
+                        width: '100%',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '8px',
+                        background: 'var(--bg-color)',
+                        borderRadius: '14px',
+                        padding: '12px 16px',
+                        border: '1px solid var(--border-color)',
+                        boxShadow: 'var(--shadow-xs)',
+                        boxSizing: 'border-box'
+                    }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <span style={{ fontSize: '0.76rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                                Category Outflow Ratio
+                            </span>
+                            <span style={{ fontSize: '0.76rem', color: 'var(--text-muted)', fontWeight: 600 }}>
+                                {activeSeg ? (
+                                    <>
+                                        <span style={{ color: activeSeg.color, fontWeight: 700 }}>{activeSeg.displayLabel}</span>: {formatCurrency(activeSeg.value)} ({activeSeg.percentage.toFixed(1)}% • {activeSeg.count} txns)
+                                    </>
+                                ) : (
+                                    <span>{totalTxCount} total transactions across {segments.length} {isSubView ? 'subcategories' : 'categories'}</span>
+                                )}
+                            </span>
+                        </div>
+
+                        {/* Continuous Segmented Bar with Labels Inside */}
+                        <div style={{
+                            width: '100%',
+                            height: '26px',
+                            borderRadius: '10px',
+                            overflow: 'hidden',
+                            display: 'flex',
+                            background: 'var(--border-color)',
+                            boxShadow: 'inset 0 1px 3px rgba(0,0,0,0.12)'
+                        }}>
+                            {segments.map((seg, idx) => (
                                 <div
                                     key={idx}
                                     onMouseEnter={() => setHoveredIndex(idx)}
                                     onMouseLeave={() => setHoveredIndex(null)}
-                                    style={{
-                                        display: 'flex',
-                                        flexDirection: 'column',
-                                        gap: '3px',
-                                        padding: '4px 6px',
-                                        borderRadius: '6px',
-                                        background: hoveredIndex === idx ? 'var(--bg-color)' : 'transparent',
-                                        cursor: 'pointer',
-                                        transition: 'background-color 0.15s ease'
+                                    onClick={() => {
+                                        if (!isSubView && seg.subCount > 0) {
+                                            setSelectedMainCategory(seg.key);
+                                            setHoveredIndex(null);
+                                        }
                                     }}
+                                    style={{
+                                        width: `${seg.percentage}%`,
+                                        height: '100%',
+                                        backgroundColor: seg.color,
+                                        opacity: (hoveredIndex === null || hoveredIndex === idx) ? 1 : 0.45,
+                                        cursor: (!isSubView && seg.subCount > 0) ? 'pointer' : 'default',
+                                        transition: 'all 0.2s ease',
+                                        boxShadow: hoveredIndex === idx ? `0 0 10px ${seg.color}` : 'none',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        justifyContent: 'center',
+                                        padding: '0 4px',
+                                        overflow: 'hidden',
+                                        boxSizing: 'border-box'
+                                    }}
+                                    title={`${seg.displayLabel}: ${formatCurrency(seg.value)} (${seg.percentage.toFixed(1)}% • ${seg.count} txns)`}
                                 >
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.8rem' }}>
-                                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>
-                                            <span style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: seg.color, flexShrink: 0 }}></span>
-                                            <span style={{ fontWeight: 500, color: 'var(--text-main)', textOverflow: 'ellipsis', overflow: 'hidden' }}>{seg.label}</span>
-                                        </div>
-                                        <span style={{ fontWeight: 600, color: 'var(--text-main)' }}>{seg.percentage.toFixed(0)}%</span>
-                                    </div>
-                                    {/* Mini Progress Bar */}
-                                    <div style={{ height: '3px', width: '100%', background: '#F1F5F9', borderRadius: '2px', overflow: 'hidden' }}>
-                                        <div style={{ height: '100%', width: `${seg.percentage}%`, background: seg.color, borderRadius: '2px' }}></div>
-                                    </div>
+                                    <span style={{
+                                        fontSize: '0.71rem',
+                                        fontWeight: 700,
+                                        color: '#ffffff',
+                                        textShadow: '0 1px 2px rgba(0,0,0,0.5)',
+                                        whiteSpace: 'nowrap',
+                                        overflow: 'hidden',
+                                        textOverflow: 'ellipsis',
+                                        userSelect: 'none'
+                                    }}>
+                                        {seg.displayLabel} {seg.percentage.toFixed(1)}%
+                                    </span>
                                 </div>
                             ))}
                         </div>
                     </div>
-                </div>
+
+                    {/* Main Content Grid: Fixed Constant Height Category Breakdown Cards */}
+                    <div style={{
+                        display: 'grid',
+                        gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))',
+                        alignContent: 'start',
+                        gap: '12px',
+                        width: '100%',
+                        minHeight: '260px',
+                        maxHeight: '260px',
+                        overflowY: 'auto',
+                        padding: '4px 6px 10px 4px',
+                        boxSizing: 'border-box'
+                    }}>
+                            {segments.map((seg, idx) => {
+                                const isHovered = hoveredIndex === idx;
+                                const canDrill = !isSubView && seg.subCount > 0;
+                                return (
+                                    <div
+                                        key={idx}
+                                        onMouseEnter={() => setHoveredIndex(idx)}
+                                        onMouseLeave={() => setHoveredIndex(null)}
+                                        onClick={() => {
+                                            if (canDrill) {
+                                                setSelectedMainCategory(seg.key);
+                                                setHoveredIndex(null);
+                                            }
+                                        }}
+                                        style={{
+                                            padding: '12px 14px',
+                                            borderRadius: '12px',
+                                            background: isHovered ? 'var(--card-bg)' : 'var(--bg-color)',
+                                            border: `1px solid ${isHovered ? seg.color : 'var(--border-color)'}`,
+                                            boxShadow: isHovered ? `0 4px 14px ${seg.color}20` : 'var(--shadow-xs)',
+                                            transform: isHovered ? 'translateY(-2px)' : 'none',
+                                            cursor: canDrill ? 'pointer' : 'default',
+                                            transition: 'all 0.2s ease',
+                                            boxSizing: 'border-box',
+                                            display: 'flex',
+                                            flexDirection: 'column',
+                                            gap: '8px'
+                                        }}
+                                    >
+                                        {/* Header Row: Dot + Title & Percentage Badge */}
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', overflow: 'hidden', minWidth: 0 }}>
+                                                <span style={{
+                                                    width: '8px',
+                                                    height: '8px',
+                                                    borderRadius: '50%',
+                                                    backgroundColor: seg.color,
+                                                    flexShrink: 0,
+                                                    boxShadow: `0 0 5px ${seg.color}88`
+                                                }}></span>
+                                                <span style={{ fontWeight: 700, fontSize: '0.88rem', color: 'var(--text-main)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={seg.key}>
+                                                    {seg.displayLabel}
+                                                </span>
+                                            </div>
+                                            <span style={{
+                                                fontSize: '0.74rem',
+                                                fontWeight: 700,
+                                                color: seg.color,
+                                                background: seg.color + '18',
+                                                padding: '2px 7px',
+                                                borderRadius: '10px',
+                                                flexShrink: 0
+                                            }}>
+                                                {seg.percentage.toFixed(1)}%
+                                            </span>
+                                        </div>
+
+                                        {/* Amount & Txn count Button Row */}
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '2px' }}>
+                                            <span style={{ fontWeight: 800, fontSize: '1.02rem', color: 'var(--text-main)', display: 'block', lineHeight: 1.2 }}>
+                                                {formatCurrency(seg.value)}
+                                            </span>
+
+                                            {onViewTransactions && seg.count > 0 && (
+                                                <button
+                                                    style={{
+                                                        fontSize: '0.74rem',
+                                                        padding: '3px 9px',
+                                                        borderRadius: '8px',
+                                                        fontWeight: 700,
+                                                        whiteSpace: 'nowrap',
+                                                        flexShrink: 0,
+                                                        background: 'var(--card-bg)',
+                                                        border: '1.5px solid var(--border-color)',
+                                                        color: 'var(--text-main)',
+                                                        cursor: 'pointer',
+                                                        transition: 'all 0.2s ease',
+                                                        boxShadow: '0 1px 2px rgba(0,0,0,0.05)'
+                                                    }}
+                                                    onMouseEnter={(e) => {
+                                                        e.currentTarget.style.background = 'var(--primary)';
+                                                        e.currentTarget.style.color = '#ffffff';
+                                                        e.currentTarget.style.borderColor = 'var(--primary)';
+                                                    }}
+                                                    onMouseLeave={(e) => {
+                                                        e.currentTarget.style.background = 'var(--card-bg)';
+                                                        e.currentTarget.style.color = 'var(--text-main)';
+                                                        e.currentTarget.style.borderColor = 'var(--border-color)';
+                                                    }}
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        onViewTransactions(seg.key);
+                                                    }}
+                                                    title={`View ${seg.count} transaction${seg.count > 1 ? 's' : ''} for ${seg.key}`}
+                                                >
+                                                    {seg.count} ➔
+                                                </button>
+                                            )}
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    </div>
             );
         };
 
@@ -7915,7 +8548,7 @@ Output format example:
                     return false;
                 }
 
-                if (categoryFilter !== "all" && t.category !== categoryFilter) {
+                if (categoryFilter !== "all" && t.category !== categoryFilter && !(t.category && t.category.startsWith(categoryFilter + " - "))) {
                     return false;
                 }
 
@@ -11668,18 +12301,18 @@ Output format example:
                 <div className="modal-overlay">
                     <div className="modal-container">
                         <div className="modal-header">
-                                <h3 className="modal-title" style={{ flex: 1, textAlign: 'center' }}>Edit Transaction</h3>
-                                <button className="modal-close-btn" onClick={onClose}>
-                                    <Icon name="close" />
-                                </button>
+                            <h3 className="modal-title" style={{ flex: 1, textAlign: 'center' }}>Edit Transaction</h3>
+                            <button className="modal-close-btn" onClick={onClose}>
+                                <Icon name="close" />
+                            </button>
+                        </div>
+                        {/* Frozen sub-header: Expense / Income toggle */}
+                        <div style={{ padding: '12px 24px', borderBottom: '1px solid var(--border-color)', flexShrink: 0, background: 'var(--card-bg)' }}>
+                            <div className="segmented-control">
+                                <button type="button" className={`segmented-btn ${type === "expense" ? "active expense" : ""}`} onClick={() => handleTypeChange("expense")}>Expense</button>
+                                <button type="button" className={`segmented-btn ${type === "income" ? "active income" : ""}`} onClick={() => handleTypeChange("income")}>Income</button>
                             </div>
-                            {/* Frozen sub-header: Expense / Income toggle */}
-                            <div style={{ padding: '12px 24px', borderBottom: '1px solid var(--border-color)', flexShrink: 0, background: 'var(--card-bg)' }}>
-                                <div className="segmented-control">
-                                    <button type="button" className={`segmented-btn ${type === "expense" ? "active expense" : ""}`} onClick={() => handleTypeChange("expense")}>Expense</button>
-                                    <button type="button" className={`segmented-btn ${type === "income" ? "active income" : ""}`} onClick={() => handleTypeChange("income")}>Income</button>
-                                </div>
-                            </div>
+                        </div>
                         <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
                             <div className="modal-body">
                                 <div className="form-grid">
@@ -11980,30 +12613,30 @@ Output format example:
                 <div className="modal-overlay">
                     <div className="modal-container">
                         <div className="modal-header">
-                                <h3 className="modal-title" style={{ flex: 1, textAlign: 'center' }}>Create Transaction</h3>
-                                <button className="modal-close-btn" onClick={onClose}>
-                                    <Icon name="close" />
+                            <h3 className="modal-title" style={{ flex: 1, textAlign: 'center' }}>Create Transaction</h3>
+                            <button className="modal-close-btn" onClick={onClose}>
+                                <Icon name="close" />
+                            </button>
+                        </div>
+                        {/* Frozen sub-header: Expense / Income toggle */}
+                        <div style={{ padding: '12px 24px', borderBottom: '1px solid var(--border-color)', flexShrink: 0, background: 'var(--card-bg)' }}>
+                            <div className="segmented-control">
+                                <button
+                                    type="button"
+                                    className={`segmented-btn ${type === "expense" ? "active expense" : ""}`}
+                                    onClick={() => handleTypeChange("expense")}
+                                >
+                                    Expense
+                                </button>
+                                <button
+                                    type="button"
+                                    className={`segmented-btn ${type === "income" ? "active income" : ""}`}
+                                    onClick={() => handleTypeChange("income")}
+                                >
+                                    Income
                                 </button>
                             </div>
-                            {/* Frozen sub-header: Expense / Income toggle */}
-                            <div style={{ padding: '12px 24px', borderBottom: '1px solid var(--border-color)', flexShrink: 0, background: 'var(--card-bg)' }}>
-                                <div className="segmented-control">
-                                    <button
-                                        type="button"
-                                        className={`segmented-btn ${type === "expense" ? "active expense" : ""}`}
-                                        onClick={() => handleTypeChange("expense")}
-                                    >
-                                        Expense
-                                    </button>
-                                    <button
-                                        type="button"
-                                        className={`segmented-btn ${type === "income" ? "active income" : ""}`}
-                                        onClick={() => handleTypeChange("income")}
-                                    >
-                                        Income
-                                    </button>
-                                </div>
-                            </div>
+                        </div>
                         <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
                             <div className="modal-body">
                                 <div className="form-grid">
