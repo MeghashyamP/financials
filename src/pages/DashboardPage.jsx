@@ -1,0 +1,2075 @@
+import React from 'react';
+import {
+    Icon, formatCurrencyVal, filterTransactionsByPeriod, formatDate,
+    ModernDateFilterPicker, PeriodSelectOptions, getContrastTextColor,
+    formatCategorySubIconFirst, calculatePeriodDateRange, getCurrencySymbol
+} from '../utils.jsx';
+import { updateTransactionInDB, deleteTransactionFromDB } from '../store.js';
+
+const MONTHS = [
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December"
+];
+
+export const DashboardPage = ({ transactions, allTransactions, settings, setActivePage, updateSetting, loadState, showToast, setTxCategoryFilter }) => {
+    const expenseTx = transactions.filter(t => t.type === "expense");
+    const incomeTx = transactions.filter(t => t.type === "income");
+    const fullTx = allTransactions || transactions;
+    const [selectedDay, setSelectedDay] = React.useState(null);
+    const [calendarViewDate, setCalendarViewDate] = React.useState(new Date());
+
+    // Income & Spending sums
+    const incomeSum = incomeTx.reduce((s, t) => s + t.amount, 0);
+    const spendingSum = expenseTx.reduce((s, t) => s + t.amount, 0);
+    const formatCurrency = (val) => formatCurrencyVal(val, settings.currency || "INR");
+
+    // Calculate main category breakdown, transaction counts, and subcategory mappings
+    const mainCategoryBreakdown = {};
+    const mainCategoryTxCounts = {};
+    const subcategoryMap = {};
+
+    expenseTx.forEach(t => {
+        const fullCat = t.category || "Uncategorized";
+        const mainCat = fullCat.includes(" - ") ? fullCat.split(" - ")[0] : fullCat;
+
+        mainCategoryBreakdown[mainCat] = (mainCategoryBreakdown[mainCat] || 0) + t.amount;
+        mainCategoryTxCounts[mainCat] = (mainCategoryTxCounts[mainCat] || 0) + 1;
+
+        if (!subcategoryMap[mainCat]) subcategoryMap[mainCat] = {};
+        if (!subcategoryMap[mainCat][fullCat]) {
+            subcategoryMap[mainCat][fullCat] = { amount: 0, count: 0 };
+        }
+        subcategoryMap[mainCat][fullCat].amount += t.amount;
+        subcategoryMap[mainCat][fullCat].count += 1;
+    });
+
+    // Sort transactions: newest 5
+    const recentTx = [...transactions].sort((a, b) => new Date(b.date) - new Date(a.date)).slice(0, 5);
+
+    return (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+            {/* Expanded Category Spending Breakdown Section */}
+            <div className="section-card" style={{ background: 'var(--card-bg)', margin: 0, padding: '24px' }}>
+                <CategoryDonutSvgChart
+                    mainBreakdown={mainCategoryBreakdown}
+                    mainTxCounts={mainCategoryTxCounts}
+                    subBreakdownMap={subcategoryMap}
+                    total={spendingSum}
+                    settings={settings}
+                    onViewTransactions={(catName) => {
+                        if (setTxCategoryFilter) {
+                            setTxCategoryFilter(catName);
+                        }
+                        if (setActivePage) {
+                            setActivePage("transactions");
+                        }
+                    }}
+                />
+            </div>
+
+            {/* Financial Intelligence & Smart Insights Bar */}
+            <FinancialInsightsPanel
+                transactions={transactions}
+                settings={settings}
+                setActivePage={setActivePage}
+            />
+
+            {/* Calendar & Payments Row */}
+            <div className="content-columns" style={{ margin: 0, gridTemplateColumns: '2fr 3fr', gap: '16px' }}>
+                <PaymentsCalendarWidget
+                    settings={settings}
+                    transactions={fullTx}
+                    selectedDay={selectedDay}
+                    setSelectedDay={setSelectedDay}
+                    viewDate={calendarViewDate}
+                    setViewDate={setCalendarViewDate}
+                />
+                <PaymentsSectionWidget
+                    settings={settings}
+                    transactions={fullTx}
+                    updateSetting={updateSetting}
+                    loadState={loadState}
+                    showToast={showToast}
+                    selectedDay={selectedDay}
+                    setSelectedDay={setSelectedDay}
+                    viewDate={calendarViewDate}
+                />
+            </div>
+
+            {/* Recent Activities Section */}
+            <div className="section-card">
+                <div className="section-card-title">
+                    <span style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <Icon name="transactions" /> Recent Activities
+                    </span>
+                    <button className="btn btn-secondary btn-sm" onClick={() => setActivePage("transactions")}>View All</button>
+                </div>
+                {recentTx.length === 0 ? (
+                    <div className="empty-state">
+                        <Icon name="transactions" currency={settings.currency} />
+                        <div className="empty-state-text">
+                            <h3>Empty Registry</h3>
+                            <p>No transactions registered for the selected period.</p>
+                        </div>
+                    </div>
+                ) : (
+                    <div className="table-responsive">
+                        <table className="table" style={{ margin: 0 }}>
+                            <thead>
+                                <tr>
+                                    <th>Merchant</th>
+                                    <th>Category</th>
+                                    <th>Date</th>
+                                    <th style={{ textAlign: 'right' }}>Amount</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {recentTx.map(t => {
+                                    const firstChar = (t.merchant || "T").trim().charAt(0).toUpperCase();
+                                    return (
+                                        <tr key={t.id} style={{ transition: 'background-color 0.15s ease' }}>
+                                            <td>
+                                                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                                    <div className="merchant-avatar" style={{
+                                                        background: t.type === "income"
+                                                            ? "linear-gradient(135deg, #10B981 0%, #059669 100%)"
+                                                            : "linear-gradient(135deg, #6366F1 0%, #4F46E5 100%)"
+                                                    }}>
+                                                        {firstChar}
+                                                    </div>
+                                                    <div>
+                                                        <div style={{ fontWeight: 600, color: 'var(--text-main)' }}>{t.merchant || "Transaction"}</div>
+                                                        {t.paymentMode && (
+                                                            <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{t.paymentMode}</div>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                            </td>
+                                            <td>
+                                                <span className="badge" style={{ backgroundColor: 'var(--bg-color)', color: 'var(--text-main)', border: '1px solid var(--border-color)', fontWeight: 500 }}>
+                                                    {t.category}
+                                                </span>
+                                            </td>
+                                            <td style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>
+                                                {formatDate(t.date, settings.dateFormat)}
+                                            </td>
+                                            <td style={{ textAlign: 'right', fontWeight: 700, fontSize: '0.95rem', color: t.type === "neutral" ? "var(--info)" : (t.type === "income" ? "var(--success)" : "var(--danger)") }}>
+                                                {t.type === "neutral" ? (t.neutralSign === "-" ? "-" : "+") : (t.type === "income" ? "+" : "-")}{formatCurrency(t.amount)}
+                                            </td>
+                                        </tr>
+                                    );
+                                })}
+                            </tbody>
+                        </table>
+                    </div>
+                )}
+            </div>
+        </div>
+    );
+};
+
+// --- SUB-COMPONENT: Comprehensive Financial Intelligence Panel ---
+const FinancialInsightsPanel = ({ transactions, settings, setActivePage }) => {
+    const formatCurrency = (val) => formatCurrencyVal(val, settings.currency || "INR");
+
+    const expenseTx = transactions.filter(t => t.type === "expense");
+    const incomeTx = transactions.filter(t => t.type === "income");
+
+    const incomeSum = incomeTx.reduce((s, t) => s + t.amount, 0);
+    const spendingSum = expenseTx.reduce((s, t) => s + t.amount, 0);
+    const netCashFlow = incomeSum - spendingSum;
+    const savingsRate = incomeSum > 0 ? ((netCashFlow / incomeSum) * 100) : 0;
+
+    // Needs review count
+    const needsReviewCount = transactions.filter(t => t.category === "Needs review").length;
+
+    // Daily spend velocity calculation
+    const now = new Date();
+    const currentDay = Math.max(1, now.getDate());
+    const dailySpend = spendingSum > 0 ? spendingSum / currentDay : 0;
+
+    // Top spending category analysis
+    const categoryTotals = {};
+    expenseTx.forEach(t => {
+        categoryTotals[t.category] = (categoryTotals[t.category] || 0) + t.amount;
+    });
+    const topCategoryKey = Object.keys(categoryTotals).sort((a, b) => categoryTotals[b] - categoryTotals[a])[0];
+    const topCategoryAmount = topCategoryKey ? categoryTotals[topCategoryKey] : 0;
+    const topCategoryPct = spendingSum > 0 ? Math.round((topCategoryAmount / spendingSum) * 100) : 0;
+
+    // Largest single transaction
+    const largestTx = [...expenseTx].sort((a, b) => b.amount - a.amount)[0];
+
+    // Savings rate status grade
+    let savingsGrade = { label: "No Income", color: "var(--text-muted)", bg: "var(--bg-color)" };
+    if (incomeSum > 0) {
+        if (savingsRate >= 30) savingsGrade = { label: "Excellent Savings", color: "#059669", bg: "#ECFDF5" };
+        else if (savingsRate >= 15) savingsGrade = { label: "Healthy Savings", color: "#2563EB", bg: "#EFF6FF" };
+        else if (savingsRate >= 0) savingsGrade = { label: "Tight Cash Flow", color: "#D97706", bg: "#FFFBEB" };
+        else savingsGrade = { label: "Deficit Spending", color: "#DC2626", bg: "#FEF2F2" };
+    }
+
+    return (
+        <div className="section-card" style={{ background: 'var(--card-bg)' }}>
+            <div className="section-card-title">
+                <span style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <Icon name="sparkles" /> Financial Intelligence & Insights
+                </span>
+                {needsReviewCount > 0 ? (
+                    <button
+                        className="dashboard-badge-pill"
+                        style={{ background: '#FEF3C7', color: '#B45309', border: '1px solid #FCD34D', cursor: 'pointer' }}
+                        onClick={() => setActivePage("transactions")}
+                    >
+                        <Icon name="alert" /> {needsReviewCount} item{needsReviewCount > 1 ? 's' : ''} to review
+                    </button>
+                ) : (
+                    <span className="dashboard-badge-pill" style={{ background: '#D1FAE5', color: '#065F46', border: '1px solid #A7F3D0' }}>
+                        <Icon name="check" /> Books Clean
+                    </span>
+                )}
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px' }}>
+
+                {/* Metric 1: Financial Health & Savings Rate */}
+                <div className="insight-metric-card">
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                        <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                            Savings Grade
+                        </span>
+                        <span className="dashboard-badge-pill" style={{ background: savingsGrade.bg, color: savingsGrade.color }}>
+                            {savingsGrade.label}
+                        </span>
+                    </div>
+                    <div style={{ fontSize: '1.5rem', fontWeight: 700, color: 'var(--text-main)', marginBottom: '4px' }}>
+                        {savingsRate.toFixed(1)}%
+                    </div>
+                    <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                        {netCashFlow >= 0 ? `+${formatCurrency(netCashFlow)} retained` : `${formatCurrency(Math.abs(netCashFlow))} overspent`}
+                    </div>
+                </div>
+
+                {/* Metric 2: Spend Velocity / Daily Pace */}
+                <div className="insight-metric-card">
+                    <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '8px' }}>
+                        Daily Burn Rate
+                    </div>
+                    <div style={{ fontSize: '1.5rem', fontWeight: 700, color: 'var(--text-main)', marginBottom: '4px' }}>
+                        {formatCurrency(dailySpend)}<span style={{ fontSize: '0.85rem', fontWeight: 500, color: 'var(--text-muted)' }}>/day</span>
+                    </div>
+                    <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                        Over {currentDay} elapsed days this period
+                    </div>
+                </div>
+
+                {/* Metric 3: Top Expense Concentration */}
+                <div className="insight-metric-card">
+                    <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '8px' }}>
+                        Top Category
+                    </div>
+                    <div style={{ fontSize: '1.2rem', fontWeight: 700, color: 'var(--text-main)', marginBottom: '4px', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>
+                        {topCategoryKey || "None"}
+                    </div>
+                    <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                        {topCategoryKey ? `${formatCurrency(topCategoryAmount)} (${topCategoryPct}% of total)` : 'No expense data'}
+                    </div>
+                </div>
+
+                {/* Metric 4: Peak Single Transaction */}
+                <div className="insight-metric-card">
+                    <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '8px' }}>
+                        Peak Transaction
+                    </div>
+                    <div style={{ fontSize: '1.2rem', fontWeight: 700, color: 'var(--danger)', marginBottom: '4px', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>
+                        {largestTx ? formatCurrency(largestTx.amount) : "₹0"}
+                    </div>
+                    <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>
+                        {largestTx ? `${largestTx.merchant}` : "No expenses"}
+                    </div>
+                </div>
+
+            </div>
+        </div>
+    );
+};
+
+// --- SUB-COMPONENT: Calendar widget for the Dashboard ---
+const PaymentsCalendarWidget = ({ settings, transactions, selectedDay, setSelectedDay, viewDate, setViewDate }) => {
+    const toYYYYMMDD = (dStr) => {
+        if (!dStr) return "";
+        if (dStr instanceof Date) {
+            const y = dStr.getFullYear();
+            const m = String(dStr.getMonth() + 1).padStart(2, '0');
+            const day = String(dStr.getDate()).padStart(2, '0');
+            return `${y}-${m}-${day}`;
+        }
+        const str = String(dStr).trim();
+        const ymd = str.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/);
+        if (ymd) {
+            return `${ymd[1]}-${String(parseInt(ymd[2], 10)).padStart(2, '0')}-${String(parseInt(ymd[3], 10)).padStart(2, '0')}`;
+        }
+        const dmy = str.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{2,4})/);
+        if (dmy) {
+            let p1 = parseInt(dmy[1], 10), p2 = parseInt(dmy[2], 10), p3 = parseInt(dmy[3], 10);
+            if (p3 < 100) p3 += 2000;
+            let day = p1 > 12 ? p1 : (p2 > 12 ? p2 : p1);
+            let month = p1 > 12 ? p2 : (p2 > 12 ? p1 : p2);
+            return `${p3}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+        }
+        const d = new Date(str);
+        if (isNaN(d.getTime())) return "";
+        const y = d.getFullYear();
+        const m = String(d.getMonth() + 1).padStart(2, '0');
+        const day = String(d.getDate()).padStart(2, '0');
+        return `${y}-${m}-${day}`;
+    };
+
+    const getAnchorDayOfMonth = (dStr) => {
+        if (!dStr) return 1;
+        if (typeof dStr === 'string' && dStr.includes('-')) {
+            const parts = dStr.split('-');
+            if (parts.length === 3) {
+                const dayNum = parseInt(parts[2].substring(0, 2), 10);
+                if (!isNaN(dayNum) && dayNum >= 1 && dayNum <= 31) return dayNum;
+            }
+        }
+        const d = new Date(dStr);
+        if (!isNaN(d.getTime())) return d.getDate();
+        return 1;
+    };
+
+    const getDueDateInMonth = (anchorDay, viewYear, viewMonth) => {
+        const maxDays = new Date(viewYear, viewMonth + 1, 0).getDate();
+        const day = Math.min(Math.max(anchorDay, 1), maxDays);
+        const m = String(viewMonth + 1).padStart(2, '0');
+        const d = String(day).padStart(2, '0');
+        return `${viewYear}-${m}-${d}`;
+    };
+
+    const year = viewDate.getFullYear();
+    const month = viewDate.getMonth();
+
+    const dueItems = React.useMemo(() => {
+        const items = [];
+        const calNow = new Date();
+        const calTodayStr = `${calNow.getFullYear()}-${String(calNow.getMonth() + 1).padStart(2, '0')}-${String(calNow.getDate()).padStart(2, '0')}`;
+        const viewMonthPrefix = `${year}-${String(month + 1).padStart(2, '0')}`;
+
+        (settings.recurring || []).forEach(r => {
+            if (r.active === false || (r.endDate && r.endDate < calTodayStr)) return;
+            const anchorDay = getAnchorDayOfMonth(r.nextDate || r.startDate);
+            const itemDueDateStr = getDueDateInMonth(anchorDay, year, month);
+
+            // Check if already paid in this view month
+            const isPaid = (transactions || []).some(t => {
+                const tDate = toYYYYMMDD(t.date);
+                return tDate && tDate.startsWith(viewMonthPrefix) && (t.linkedRecurringId === r.id || t.merchant === r.name);
+            });
+
+            if (!isPaid) {
+                items.push({ date: itemDueDateStr });
+            }
+        });
+
+        (settings.networthItems || []).forEach(it => {
+            if (!it.nextDueDate) return;
+            const anchorDay = getAnchorDayOfMonth(it.nextDueDate);
+            const itemDueDateStr = getDueDateInMonth(anchorDay, year, month);
+
+            const isPaid = (transactions || []).some(t => {
+                const tDate = toYYYYMMDD(t.date);
+                return tDate && tDate.startsWith(viewMonthPrefix) && (t.linkedRecurringId === it.id || t.merchant === it.name);
+            });
+
+            if (!isPaid) {
+                items.push({ date: itemDueDateStr });
+            }
+        });
+        return items.filter(i => !isNaN(new Date(i.date).getTime()));
+    }, [settings.recurring, settings.networthItems, transactions, year, month]);
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const yearOptions = React.useMemo(() => {
+        const list = [];
+        for (let y = 1970; y <= 2100; y++) {
+            list.push(y);
+        }
+        return list;
+    }, []);
+
+    // Month grid calculation (starting from Monday)
+    const firstDay = new Date(year, month, 1);
+    // Sunday = 0 -> offset 6, Monday = 1 -> offset 0, Tue = 2 -> offset 1, etc.
+    const startOffset = (firstDay.getDay() + 6) % 7;
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    const cells = [];
+    for (let i = 0; i < startOffset; i++) cells.push(null);
+    for (let d = 1; d <= daysInMonth; d++) cells.push(d);
+    while (cells.length < 42) cells.push(null);
+
+    const dueDaysInMonthMap = {};
+    dueItems.forEach(i => {
+        const d = new Date(i.date);
+        if (d.getFullYear() === year && d.getMonth() === month) {
+            const dayNum = d.getDate();
+            dueDaysInMonthMap[dayNum] = (dueDaysInMonthMap[dayNum] || 0) + 1;
+        }
+    });
+
+    return (
+        <div className="section-card" style={{ background: 'var(--card-bg)', borderRadius: '16px', border: '1px solid var(--border-color)', boxShadow: 'var(--shadow-sm)' }}>
+            {/* Mini Month Calendar Header & Grid */}
+            <div style={{ background: 'var(--bg-color)', padding: '12px', borderRadius: '12px' }}>
+                <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', position: 'relative', marginBottom: '12px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <button className="btn btn-secondary btn-sm" style={{ padding: '3px 8px', width: '32px', height: '32px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                            title="Previous Month"
+                            onClick={() => {
+                                setViewDate(new Date(year, month - 1, 1));
+                                setSelectedDay(null);
+                            }}>
+                            <Icon name="chevronLeft" />
+                        </button>
+                        <select
+                            className="btn btn-secondary btn-sm"
+                            style={{
+                                width: '115px',
+                                fontWeight: 600,
+                                fontSize: '0.82rem',
+                                cursor: 'pointer',
+                                appearance: 'none',
+                                WebkitAppearance: 'none',
+                                MozAppearance: 'none',
+                                backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23475569' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E")`,
+                                backgroundRepeat: 'no-repeat',
+                                backgroundPosition: 'right 8px center',
+                                paddingRight: '22px',
+                                paddingLeft: '10px',
+                                textAlign: 'center'
+                            }}
+                            value={month}
+                            onChange={(e) => {
+                                const newMonth = parseInt(e.target.value, 10);
+                                setViewDate(new Date(year, newMonth, 1));
+                                setSelectedDay(null);
+                            }}
+                        >
+                            {MONTHS.map((m, idx) => (
+                                <option key={idx} value={idx}>{m}</option>
+                            ))}
+                        </select>
+                        <select
+                            className="btn btn-secondary btn-sm"
+                            style={{
+                                width: '80px',
+                                fontWeight: 600,
+                                fontSize: '0.82rem',
+                                cursor: 'pointer',
+                                appearance: 'none',
+                                WebkitAppearance: 'none',
+                                MozAppearance: 'none',
+                                backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23475569' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E")`,
+                                backgroundRepeat: 'no-repeat',
+                                backgroundPosition: 'right 8px center',
+                                paddingRight: '20px',
+                                paddingLeft: '10px',
+                                textAlign: 'center'
+                            }}
+                            value={year}
+                            onChange={(e) => {
+                                const newYear = parseInt(e.target.value, 10);
+                                setViewDate(new Date(newYear, month, 1));
+                                setSelectedDay(null);
+                            }}
+                        >
+                            {yearOptions.map(y => (
+                                <option key={y} value={y}>{y}</option>
+                            ))}
+                        </select>
+                        <button className="btn btn-secondary btn-sm" style={{ padding: '3px 8px', width: '32px', height: '32px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                            title="Next Month"
+                            onClick={() => {
+                                setViewDate(new Date(year, month + 1, 1));
+                                setSelectedDay(null);
+                            }}>
+                            <Icon name="chevronRight" />
+                        </button>
+                    </div>
+                    <button className={`btn btn-sm ${selectedDay ? 'btn-primary' : 'btn-secondary'}`} style={{ position: 'absolute', right: 0, fontSize: '0.75rem', padding: '2px 10px', height: '32px', fontWeight: 600 }}
+                        title={selectedDay ? "View full month" : "Select today's date"}
+                        onClick={() => {
+                            if (selectedDay) {
+                                setSelectedDay(null);
+                            } else {
+                                const now = new Date();
+                                setViewDate(now);
+                                setSelectedDay(now);
+                            }
+                        }}>
+                        {selectedDay ? 'Month' : 'Today'}
+                    </button>
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '6px', textAlign: 'center' }}>
+                    {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((d, idx) => (
+                        <div key={idx} className="cal-day-header">{d}</div>
+                    ))}
+                    {cells.map((d, idx) => {
+                        if (!d) {
+                            return <div key={idx} className="cal-tile-empty">&nbsp;</div>;
+                        }
+                        const cellDate = new Date(year, month, d);
+                        const isToday = cellDate.toDateString() === today.toDateString();
+                        const dueCount = dueDaysInMonthMap[d] || 0;
+                        const isSelected = selectedDay && cellDate.toDateString() === selectedDay.toDateString();
+
+                        let tileClass = "cal-tile";
+                        if (isSelected) tileClass += " cal-tile-selected";
+                        else if (isToday) tileClass += " cal-tile-today";
+
+                        return (
+                            <div
+                                key={idx}
+                                className={tileClass}
+                                onClick={() => {
+                                    if (isSelected) {
+                                        setSelectedDay(null);
+                                    } else {
+                                        setSelectedDay(cellDate);
+                                    }
+                                }}
+                            >
+                                {d}
+                                {dueCount > 0 && (
+                                    <span className="cal-due-badge">
+                                        {dueCount}
+                                    </span>
+                                )}
+                            </div>
+                        );
+                    })}
+                </div>
+            </div>
+
+        </div>
+    );
+};
+
+// --- SUB-COMPONENT: Payments section with Upcoming, Overdue, and Paid filters ---
+const PaymentsSectionWidget = ({ settings, transactions, updateSetting, loadState, showToast, selectedDay, setSelectedDay, viewDate }) => {
+    const [filter, setFilter] = React.useState("upcoming");
+    const [markPaidModalItem, setMarkPaidModalItem] = React.useState(null);
+    const [selectedTxIdToLink, setSelectedTxIdToLink] = React.useState(null);
+    const [isMappingMode, setIsMappingMode] = React.useState(false);
+    const [selectedMapTxIds, setSelectedMapTxIds] = React.useState([]);
+    const [unmarkConfirmItem, setUnmarkConfirmItem] = React.useState(null);
+    const [unmarkLinkedTxs, setUnmarkLinkedTxs] = React.useState([]);
+
+    const formatCurrency = (val) => formatCurrencyVal(val, settings.currency || "INR");
+
+    const toYYYYMMDD = (dStr) => {
+        if (!dStr) return "";
+        if (dStr instanceof Date) {
+            const y = dStr.getFullYear();
+            const m = String(dStr.getMonth() + 1).padStart(2, '0');
+            const day = String(dStr.getDate()).padStart(2, '0');
+            return `${y}-${m}-${day}`;
+        }
+        const str = String(dStr).trim();
+        const ymd = str.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/);
+        if (ymd) {
+            return `${ymd[1]}-${String(parseInt(ymd[2], 10)).padStart(2, '0')}-${String(parseInt(ymd[3], 10)).padStart(2, '0')}`;
+        }
+        const dmy = str.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{2,4})/);
+        if (dmy) {
+            let p1 = parseInt(dmy[1], 10), p2 = parseInt(dmy[2], 10), p3 = parseInt(dmy[3], 10);
+            if (p3 < 100) p3 += 2000;
+            let day = p1 > 12 ? p1 : (p2 > 12 ? p2 : p1);
+            let month = p1 > 12 ? p2 : (p2 > 12 ? p1 : p2);
+            return `${p3}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+        }
+        const d = new Date(str);
+        if (isNaN(d.getTime())) return "";
+        const y = d.getFullYear();
+        const m = String(d.getMonth() + 1).padStart(2, '0');
+        const day = String(d.getDate()).padStart(2, '0');
+        return `${y}-${m}-${day}`;
+    };
+
+    const getAnchorDayOfMonth = (dStr) => {
+        if (!dStr) return 1;
+        if (typeof dStr === 'string' && dStr.includes('-')) {
+            const parts = dStr.split('-');
+            if (parts.length === 3) {
+                const dayNum = parseInt(parts[2].substring(0, 2), 10);
+                if (!isNaN(dayNum) && dayNum >= 1 && dayNum <= 31) return dayNum;
+            }
+        }
+        const d = new Date(dStr);
+        if (!isNaN(d.getTime())) return d.getDate();
+        return 1;
+    };
+
+    const getDueDateInMonth = (anchorDay, viewYear, viewMonth) => {
+        const maxDays = new Date(viewYear, viewMonth + 1, 0).getDate();
+        const day = Math.min(Math.max(anchorDay, 1), maxDays);
+        const m = String(viewMonth + 1).padStart(2, '0');
+        const d = String(day).padStart(2, '0');
+        return `${viewYear}-${m}-${d}`;
+    };
+
+    const calNow = new Date();
+    const todayStr = `${calNow.getFullYear()}-${String(calNow.getMonth() + 1).padStart(2, '0')}-${String(calNow.getDate()).padStart(2, '0')}`;
+    const todayObj = new Date(calNow.getFullYear(), calNow.getMonth(), calNow.getDate());
+
+    const viewYear = viewDate ? viewDate.getFullYear() : calNow.getFullYear();
+    const viewMonth = viewDate ? viewDate.getMonth() : calNow.getMonth();
+    const viewMonthPrefix = `${viewYear}-${String(viewMonth + 1).padStart(2, '0')}`;
+
+    const { upcomingItems, overdueItems } = React.useMemo(() => {
+        const upcoming = [];
+        const overdue = [];
+
+        (settings.recurring || []).forEach(r => {
+            if (r.active === false || (r.endDate && r.endDate < calNow.toISOString().split('T')[0])) return;
+            const anchorDay = getAnchorDayOfMonth(r.nextDate || r.startDate);
+            const itemDueDateStr = getDueDateInMonth(anchorDay, viewYear, viewMonth);
+            const itemDateObj = new Date(itemDueDateStr + "T00:00:00");
+
+            // Check if already paid in this view month
+            const isPaid = (transactions || []).some(t => {
+                const tDate = toYYYYMMDD(t.date);
+                return tDate && tDate.startsWith(viewMonthPrefix) && (t.linkedRecurringId === r.id || t.merchant === r.name);
+            });
+
+            if (isPaid) return;
+
+            const itemObj = {
+                id: r.id,
+                kind: "recurring",
+                date: itemDueDateStr,
+                dateObj: itemDateObj,
+                name: r.name,
+                amount: r.amount,
+                type: r.type || "expense",
+                category: r.category || "Recurring bill",
+                cadence: r.cadence || "monthly",
+                swatch: "warning"
+            };
+
+            if (itemDueDateStr < todayStr) {
+                const diffTime = Math.abs(todayObj - itemDateObj);
+                const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+                itemObj.daysOverdue = diffDays;
+                overdue.push(itemObj);
+            } else {
+                upcoming.push(itemObj);
+            }
+        });
+
+        (settings.networthItems || []).forEach(it => {
+            if (!it.nextDueDate) return;
+            const anchorDay = getAnchorDayOfMonth(it.nextDueDate);
+            const itemDueDateStr = getDueDateInMonth(anchorDay, viewYear, viewMonth);
+            const itemDateObj = new Date(itemDueDateStr + "T00:00:00");
+
+            const isPaid = (transactions || []).some(t => {
+                const tDate = toYYYYMMDD(t.date);
+                return tDate && tDate.startsWith(viewMonthPrefix) && (t.linkedRecurringId === it.id || t.merchant === it.name);
+            });
+
+            if (isPaid) return;
+
+            const itemObj = {
+                id: it.id,
+                kind: "networth",
+                date: itemDueDateStr,
+                dateObj: itemDateObj,
+                name: it.name,
+                amount: Math.abs(Number(it.incomeExpense || 0)),
+                type: Number(it.incomeExpense || 0) < 0 ? "expense" : "income",
+                category: it.category || "Loans & Liabilities",
+                frequencyPerYear: it.frequencyPerYear || 12,
+                swatch: (NET_WORTH_GROUPS.find(g => g.key === it.category) || {}).swatch || "primary"
+            };
+
+            if (itemDueDateStr < todayStr) {
+                const diffTime = Math.abs(todayObj - itemDateObj);
+                const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+                itemObj.daysOverdue = diffDays;
+                overdue.push(itemObj);
+            } else {
+                upcoming.push(itemObj);
+            }
+        });
+
+        upcoming.sort((a, b) => {
+            const timeDiff = a.dateObj - b.dateObj;
+            if (timeDiff !== 0) return timeDiff;
+            return Math.abs(Number(b.amount || 0)) - Math.abs(Number(a.amount || 0));
+        });
+
+        overdue.sort((a, b) => {
+            const timeDiff = a.dateObj - b.dateObj;
+            if (timeDiff !== 0) return timeDiff;
+            return Math.abs(Number(b.amount || 0)) - Math.abs(Number(a.amount || 0));
+        });
+
+        return { upcomingItems: upcoming, overdueItems: overdue };
+    }, [settings.recurring, settings.networthItems, transactions, viewYear, viewMonth, todayStr]);
+
+    const paidItems = React.useMemo(() => {
+        const list = (transactions || []).filter(t => t.linkedRecurringId || t.linkTo || t.source === "recurring" || (t.notes && t.notes.includes("Marked as paid")));
+        return list.sort((a, b) => {
+            const dateA = toYYYYMMDD(a.date);
+            const dateB = toYYYYMMDD(b.date);
+            if (dateA !== dateB) return dateA.localeCompare(dateB);
+            return Math.abs(Number(b.amount || 0)) - Math.abs(Number(a.amount || 0));
+        });
+    }, [transactions]);
+
+    const selectedDayStr = selectedDay ? toYYYYMMDD(selectedDay) : null;
+
+    const filteredUpcoming = selectedDayStr ? upcomingItems.filter(i => i.date === selectedDayStr) : upcomingItems;
+    const filteredOverdue = selectedDayStr ? overdueItems.filter(i => i.date === selectedDayStr) : overdueItems;
+    const filteredPaid = selectedDayStr ? paidItems.filter(i => toYYYYMMDD(i.date) === selectedDayStr) : paidItems.filter(i => toYYYYMMDD(i.date).startsWith(viewMonthPrefix));
+
+    // Auto-select active filter tab based on calendar view & date selection rules
+    React.useEffect(() => {
+        if (selectedDayStr) {
+            if (selectedDayStr >= todayStr) {
+                // Today or future date selected: show upcoming filter, if empty show paid filter
+                if (filteredUpcoming.length > 0) {
+                    setFilter("upcoming");
+                } else if (filteredOverdue.length > 0) {
+                    setFilter("overdue");
+                } else {
+                    setFilter("paid");
+                }
+            } else {
+                // Past date selected: show overdue filter, if empty show paid filter
+                if (filteredOverdue.length > 0) {
+                    setFilter("overdue");
+                } else if (filteredUpcoming.length > 0) {
+                    setFilter("upcoming");
+                } else {
+                    setFilter("paid");
+                }
+            }
+        } else {
+            // Month view level selection
+            const calYear = calNow.getFullYear();
+            const calMonth = calNow.getMonth();
+            const isPrevMonth = viewYear < calYear || (viewYear === calYear && viewMonth < calMonth);
+            const isNextMonth = viewYear > calYear || (viewYear === calYear && viewMonth > calMonth);
+
+            if (isPrevMonth) {
+                // 1. Previous month selected: show overdue filter, if nothing exists show paid filter
+                if (filteredOverdue.length > 0) {
+                    setFilter("overdue");
+                } else {
+                    setFilter("paid");
+                }
+            } else if (isNextMonth) {
+                // 2. Next month selected: show upcoming filter, if nothing exists show paid filter
+                if (filteredUpcoming.length > 0) {
+                    setFilter("upcoming");
+                } else {
+                    setFilter("paid");
+                }
+            } else {
+                // Current month
+                if (filteredOverdue.length > 0) {
+                    setFilter("overdue");
+                } else if (filteredUpcoming.length > 0) {
+                    setFilter("upcoming");
+                } else {
+                    setFilter("paid");
+                }
+            }
+        }
+    }, [selectedDayStr, viewYear, viewMonth, filteredUpcoming.length, filteredOverdue.length, filteredPaid.length, todayStr]);
+
+    // Handle Escape key to close Mark Paid modal and Unmark Confirm modal
+    React.useEffect(() => {
+        const handleKeyDown = (e) => {
+            if (e.key === "Escape") {
+                if (markPaidModalItem) {
+                    setMarkPaidModalItem(null);
+                    setSelectedTxIdToLink(null);
+                    setIsMappingMode(false);
+                    setSelectedMapTxIds([]);
+                }
+                if (unmarkConfirmItem) {
+                    setUnmarkConfirmItem(null);
+                    setUnmarkLinkedTxs([]);
+                }
+            }
+        };
+        window.addEventListener("keydown", handleKeyDown);
+        return () => window.removeEventListener("keydown", handleKeyDown);
+    }, [markPaidModalItem, unmarkConfirmItem]);
+
+    // Candidate matching transactions for Mark Paid modal
+    const candidateMatches = React.useMemo(() => {
+        if (!markPaidModalItem) return [];
+        const itemDateStr = markPaidModalItem.date;
+        const itemAmount = Math.abs(Number(markPaidModalItem.amount));
+        return (transactions || []).filter(t => {
+            const tDateStr = toYYYYMMDD(t.date);
+            const tAmount = Math.abs(Number(t.amount));
+            return tDateStr === itemDateStr && Math.abs(tAmount - itemAmount) < 0.01;
+        });
+    }, [markPaidModalItem, transactions]);
+
+    // Transactions list for multi-transaction mapping mode (type and category matched)
+    const candidateTxList = React.useMemo(() => {
+        if (!markPaidModalItem) return [];
+        const itemType = markPaidModalItem.type || "expense";
+        const itemCat = (markPaidModalItem.category || "").trim().toLowerCase();
+
+        return (transactions || []).filter(t => {
+            const tType = t.type || "expense";
+            if (tType !== itemType) return false;
+            const tCat = (t.category || "").trim().toLowerCase();
+            if (itemCat && itemCat !== "general" && tCat) {
+                return tCat === itemCat;
+            }
+            return true;
+        }).sort((a, b) => new Date(b.date) - new Date(a.date));
+    }, [markPaidModalItem, transactions]);
+
+    const selectedMapSum = React.useMemo(() => {
+        return candidateTxList
+            .filter(t => selectedMapTxIds.includes(t.id))
+            .reduce((acc, t) => acc + Math.abs(Number(t.amount || 0)), 0);
+    }, [candidateTxList, selectedMapTxIds]);
+
+    const confirmMarkPaid = async (item, txIdToLink) => {
+        try {
+            const isIncome = item.type === "income";
+            const linkIds = Array.isArray(txIdToLink) ? txIdToLink : (txIdToLink ? [txIdToLink] : []);
+            const dateFormatted = formatDate(todayStr, settings.dateFormat);
+
+            if (linkIds.length > 0) {
+                for (const id of linkIds) {
+                    const existingTx = transactions.find(t => t.id === id);
+                    if (existingTx) {
+                        const noteMsg = `Linked ${isIncome ? "Inflow" : "Outflow"} from Dashboard on ${dateFormatted}`;
+                        const updatedTx = {
+                            ...existingTx,
+                            linkedRecurringId: item.id,
+                            notes: existingTx.notes ? (existingTx.notes.includes("from Dashboard") ? existingTx.notes : `${existingTx.notes} (${noteMsg})`) : noteMsg
+                        };
+                        await updateTransactionInDB(updatedTx);
+                    }
+                }
+            } else {
+                const noteMsg = `Created ${isIncome ? "Inflow" : "Outflow"} from Dashboard on ${dateFormatted}`;
+                const newTx = {
+                    id: crypto.randomUUID(),
+                    date: item.date || todayStr,
+                    merchant: item.name,
+                    narration: item.name,
+                    amount: item.amount,
+                    type: item.type || "expense",
+                    category: item.category || "Subscriptions",
+                    account: "Bank 1",
+                    linkedRecurringId: item.id,
+                    tags: [],
+                    notes: noteMsg
+                };
+                await updateTransactionInDB(newTx);
+            }
+
+            // Advance schedule on item
+            if (item.kind === "recurring") {
+                const updatedList = (settings.recurring || []).map(r => {
+                    if (r.id !== item.id) return r;
+                    const d = new Date(r.nextDate || new Date());
+                    switch (r.cadence) {
+                        case "weekly": d.setDate(d.getDate() + 7); break;
+                        case "biweekly": d.setDate(d.getDate() + 14); break;
+                        case "quarterly": d.setMonth(d.getMonth() + 3); break;
+                        case "annual": d.setFullYear(d.getFullYear() + 1); break;
+                        case "monthly":
+                        default: d.setMonth(d.getMonth() + 1); break;
+                    }
+                    return { ...r, nextDate: d.toISOString().split('T')[0] };
+                });
+                await updateSetting("recurring", updatedList);
+            } else if (item.kind === "networth") {
+                const updatedList = (settings.networthItems || []).map(it => {
+                    if (it.id !== item.id) return it;
+                    const d = new Date(it.nextDueDate || new Date());
+                    const monthsToAdd = (it.frequencyPerYear >= 12) ? 1 : (it.frequencyPerYear === 4) ? 3 : (it.frequencyPerYear === 2) ? 6 : 12;
+                    d.setMonth(d.getMonth() + monthsToAdd);
+                    return { ...it, nextDueDate: d.toISOString().split('T')[0] };
+                });
+                await updateSetting("networthItems", updatedList);
+            }
+
+            // Refresh global state so new transaction and updated settings are immediately reflected across all views
+            if (typeof loadState === "function") {
+                await loadState();
+            }
+
+            if (typeof showToast === "function") {
+                const actionLabel = linkIds.length > 0 ? "Linked" : "Created";
+                const typeLabel = isIncome ? "Inflow" : "Outflow";
+                showToast(`${actionLabel} ${typeLabel} for "${item.name}" from Dashboard on ${dateFormatted}`);
+            }
+        } catch (e) {
+        } finally {
+            setMarkPaidModalItem(null);
+            setSelectedTxIdToLink(null);
+            setIsMappingMode(false);
+            setSelectedMapTxIds([]);
+        }
+    };
+
+    const executeUnmarkPaid = async (txList, primaryTx) => {
+        try {
+            const targetList = Array.isArray(txList) && txList.length > 0 ? txList : [primaryTx];
+            const linkedRecId = primaryTx?.linkedRecurringId || targetList[0]?.linkedRecurringId;
+
+            for (const t of targetList) {
+                const isNewlyCreated = t.notes && (t.notes.includes("Created Inflow from Dashboard") || t.notes.includes("Created Outflow from Dashboard") || t.notes.startsWith("Created "));
+
+                if (isNewlyCreated) {
+                    await deleteTransactionFromDB(t.id);
+                } else {
+                    let cleanedNotes = (t.notes || "")
+                        .replace(/\(Linked (Inflow|Outflow) from Dashboard on [^)]+\)/g, "")
+                        .replace(/Linked (Inflow|Outflow) from Dashboard on [^\n\r.]*/g, "")
+                        .replace(/\(Created (Inflow|Outflow) from Dashboard on [^)]+\)/g, "")
+                        .replace(/Created (Inflow|Outflow) from Dashboard on [^\n\r.]*/g, "")
+                        .trim();
+
+                    const updatedTx = {
+                        ...t,
+                        linkedRecurringId: null,
+                        notes: cleanedNotes
+                    };
+                    await updateTransactionInDB(updatedTx);
+                }
+            }
+
+            // Rewind schedule if linked to a recurring item or networth item
+            if (linkedRecId) {
+                const rItem = (settings.recurring || []).find(r => r && r.id === linkedRecId);
+                if (rItem) {
+                    const updatedList = (settings.recurring || []).map(r => {
+                        if (!r || r.id !== linkedRecId) return r;
+                        const d = new Date(r.nextDate || new Date());
+                        switch (r.cadence) {
+                            case "weekly": d.setDate(d.getDate() - 7); break;
+                            case "biweekly": d.setDate(d.getDate() - 14); break;
+                            case "quarterly": d.setMonth(d.getMonth() - 3); break;
+                            case "annual": d.setFullYear(d.getFullYear() - 1); break;
+                            case "monthly":
+                            default: d.setMonth(d.getMonth() - 1); break;
+                        }
+                        const y = d.getFullYear();
+                        const m = String(d.getMonth() + 1).padStart(2, '0');
+                        const day = String(d.getDate()).padStart(2, '0');
+                        return { ...r, nextDate: `${y}-${m}-${day}` };
+                    });
+                    await updateSetting("recurring", updatedList);
+                } else {
+                    const nwItem = (settings.networthItems || []).find(it => it && it.id === linkedRecId);
+                    if (nwItem) {
+                        const updatedList = (settings.networthItems || []).map(it => {
+                            if (!it || it.id !== linkedRecId) return it;
+                            const d = new Date(it.nextDueDate || new Date());
+                            const monthsToSub = (it.frequencyPerYear >= 12) ? 1 : (it.frequencyPerYear === 4) ? 3 : (it.frequencyPerYear === 2) ? 6 : 12;
+                            d.setMonth(d.getMonth() - monthsToSub);
+                            const y = d.getFullYear();
+                            const m = String(d.getMonth() + 1).padStart(2, '0');
+                            const day = String(d.getDate()).padStart(2, '0');
+                            return { ...it, nextDueDate: `${y}-${m}-${day}` };
+                        });
+                        await updateSetting("networthItems", updatedList);
+                    }
+                }
+            }
+
+            if (typeof loadState === "function") {
+                await loadState();
+            }
+
+            if (typeof showToast === "function") {
+                const nameLabel = primaryTx?.merchant || primaryTx?.narration || "Payment";
+                if (targetList.length > 1) {
+                    showToast(`Unmarked payment "${nameLabel}" and unlinked ${targetList.length} transactions.`);
+                } else {
+                    const isNewlyCreated = primaryTx?.notes && (primaryTx.notes.includes("Created Inflow from Dashboard") || primaryTx.notes.includes("Created Outflow from Dashboard") || primaryTx.notes.startsWith("Created "));
+                    if (isNewlyCreated) {
+                        showToast(`Deleted transaction "${nameLabel}" and unmarked as paid.`);
+                    } else {
+                        showToast(`Unlinked transaction "${nameLabel}" and cleaned notes.`);
+                    }
+                }
+            }
+        } catch (e) {
+            console.error("Failed to unmark paid item:", e);
+        } finally {
+            setUnmarkConfirmItem(null);
+            setUnmarkLinkedTxs([]);
+        }
+    };
+
+    const handleUnmarkPaid = (tx) => {
+        const linkedRecId = tx.linkedRecurringId;
+        const relatedTxs = linkedRecId ? (transactions || []).filter(t => t.linkedRecurringId === linkedRecId) : [];
+        const finalTxs = relatedTxs.length > 0 ? relatedTxs : [tx];
+
+        setUnmarkConfirmItem(tx);
+        setUnmarkLinkedTxs(finalTxs);
+    };
+
+    return (
+        <div className="section-card" style={{ background: 'var(--card-bg)', borderRadius: '16px', border: '1px solid var(--border-color)', boxShadow: 'var(--shadow-sm)', display: 'flex', flexDirection: 'column', height: '100%', padding: '16px' }}>
+            {/* 3 Filter Tabs: Upcoming, Overdue, Paid */}
+            <div style={{ display: 'flex', justifyContent: 'flex-start', marginBottom: '12px' }}>
+                <div style={{ display: 'flex', gap: '4px', background: 'var(--bg-color)', padding: '4px', borderRadius: '10px', border: '1px solid var(--border-color)', width: '100%' }}>
+                    <button
+                        className={`btn btn-sm ${filter === 'upcoming' ? 'btn-primary' : 'btn-secondary'}`}
+                        onClick={() => setFilter('upcoming')}
+                        style={{ flex: 1, fontSize: '0.78rem', padding: '5px 10px', borderRadius: '7px', fontWeight: filter === 'upcoming' ? 700 : 500, border: 'none' }}
+                    >
+                        Upcoming ({filteredUpcoming.length})
+                    </button>
+                    <button
+                        className="btn btn-sm"
+                        onClick={() => setFilter('overdue')}
+                        style={{
+                            flex: 1, fontSize: '0.78rem', padding: '5px 10px', borderRadius: '7px', fontWeight: filter === 'overdue' ? 700 : 500, border: 'none',
+                            background: filter === 'overdue' ? '#DC2626' : '#FFFFFF',
+                            color: filter === 'overdue' ? '#FFFFFF' : '#DC2626',
+                            boxShadow: filter === 'overdue' ? '0 2px 6px rgba(220, 38, 38, 0.3)' : 'none'
+                        }}
+                    >
+                        Overdue ({filteredOverdue.length})
+                    </button>
+                    <button
+                        className="btn btn-sm"
+                        onClick={() => setFilter('paid')}
+                        style={{
+                            flex: 1, fontSize: '0.78rem', padding: '5px 10px', borderRadius: '7px', fontWeight: filter === 'paid' ? 700 : 500, border: 'none',
+                            background: filter === 'paid' ? '#10B981' : '#FFFFFF',
+                            color: filter === 'paid' ? '#FFFFFF' : '#059669',
+                            boxShadow: filter === 'paid' ? '0 2px 6px rgba(16, 185, 129, 0.3)' : 'none'
+                        }}
+                    >
+                        Paid ({filteredPaid.length})
+                    </button>
+                </div>
+            </div>
+
+            {/* Active Filter Content: Fixed Height (300px) with Always-On Scrollbar */}
+            <div className="payments-scroll-container" style={{ height: '300px', maxHeight: '300px', overflowY: 'scroll', display: 'flex', flexDirection: 'column', gap: '6px', padding: '4px 6px 4px 2px' }}>
+                {filter === "upcoming" && (
+                    filteredUpcoming.length === 0 ? (
+                        <div className="empty-state" style={{ padding: '24px 12px', margin: 'auto 0' }}>
+                            <Icon name="calendar" />
+                            <div className="empty-state-text">
+                                <h3>No Upcoming Payments</h3>
+                                <p style={{ fontSize: '0.8rem' }}>{selectedDayStr ? "No scheduled payments for selected date." : "No upcoming commitments found for this month."}</p>
+                            </div>
+                        </div>
+                    ) : (
+                        filteredUpcoming.map((item, idx) => {
+                            const itemDateObj = new Date(item.date + "T00:00:00");
+                            const diffTime = itemDateObj - todayObj;
+                            const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+                            const dueText = diffDays <= 0 ? "Due Today" : (diffDays === 1 ? "Due Tomorrow" : `Due in ${diffDays} Days`);
+
+                            return (
+                                <div key={item.id || idx} className="payments-item-card" style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 2fr) minmax(0, 1.8fr) minmax(0, 1.35fr) minmax(0, 1fr) 28px', gap: '8px', alignItems: 'center', padding: '6px 10px', minHeight: '38px' }}>
+                                    <div style={{ fontWeight: 600, fontSize: '0.84rem', color: 'var(--text-main)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
+                                        {item.name}
+                                    </div>
+                                    <div style={{ fontSize: '0.76rem', color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
+                                        {item.category}
+                                    </div>
+                                    <div style={{ fontSize: '0.76rem', color: 'var(--text-muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0 }}>
+                                        <span className="upcoming-date-default">Due {formatDate(item.date, settings.dateFormat)}</span>
+                                        <span className="upcoming-days-hover" style={{ fontWeight: 700, background: '#EEF2FF', color: '#4338CA', padding: '1px 6px', borderRadius: '4px', border: '1px solid #C7D2FE' }}>
+                                            {dueText}
+                                        </span>
+                                    </div>
+                                    <div style={{ fontWeight: 700, fontSize: '0.85rem', textAlign: 'right', whiteSpace: 'nowrap', color: item.type === 'neutral' ? 'var(--info)' : (item.type === 'income' ? 'var(--success)' : 'var(--danger)'), overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0 }}>
+                                        {`${item.type === 'neutral' ? (item.neutralSign === '-' ? '-' : '+') : (item.type === 'income' ? '+' : '-')}${formatCurrency(item.amount)}`}
+                                    </div>
+                                    <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
+                                        <button
+                                            className="btn btn-secondary btn-sm"
+                                            style={{ width: '26px', height: '26px', padding: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', borderRadius: '50%', background: '#EEF2FF', color: '#4F46E5', border: '1.5px solid #C7D2FE', cursor: 'pointer', flexShrink: 0, boxShadow: '0 1px 3px rgba(79, 70, 229, 0.15)' }}
+                                            title="Mark as Paid"
+                                            onClick={() => { setMarkPaidModalItem(item); setSelectedTxIdToLink(null); }}
+                                        >
+                                            <Icon name="check" />
+                                        </button>
+                                    </div>
+                                </div>
+                            );
+                        })
+                    )
+                )}
+
+                {filter === "overdue" && (
+                    filteredOverdue.length === 0 ? (
+                        <div className="empty-state" style={{ padding: '24px 12px', margin: 'auto 0' }}>
+                            <Icon name="check" />
+                            <div className="empty-state-text">
+                                <h3>All Caught Up!</h3>
+                                <p style={{ fontSize: '0.8rem' }}>No overdue payments found for this month.</p>
+                            </div>
+                        </div>
+                    ) : (
+                        filteredOverdue.map((item, idx) => (
+                            <div key={item.id || idx} className="payments-item-card" style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 2fr) minmax(0, 1.8fr) minmax(0, 1.35fr) minmax(0, 1fr) 28px', gap: '8px', alignItems: 'center', padding: '6px 10px', minHeight: '38px' }}>
+                                <div style={{ fontWeight: 600, fontSize: '0.84rem', color: 'var(--text-main)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
+                                    {item.name}
+                                </div>
+                                <div style={{ fontSize: '0.76rem', color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
+                                    {item.category || "General"}
+                                </div>
+                                <div style={{ fontSize: '0.76rem', color: '#DC2626', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0 }}>
+                                    <span className="overdue-date-default">Due {formatDate(item.date, settings.dateFormat)}</span>
+                                    <span className="overdue-days-hover" style={{ fontWeight: 700, background: '#FEE2E2', color: '#DC2626', padding: '1px 6px', borderRadius: '4px', border: '1px solid #FCA5A5' }}>
+                                        {item.daysOverdue} Day{item.daysOverdue > 1 ? 's' : ''} Overdue
+                                    </span>
+                                </div>
+                                <div style={{ fontWeight: 700, fontSize: '0.85rem', textAlign: 'right', whiteSpace: 'nowrap', color: item.type === 'neutral' ? 'var(--info)' : (item.type === 'income' ? 'var(--success)' : 'var(--danger)'), overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0 }}>
+                                    {`${item.type === 'neutral' ? (item.neutralSign === '-' ? '-' : '+') : (item.type === 'income' ? '+' : '-')}${formatCurrency(item.amount)}`}
+                                </div>
+                                <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
+                                    <button
+                                        className="btn btn-primary btn-sm"
+                                        style={{ width: '26px', height: '26px', padding: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', borderRadius: '50%', background: '#FEE2E2', color: '#DC2626', border: '1.5px solid #FCA5A5', cursor: 'pointer', flexShrink: 0, boxShadow: '0 1px 3px rgba(220, 38, 38, 0.15)' }}
+                                        title="Mark as Paid"
+                                        onClick={() => { setMarkPaidModalItem(item); setSelectedTxIdToLink(null); }}
+                                    >
+                                        <Icon name="check" />
+                                    </button>
+                                </div>
+                            </div>
+                        ))
+                    )
+                )}
+
+                {filter === "paid" && (
+                    filteredPaid.length === 0 ? (
+                        <div className="empty-state" style={{ padding: '24px 12px', margin: 'auto 0' }}>
+                            <Icon name="transactions" />
+                            <div className="empty-state-text">
+                                <h3>No Paid Payments</h3>
+                                <p style={{ fontSize: '0.8rem' }}>No completed payment history recorded for this month.</p>
+                            </div>
+                        </div>
+                    ) : (
+                        filteredPaid.map((item, idx) => (
+                            <div key={item.id || idx} className="payments-item-card" style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 2fr) minmax(0, 1.8fr) minmax(0, 1.35fr) minmax(0, 1fr) 28px', gap: '8px', alignItems: 'center', padding: '6px 10px', minHeight: '38px' }}>
+                                <div style={{ fontWeight: 600, fontSize: '0.84rem', color: 'var(--text-main)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
+                                    {item.merchant || item.narration || "Payment"}
+                                </div>
+                                <div style={{ fontSize: '0.76rem', color: 'var(--text-muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0 }}>
+                                    {item.category || "General"}
+                                </div>
+                                <div style={{ fontSize: '0.76rem', color: '#059669', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0 }}>
+                                    <span className="paid-date-default">{formatDate(item.date, settings.dateFormat)}</span>
+                                    <span className="paid-date-hover" style={{ fontWeight: 700, background: '#D1FAE5', color: '#065F46', padding: '1px 6px', borderRadius: '4px', border: '1px solid #6EE7B7' }}>
+                                        ✓ {formatDate(item.date, settings.dateFormat)}
+                                    </span>
+                                </div>
+                                <div style={{ fontWeight: 700, fontSize: '0.85rem', textAlign: 'right', whiteSpace: 'nowrap', color: item.type === 'income' ? 'var(--success)' : 'var(--danger)', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0 }}>
+                                    {`${item.type === 'income' ? '+' : '-'}${formatCurrency(item.amount)}`}
+                                </div>
+                                <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
+                                    <button
+                                        className="btn btn-secondary btn-sm"
+                                        style={{ width: '24px', height: '24px', padding: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', borderRadius: '50%', background: '#FEE2E2', color: '#DC2626', border: '1px solid #FCA5A5', cursor: 'pointer', flexShrink: 0 }}
+                                        title="Unmark as Paid (Remove)"
+                                        onClick={() => handleUnmarkPaid(item)}
+                                    >
+                                        <Icon name="close" />
+                                    </button>
+                                </div>
+                            </div>
+                        ))
+                    )
+                )}
+            </div>
+
+            {/* Mark Paid Confirmation / Transaction Match Modal */}
+            {markPaidModalItem && (() => {
+                const isIncome = markPaidModalItem.type === "income";
+                const targetAmt = Math.abs(Number(markPaidModalItem.amount || 0));
+                const sumMatches = Math.abs(selectedMapSum - targetAmt) < 0.01;
+
+                return (
+                    <div className="modal-overlay" onClick={() => { setMarkPaidModalItem(null); setSelectedTxIdToLink(null); setIsMappingMode(false); setSelectedMapTxIds([]); }}>
+                        <div className="modal-container" style={{ maxWidth: '520px' }} onClick={(e) => e.stopPropagation()}>
+                            <div className="modal-header">
+                                <h3 className="modal-title">
+                                    {isMappingMode
+                                        ? (isIncome ? "Map Inflow to Existing Transaction(s)" : "Map Outflow to Existing Transaction(s)")
+                                        : (isIncome ? "Mark Inflow as Received" : "Mark Outflow as Paid")
+                                    }
+                                </h3>
+                                <button className="modal-close-btn" onClick={() => { setMarkPaidModalItem(null); setSelectedTxIdToLink(null); setIsMappingMode(false); setSelectedMapTxIds([]); }}>
+                                    <Icon name="close" />
+                                </button>
+                            </div>
+                            <div className="modal-body" style={{ padding: '16px' }}>
+                                {!isMappingMode ? (
+                                    <>
+                                        <div style={{ padding: '14px 16px', borderRadius: '12px', background: isIncome ? '#F0FDF4' : '#F8FAFC', border: isIncome ? '1px solid #A7F3D0' : '1px solid #E2E8F0', marginBottom: '16px' }}>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                                                <span style={{ fontSize: '0.72rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', color: isIncome ? '#047857' : '#475569', background: isIncome ? '#D1FAE5' : '#E2E8F0', padding: '2px 8px', borderRadius: '10px' }}>
+                                                    {isIncome ? "Inflow / Income" : "Outflow / Expense"}
+                                                </span>
+                                                <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>{markPaidModalItem.category || "General"}</span>
+                                            </div>
+                                            <div style={{ fontWeight: 700, fontSize: '1.05rem', color: 'var(--text-main)' }}>{markPaidModalItem.name}</div>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '10px', fontSize: '0.84rem' }}>
+                                                <span style={{ color: 'var(--text-muted)' }}>Due Date: <strong style={{ color: 'var(--text-main)' }}>{formatDate(markPaidModalItem.date, settings.dateFormat)}</strong></span>
+                                                <span><strong style={{ fontSize: '1.05rem', color: isIncome ? '#059669' : '#DC2626', whiteSpace: 'nowrap' }}>{`${isIncome ? '+' : '-'}${formatCurrency(markPaidModalItem.amount)}`}</strong></span>
+                                            </div>
+                                        </div>
+
+                                        {candidateMatches.length > 0 ? (
+                                            <div>
+                                                <p style={{ fontSize: '0.84rem', fontWeight: 600, color: 'var(--text-main)', marginBottom: '8px' }}>
+                                                    Found {candidateMatches.length} existing transaction{candidateMatches.length > 1 ? 's' : ''} on this date matching <span style={{ whiteSpace: 'nowrap' }}>{`${isIncome ? '+' : '-'}${formatCurrency(markPaidModalItem.amount)}`}</span>:
+                                                </p>
+                                                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '180px', overflowY: 'auto', marginBottom: '12px' }}>
+                                                    {candidateMatches.map(tx => {
+                                                        const isChecked = (selectedTxIdToLink === tx.id) || (!selectedTxIdToLink && candidateMatches[0].id === tx.id);
+                                                        return (
+                                                            <label
+                                                                key={tx.id}
+                                                                style={{
+                                                                    display: 'flex', alignItems: 'center', gap: '10px', padding: '10px 12px',
+                                                                    borderRadius: '8px', border: isChecked ? '1px solid var(--primary)' : '1px solid var(--border-color)',
+                                                                    background: isChecked ? 'var(--primary-light)' : '#fff', cursor: 'pointer'
+                                                                }}
+                                                            >
+                                                                <input
+                                                                    type="radio"
+                                                                    name="txMatch"
+                                                                    checked={isChecked}
+                                                                    onChange={() => setSelectedTxIdToLink(tx.id)}
+                                                                />
+                                                                <div style={{ flex: 1 }}>
+                                                                    <div style={{ fontWeight: 600, fontSize: '0.84rem' }}>{tx.merchant || tx.narration || "Transaction"}</div>
+                                                                    <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)', display: 'flex', gap: '8px' }}>
+                                                                        <span>{tx.category || "General"}</span>
+                                                                        <span>• {tx.account || "Account"}</span>
+                                                                    </div>
+                                                                </div>
+                                                                <span style={{ fontWeight: 700, fontSize: '0.86rem', color: isIncome ? '#059669' : '#DC2626', whiteSpace: 'nowrap' }}>{`${isIncome ? '+' : '-'}${formatCurrency(tx.amount)}`}</span>
+                                                            </label>
+                                                        );
+                                                    })}
+                                                </div>
+                                                <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+                                                    Would you like to link this transaction or record a new one?
+                                                </p>
+                                            </div>
+                                        ) : (
+                                            <div>
+                                                <div style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', padding: '10px 12px', borderRadius: '10px', background: '#FFFBEB', border: '1px solid #FCD34D', color: '#92400E', fontSize: '0.82rem', marginBottom: '12px' }}>
+                                                    <div style={{ marginTop: '2px', flexShrink: 0 }}><Icon name="info" /></div>
+                                                    <div>No matching transaction found on <strong>{formatDate(markPaidModalItem.date, settings.dateFormat)}</strong> for <strong style={{ whiteSpace: 'nowrap' }}>{`${isIncome ? '+' : '-'}${formatCurrency(markPaidModalItem.amount)}`}</strong>.</div>
+                                                </div>
+                                                <p style={{ fontSize: '0.84rem', color: 'var(--text-main)' }}>
+                                                    {isIncome ? "Would you like to record a new inflow transaction for this item?" : "Would you like to create a new outflow transaction for this item?"}
+                                                </p>
+                                            </div>
+                                        )}
+                                    </>
+                                ) : (
+                                    <>
+                                        {/* Multi-transaction mapping mode */}
+                                        <div style={{ padding: '12px 14px', borderRadius: '10px', background: '#F8FAFC', border: '1px solid #E2E8F0', marginBottom: '12px' }}>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.82rem', fontWeight: 600 }}>
+                                                <span>Item: <strong>{markPaidModalItem.name}</strong></span>
+                                                <span>Target: <strong style={{ color: isIncome ? '#059669' : '#DC2626', whiteSpace: 'nowrap' }}>{`${isIncome ? '+' : '-'}${formatCurrency(markPaidModalItem.amount)}`}</strong></span>
+                                            </div>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '8px', paddingTop: '8px', borderTop: '1px dashed #CBD5E1', fontSize: '0.82rem' }}>
+                                                <span>Selected ({selectedMapTxIds.length}): <strong>{formatCurrency(selectedMapSum)}</strong></span>
+                                                {sumMatches ? (
+                                                    <span style={{ background: '#D1FAE5', color: '#065F46', fontWeight: 700, padding: '2px 8px', borderRadius: '10px', fontSize: '0.74rem' }}>✓ Sum Matches!</span>
+                                                ) : selectedMapSum < targetAmt ? (
+                                                    <span style={{ background: '#FEF3C7', color: '#92400E', fontWeight: 600, padding: '2px 8px', borderRadius: '10px', fontSize: '0.74rem' }}>Remaining: {formatCurrency(targetAmt - selectedMapSum)}</span>
+                                                ) : (
+                                                    <span style={{ background: '#FEE2E2', color: '#991B1B', fontWeight: 600, padding: '2px 8px', borderRadius: '10px', fontSize: '0.74rem' }}>Exceeds by: {formatCurrency(selectedMapSum - targetAmt)}</span>
+                                                )}
+                                            </div>
+                                        </div>
+
+                                        <p style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-main)', marginBottom: '8px' }}>
+                                            Select existing transaction(s) under <strong>{markPaidModalItem.category || "General"}</strong>:
+                                        </p>
+                                        <div style={{ maxHeight: '200px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '6px', marginBottom: '8px' }}>
+                                            {candidateTxList.length === 0 ? (
+                                                <div style={{ padding: '16px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.8rem' }}>
+                                                    No existing {isIncome ? "inflow" : "outflow"} transactions found in category <strong>"{markPaidModalItem.category || "General"}"</strong>.
+                                                </div>
+                                            ) : (
+                                                candidateTxList.map(tx => {
+                                                    const isChecked = selectedMapTxIds.includes(tx.id);
+                                                    return (
+                                                        <label
+                                                            key={tx.id}
+                                                            style={{
+                                                                display: 'flex', alignItems: 'center', gap: '10px', padding: '8px 12px',
+                                                                borderRadius: '8px', border: isChecked ? '1.5px solid var(--primary)' : '1px solid var(--border-color)',
+                                                                background: isChecked ? 'var(--primary-light)' : '#fff', cursor: 'pointer'
+                                                            }}
+                                                        >
+                                                            <input
+                                                                type="checkbox"
+                                                                checked={isChecked}
+                                                                onChange={() => {
+                                                                    setSelectedMapTxIds(prev =>
+                                                                        prev.includes(tx.id) ? prev.filter(id => id !== tx.id) : [...prev, tx.id]
+                                                                    );
+                                                                }}
+                                                            />
+                                                            <div style={{ flex: 1, minWidth: 0 }}>
+                                                                <div style={{ fontWeight: 600, fontSize: '0.82rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{tx.merchant || tx.narration || "Transaction"}</div>
+                                                                <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', display: 'flex', gap: '6px' }}>
+                                                                    <span>{formatDate(tx.date, settings.dateFormat)}</span>
+                                                                    <span>• {tx.category || "General"}</span>
+                                                                </div>
+                                                            </div>
+                                                            <span style={{ fontWeight: 700, fontSize: '0.84rem', color: isIncome ? '#059669' : '#DC2626', whiteSpace: 'nowrap' }}>{`${isIncome ? '+' : '-'}${formatCurrency(tx.amount)}`}</span>
+                                                        </label>
+                                                    );
+                                                })
+                                            )}
+                                        </div>
+                                    </>
+                                )}
+                            </div>
+                            <div className="modal-footer" style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end', padding: '12px 16px' }}>
+                                {!isMappingMode ? (
+                                    <>
+                                        <button className="btn btn-secondary btn-sm" onClick={() => setIsMappingMode(true)}>
+                                            Map to Existing Transaction(s)
+                                        </button>
+                                        <button className="btn btn-primary btn-sm" style={isIncome ? { background: '#10B981', borderColor: '#059669' } : { background: '#DC2626', borderColor: '#B91C1C', color: '#FFFFFF' }} onClick={() => confirmMarkPaid(markPaidModalItem, candidateMatches.length > 0 ? (selectedTxIdToLink || candidateMatches[0].id) : null)}>
+                                            {candidateMatches.length > 0 ? "Link Selected Transaction" : (isIncome ? "Create & Record Inflow" : "Create & Mark Outflow Paid")}
+                                        </button>
+                                    </>
+                                ) : (
+                                    <>
+                                        <button className="btn btn-secondary btn-sm" onClick={() => setIsMappingMode(false)}>
+                                            Back
+                                        </button>
+                                        <button
+                                            className="btn btn-primary btn-sm"
+                                            disabled={!sumMatches}
+                                            style={!sumMatches ? { opacity: 0.5, cursor: 'not-allowed', background: '#94A3B8', borderColor: '#64748B' } : (isIncome ? { background: '#10B981', borderColor: '#059669' } : { background: '#DC2626', borderColor: '#B91C1C', color: '#FFFFFF' })}
+                                            onClick={() => confirmMarkPaid(markPaidModalItem, selectedMapTxIds)}
+                                        >
+                                            {sumMatches ? `Link Selected (${selectedMapTxIds.length}) Transaction${selectedMapTxIds.length > 1 ? 's' : ''}` : "Sum Must Match Target Amount"}
+                                        </button>
+                                    </>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                );
+            })()}
+
+            {/* Double Confirm Unmarking Modal Overlay */}
+            {unmarkConfirmItem && (() => {
+                const totalSum = unmarkLinkedTxs.reduce((acc, t) => acc + Math.abs(Number(t.amount || 0)), 0);
+                const itemName = unmarkConfirmItem.merchant || unmarkConfirmItem.narration || "Payment Item";
+
+                return (
+                    <div className="modal-overlay" onClick={() => { setUnmarkConfirmItem(null); setUnmarkLinkedTxs([]); }}>
+                        <div className="modal-container" style={{ maxWidth: '520px' }} onClick={(e) => e.stopPropagation()}>
+                            <div className="modal-header" style={{ padding: '16px 20px', borderBottom: '1px solid var(--border-color)' }}>
+                                <h3 className="modal-title" style={{ color: '#DC2626', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                    ⚠️ Confirm Unmarking Payment
+                                </h3>
+                                <button className="modal-close-btn" onClick={() => { setUnmarkConfirmItem(null); setUnmarkLinkedTxs([]); }}>
+                                    <Icon name="close" />
+                                </button>
+                            </div>
+                            <div className="modal-body" style={{ padding: '20px' }}>
+                                <div style={{ background: '#FEF2F2', border: '1px solid #FCA5A5', borderRadius: '10px', padding: '14px', marginBottom: '16px', fontSize: '0.86rem', color: '#991B1B' }}>
+                                    This recurring payment for <strong>"{itemName}"</strong> is linked to <strong>{unmarkLinkedTxs.length} transaction{unmarkLinkedTxs.length > 1 ? 's' : ''}</strong> (Total: <strong>{formatCurrency(totalSum)}</strong>).
+                                    <div style={{ marginTop: '6px' }}>
+                                        Unmarking will move this item back to <strong>Upcoming / Overdue</strong> and <strong>{unmarkLinkedTxs.length > 1 ? `unlink/delete all ${unmarkLinkedTxs.length} linked transactions` : 'unlink/delete the linked transaction'}</strong>.
+                                    </div>
+                                </div>
+
+                                <p style={{ fontSize: '0.84rem', fontWeight: 600, color: 'var(--text-main)', marginBottom: '8px' }}>
+                                    Linked Transaction{unmarkLinkedTxs.length > 1 ? 's' : ''} to be Unlinked / Deleted:
+                                </p>
+
+                                <div style={{ maxHeight: '180px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '6px', marginBottom: '12px', paddingRight: '4px' }}>
+                                    {unmarkLinkedTxs.map(t => {
+                                        const isNew = t.notes && (t.notes.includes("Created Inflow from Dashboard") || t.notes.includes("Created Outflow from Dashboard") || t.notes.startsWith("Created "));
+
+                                        return (
+                                            <div key={t.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 12px', borderRadius: '8px', background: '#F8FAFC', border: '1px solid #E2E8F0', fontSize: '0.82rem' }}>
+                                                <div>
+                                                    <strong style={{ color: 'var(--text-main)' }}>{t.narration || t.merchant}</strong>
+                                                    <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>
+                                                        {formatDate(t.date, settings.dateFormat)} • {t.category || "General"}
+                                                        {isNew ? <span style={{ marginLeft: '6px', color: '#DC2626', fontWeight: 600 }}>(Will be deleted)</span> : <span style={{ marginLeft: '6px', color: '#D97706', fontWeight: 600 }}>(Will be unlinked)</span>}
+                                                    </div>
+                                                </div>
+                                                <div style={{ fontWeight: 700, color: t.type === 'income' ? '#059669' : '#DC2626', whiteSpace: 'nowrap' }}>
+                                                    {`${t.type === 'income' ? '+' : '-'}${formatCurrency(t.amount)}`}
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            </div>
+                            <div className="modal-footer" style={{ padding: '14px 20px', borderTop: '1px solid var(--border-color)', display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+                                <button className="btn btn-secondary btn-sm" onClick={() => { setUnmarkConfirmItem(null); setUnmarkLinkedTxs([]); }}>
+                                    Cancel
+                                </button>
+                                <button
+                                    className="btn btn-danger btn-sm"
+                                    style={{ background: '#DC2626', color: '#FFF', fontWeight: 700, padding: '6px 14px', borderRadius: '8px' }}
+                                    onClick={() => executeUnmarkPaid(unmarkLinkedTxs, unmarkConfirmItem)}
+                                >
+                                    Confirm & Unlink ({unmarkLinkedTxs.length})
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                );
+            })()}
+        </div>
+    );
+};
+
+// --- SUB-COMPONENT: Custom SVG Line/Area Cash Flow Chart ---
+const CashFlowSvgChart = ({ transactions, settings }) => {
+    const [hoveredIdx, setHoveredIdx] = React.useState(null);
+
+    // Group transactions by month (last 7 months)
+    const monthsNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    const monthlyTotals = {};
+
+    const today = new Date();
+    for (let i = 6; i >= 0; i--) {
+        const d = new Date(today.getFullYear(), today.getMonth() - i, 1);
+        const label = `${monthsNames[d.getMonth()]} ${String(d.getFullYear()).slice(-2)}`;
+        monthlyTotals[label] = { income: 0, expense: 0, dateObj: d };
+    }
+
+    transactions.forEach(t => {
+        const tDate = new Date(t.date);
+        if (isNaN(tDate.getTime())) return;
+        const label = `${monthsNames[tDate.getMonth()]} ${String(tDate.getFullYear()).slice(-2)}`;
+        if (monthlyTotals[label]) {
+            if (t.type === "income") monthlyTotals[label].income += t.amount;
+            else monthlyTotals[label].expense += t.amount;
+        }
+    });
+
+    const keys = Object.keys(monthlyTotals);
+    const dataPoints = keys.map(k => ({
+        label: k,
+        income: monthlyTotals[k].income,
+        expense: monthlyTotals[k].expense,
+        net: monthlyTotals[k].income - monthlyTotals[k].expense
+    }));
+
+    const activeIdx = hoveredIdx !== null ? hoveredIdx : dataPoints.length - 1;
+    const activePoint = dataPoints[activeIdx] || dataPoints[0];
+
+    const maxVal = Math.max(
+        ...dataPoints.map(d => Math.max(d.income, d.expense)),
+        100
+    );
+
+    const width = 500;
+    const height = 210;
+    const paddingLeft = 45;
+    const paddingRight = 15;
+    const paddingTop = 20;
+    const paddingBottom = 30;
+
+    const chartWidth = width - paddingLeft - paddingRight;
+    const chartHeight = height - paddingTop - paddingBottom;
+
+    const getX = (idx) => paddingLeft + (idx / Math.max(1, dataPoints.length - 1)) * chartWidth;
+    const getY = (val) => height - paddingBottom - (val / maxVal) * chartHeight;
+
+    // Generate smooth Bezier curve string
+    const generateSmoothPath = (points) => {
+        if (!points || points.length === 0) return "";
+        if (points.length === 1) return `M ${points[0].x} ${points[0].y}`;
+        let path = `M ${points[0].x} ${points[0].y}`;
+        for (let i = 0; i < points.length - 1; i++) {
+            const p0 = points[i];
+            const p1 = points[i + 1];
+            const mx = (p0.x + p1.x) / 2;
+            path += ` C ${mx} ${p0.y}, ${mx} ${p1.y}, ${p1.x} ${p1.y}`;
+        }
+        return path;
+    };
+
+    const incomePts = dataPoints.map((d, i) => ({ x: getX(i), y: getY(d.income) }));
+    const expensePts = dataPoints.map((d, i) => ({ x: getX(i), y: getY(d.expense) }));
+
+    const incomePath = generateSmoothPath(incomePts);
+    const expensePath = generateSmoothPath(expensePts);
+
+    const yBottom = getY(0);
+    const x0 = getX(0);
+    const xN = getX(dataPoints.length - 1);
+
+    const incomeArea = incomePath ? `${incomePath} L ${xN} ${yBottom} L ${x0} ${yBottom} Z` : "";
+    const expenseArea = expensePath ? `${expensePath} L ${xN} ${yBottom} L ${x0} ${yBottom} Z` : "";
+
+    const formatCurrency = (val) => formatCurrencyVal(val, settings.currency || "INR");
+
+    return (
+        <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+            {/* Header line with title and active point highlight */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div>
+                    <span style={{ fontWeight: 600, fontSize: '1.05rem', color: 'var(--text-main)' }}>Cash Flow Trends</span>
+                    <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginLeft: '8px' }}>
+                        ({activePoint.label})
+                    </span>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', fontSize: '0.82rem' }}>
+                    <span style={{ color: 'var(--text-muted)' }}>Net:</span>
+                    <span className="dashboard-badge-pill" style={{
+                        background: activePoint.net >= 0 ? '#ECFDF5' : '#FEF2F2',
+                        color: activePoint.net >= 0 ? '#059669' : '#DC2626',
+                        border: activePoint.net >= 0 ? '1px solid #A7F3D0' : '1px solid #FECACA'
+                    }}>
+                        {activePoint.net >= 0 ? '+' : ''}{formatCurrency(activePoint.net)}
+                    </span>
+                </div>
+            </div>
+
+            <div style={{ position: 'relative', width: '100%' }}>
+                <svg viewBox={`0 0 ${width} ${height}`} width="100%" height="100%" style={{ overflow: 'visible' }}>
+                    <defs>
+                        <linearGradient id="incGrad" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="0%" stopColor="#10B981" stopOpacity="0.22" />
+                            <stop offset="100%" stopColor="#10B981" stopOpacity="0.0" />
+                        </linearGradient>
+                        <linearGradient id="expGrad" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="0%" stopColor="#F59E0B" stopOpacity="0.22" />
+                            <stop offset="100%" stopColor="#F59E0B" stopOpacity="0.0" />
+                        </linearGradient>
+                    </defs>
+
+                    {/* Horizontal Grid lines */}
+                    {[0, 0.25, 0.5, 0.75, 1].map((ratio, idx) => {
+                        const val = maxVal * ratio;
+                        const y = getY(val);
+                        return (
+                            <g key={idx}>
+                                <line x1={paddingLeft} y1={y} x2={width - paddingRight} y2={y} stroke="var(--border-color)" strokeWidth="0.5" strokeDasharray="4 4" />
+                                <text x={paddingLeft - 8} y={y + 3} textAnchor="end" fill="var(--text-light)" fontSize="8px">
+                                    {getCurrencySymbol(settings?.currency || "INR")}{Math.round(val)}
+                                </text>
+                            </g>
+                        );
+                    })}
+
+                    {/* Fill Areas */}
+                    {incomeArea && <path d={incomeArea} fill="url(#incGrad)" />}
+                    {expenseArea && <path d={expenseArea} fill="url(#expGrad)" />}
+
+                    {/* Smooth Stroke Curves */}
+                    {incomePath && <path d={incomePath} fill="none" stroke="#10B981" strokeWidth="2.5" strokeLinecap="round" />}
+                    {expensePath && <path d={expensePath} fill="none" stroke="#F59E0B" strokeWidth="2.5" strokeLinecap="round" />}
+
+                    {/* Vertical Focus Line for hovered month */}
+                    {activeIdx !== null && (
+                        <line
+                            x1={getX(activeIdx)}
+                            y1={paddingTop}
+                            x2={getX(activeIdx)}
+                            y2={height - paddingBottom}
+                            stroke="var(--primary)"
+                            strokeWidth="1.5"
+                            strokeDasharray="3 3"
+                            opacity="0.6"
+                        />
+                    )}
+
+                    {/* Interactive Data Dots & Month Columns */}
+                    {dataPoints.map((d, idx) => {
+                        const cx = getX(idx);
+                        const cyInc = getY(d.income);
+                        const cyExp = getY(d.expense);
+                        const isSelected = idx === activeIdx;
+
+                        return (
+                            <g key={idx}
+                                onMouseEnter={() => setHoveredIdx(idx)}
+                                onMouseLeave={() => setHoveredIdx(null)}
+                                style={{ cursor: 'pointer' }}
+                            >
+                                {/* Invisible wide hit target column */}
+                                <rect
+                                    x={cx - 20}
+                                    y={paddingTop}
+                                    width="40"
+                                    height={chartHeight}
+                                    fill="transparent"
+                                />
+
+                                {/* Income point */}
+                                <circle cx={cx} cy={cyInc} r={isSelected ? "5" : "3.5"} fill="#10B981" stroke="#FFFFFF" strokeWidth="1.5" />
+                                {/* Expense point */}
+                                <circle cx={cx} cy={cyExp} r={isSelected ? "5" : "3.5"} fill="#F59E0B" stroke="#FFFFFF" strokeWidth="1.5" />
+                            </g>
+                        );
+                    })}
+
+                    {/* Month X Axis Labels */}
+                    {dataPoints.map((d, idx) => (
+                        <text
+                            key={idx}
+                            x={getX(idx)}
+                            y={height - 8}
+                            textAnchor="middle"
+                            fill={idx === activeIdx ? 'var(--text-main)' : 'var(--text-muted)'}
+                            fontWeight={idx === activeIdx ? "700" : "500"}
+                            fontSize="9px"
+                        >
+                            {d.label}
+                        </text>
+                    ))}
+                </svg>
+            </div>
+
+            {/* Chart Legend & Focus Summary */}
+            <div style={{ display: 'flex', gap: '20px', justifyContent: 'center', fontSize: '0.8rem', paddingTop: '4px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <span style={{ width: '10px', height: '10px', backgroundColor: '#10B981', borderRadius: '50%' }}></span>
+                    <span style={{ color: 'var(--text-muted)', fontWeight: 500 }}>
+                        Income ({formatCurrency(activePoint.income)})
+                    </span>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <span style={{ width: '10px', height: '10px', backgroundColor: '#F59E0B', borderRadius: '50%' }}></span>
+                    <span style={{ color: 'var(--text-muted)', fontWeight: 500 }}>
+                        Expenses ({formatCurrency(activePoint.expense)})
+                    </span>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+// --- SUB-COMPONENT: Custom SVG Category Donut Spend Chart (Main Category Rollup & Subcategory Drill-down) ---
+const CategoryDonutSvgChart = ({ mainBreakdown = {}, mainTxCounts = {}, subBreakdownMap = {}, total = 0, settings, onViewTransactions }) => {
+    const [selectedMainCategory, setSelectedMainCategory] = React.useState(null);
+    const [hoveredIndex, setHoveredIndex] = React.useState(null);
+
+    const formatCurrency = (val) => formatCurrencyVal(val, settings?.currency || "INR");
+
+    const isSubView = selectedMainCategory !== null;
+
+    // Determine data set based on view mode
+    let currentBreakdown = {};
+    let currentTxCounts = {};
+    let viewTotal = total;
+
+    if (isSubView) {
+        const subObj = subBreakdownMap[selectedMainCategory] || {};
+        Object.keys(subObj).forEach(subKey => {
+            currentBreakdown[subKey] = subObj[subKey].amount;
+            currentTxCounts[subKey] = subObj[subKey].count;
+        });
+        viewTotal = mainBreakdown[selectedMainCategory] || 0;
+    } else {
+        currentBreakdown = mainBreakdown;
+        currentTxCounts = mainTxCounts;
+    }
+
+    const categories = Object.keys(currentBreakdown);
+    const data = categories.map(catKey => {
+        const val = currentBreakdown[catKey];
+        const count = currentTxCounts[catKey] || 0;
+        const percentage = viewTotal > 0 ? (val / viewTotal) * 100 : 0;
+
+        let displayLabel = catKey;
+        if (isSubView && catKey.includes(" - ")) {
+            displayLabel = catKey.split(" - ")[1];
+        }
+
+        const subCount = !isSubView && subBreakdownMap[catKey] ? Object.keys(subBreakdownMap[catKey]).length : 0;
+
+        return {
+            key: catKey,
+            label: catKey,
+            displayLabel: displayLabel,
+            value: val,
+            count: count,
+            percentage: percentage,
+            subCount: subCount
+        };
+    }).sort((a, b) => b.value - a.value);
+
+    const colors = [
+        "#EF4444", "#F59E0B", "#10B981", "#3B82F6", "#8B5CF6",
+        "#EC4899", "#06B6D4", "#F97316", "#14B8A6", "#84CC16",
+        "#64748B"
+    ];
+
+    let accumulatedAngle = 0;
+    const segments = data.map((d, idx) => {
+        const angle = viewTotal > 0 ? (d.value / viewTotal) * 360 : 0;
+        const strokeDashOffset = 100 - (accumulatedAngle / 360) * 100;
+        const strokeDashArray = `${viewTotal > 0 ? (d.value / viewTotal) * 100 : 0} ${100 - (viewTotal > 0 ? (d.value / viewTotal) * 100 : 0)}`;
+        accumulatedAngle += angle;
+        return {
+            ...d,
+            color: colors[idx % colors.length],
+            strokeDashArray,
+            strokeDashOffset
+        };
+    });
+
+    const activeSeg = hoveredIndex !== null ? segments[hoveredIndex] : null;
+
+    if (segments.length === 0 || total <= 0) {
+        return (
+            <div className="empty-state" style={{ width: '100%', padding: '40px 20px', border: 'none', background: 'transparent' }}>
+                <Icon name="budgets" />
+                <div className="empty-state-text">
+                    <h3 style={{ fontSize: '1.1rem' }}>No Expenses Recorded</h3>
+                    <p style={{ color: 'var(--text-muted)', fontSize: '0.88rem' }}>Create or import expenses to visualize category spending.</p>
+                </div>
+            </div>
+        );
+    }
+
+    const topCategory = segments[0];
+    const totalTxCount = segments.reduce((sum, s) => sum + s.count, 0);
+
+    return (
+        <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: '20px' }}>
+            {/* Header bar with title, centered back button & summary chips */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
+                {/* Left side: Icon & Title */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                    <div style={{
+                        width: '36px',
+                        height: '36px',
+                        borderRadius: '10px',
+                        background: 'linear-gradient(135deg, rgba(99, 102, 241, 0.15), rgba(59, 130, 246, 0.15))',
+                        border: '1px solid rgba(99, 102, 241, 0.3)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        color: 'var(--primary)'
+                    }}>
+                        <Icon name="budgets" />
+                    </div>
+                    <div>
+                        <h3 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 700, color: 'var(--text-main)', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            {isSubView ? `${selectedMainCategory} Subcategories` : "Category Spending Breakdown"}
+                        </h3>
+                        <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+                            {isSubView
+                                ? `Subcategory distribution for ${selectedMainCategory} (${formatCurrency(viewTotal)})`
+                                : `Distribution across ${segments.length} main categor${segments.length === 1 ? 'y' : 'ies'}`
+                            }
+                        </span>
+                    </div>
+                </div>
+
+                {/* Center Column: Prominent Centered Back Button (if inspecting subcategories) */}
+                {isSubView && (
+                    <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', flex: 1, minWidth: '200px' }}>
+                        <button
+                            className="btn btn-secondary btn-sm"
+                            onClick={() => {
+                                setSelectedMainCategory(null);
+                                setHoveredIndex(null);
+                            }}
+                            style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '6px',
+                                padding: '7px 16px',
+                                borderRadius: '20px',
+                                fontWeight: 700,
+                                fontSize: '0.84rem',
+                                background: 'var(--bg-color)',
+                                border: '1.5px solid var(--primary)',
+                                color: 'var(--primary)',
+                                boxShadow: '0 2px 8px rgba(79, 70, 229, 0.15)',
+                                cursor: 'pointer',
+                                transition: 'all 0.2s ease'
+                            }}
+                        >
+                            ← Back to Main Categories
+                        </button>
+                    </div>
+                )}
+
+                {/* Right side summary chips with total transaction count */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+                    <div style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '6px',
+                        padding: '5px 12px',
+                        borderRadius: '20px',
+                        background: 'var(--bg-color)',
+                        border: '1px solid var(--border-color)',
+                        fontSize: '0.8rem'
+                    }}>
+                        <span style={{ color: 'var(--text-muted)' }}>Category:</span>
+                        <span style={{ fontWeight: 700, color: 'var(--primary)' }}>
+                            {isSubView ? selectedMainCategory : "All Categories"}
+                        </span>
+                    </div>
+                    <div style={{
+                        padding: '5px 12px',
+                        borderRadius: '20px',
+                        background: 'var(--bg-color)',
+                        border: '1px solid var(--border-color)',
+                        fontSize: '0.8rem',
+                        color: 'var(--text-main)',
+                        fontWeight: 600
+                    }}>
+                        <span style={{ color: 'var(--text-muted)' }}>Transactions:</span> <span style={{ color: 'var(--primary)', fontWeight: 700 }}>{totalTxCount}</span>
+                    </div>
+                    <div style={{
+                        padding: '5px 12px',
+                        borderRadius: '20px',
+                        background: 'var(--bg-color)',
+                        border: '1px solid var(--border-color)',
+                        fontSize: '0.8rem',
+                        color: 'var(--text-main)',
+                        fontWeight: 600
+                    }}>
+                        <span style={{ color: 'var(--text-muted)' }}>Spend:</span> <span style={{ color: 'var(--danger)', fontWeight: 700 }}>{formatCurrency(viewTotal)}</span>
+                    </div>
+                </div>
+            </div>
+
+            {/* Full Width Top Horizontal Distribution Ratio Bar with direct labels */}
+            <div style={{
+                width: '100%',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '8px',
+                background: 'var(--bg-color)',
+                borderRadius: '14px',
+                padding: '12px 16px',
+                border: '1px solid var(--border-color)',
+                boxShadow: 'var(--shadow-xs)',
+                boxSizing: 'border-box'
+            }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span style={{ fontSize: '0.76rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                        Category Outflow Ratio
+                    </span>
+                    <span style={{ fontSize: '0.76rem', color: 'var(--text-muted)', fontWeight: 600 }}>
+                        {activeSeg ? (
+                            <>
+                                <span style={{ color: activeSeg.color, fontWeight: 700 }}>{activeSeg.displayLabel}</span>: {formatCurrency(activeSeg.value)} ({activeSeg.percentage.toFixed(1)}% • {activeSeg.count} txns)
+                            </>
+                        ) : (
+                            <span>{totalTxCount} total transactions across {segments.length} {isSubView ? 'subcategories' : 'categories'}</span>
+                        )}
+                    </span>
+                </div>
+
+                {/* Continuous Segmented Bar with Labels Inside */}
+                <div style={{
+                    width: '100%',
+                    height: '26px',
+                    borderRadius: '10px',
+                    overflow: 'hidden',
+                    display: 'flex',
+                    background: 'var(--border-color)',
+                    boxShadow: 'inset 0 1px 3px rgba(0,0,0,0.12)'
+                }}>
+                    {segments.map((seg, idx) => (
+                        <div
+                            key={idx}
+                            onMouseEnter={() => setHoveredIndex(idx)}
+                            onMouseLeave={() => setHoveredIndex(null)}
+                            onClick={() => {
+                                if (!isSubView && seg.subCount > 0) {
+                                    setSelectedMainCategory(seg.key);
+                                    setHoveredIndex(null);
+                                }
+                            }}
+                            style={{
+                                width: `${seg.percentage}%`,
+                                height: '100%',
+                                backgroundColor: seg.color,
+                                opacity: (hoveredIndex === null || hoveredIndex === idx) ? 1 : 0.45,
+                                cursor: (!isSubView && seg.subCount > 0) ? 'pointer' : 'default',
+                                transition: 'all 0.2s ease',
+                                boxShadow: hoveredIndex === idx ? `0 0 10px ${seg.color}` : 'none',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                padding: '0 4px',
+                                overflow: 'hidden',
+                                boxSizing: 'border-box'
+                            }}
+                            title={`${seg.displayLabel}: ${formatCurrency(seg.value)} (${seg.percentage.toFixed(1)}% • ${seg.count} txns)`}
+                        >
+                            <span style={{
+                                fontSize: '0.71rem',
+                                fontWeight: 700,
+                                color: '#FFFFFF',
+                                textShadow: '0 1px 2px rgba(255,255,255,0.4)',
+                                whiteSpace: 'nowrap',
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis',
+                                userSelect: 'none'
+                            }}>
+                                {seg.displayLabel} {seg.percentage.toFixed(1)}%
+                            </span>
+                        </div>
+                    ))}
+                </div>
+            </div>
+
+            {/* Main Content Grid: Fixed Constant Height Category Breakdown Cards */}
+            <div style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))',
+                alignContent: 'start',
+                gap: '12px',
+                width: '100%',
+                minHeight: '260px',
+                maxHeight: '260px',
+                overflowY: 'auto',
+                padding: '4px 6px 10px 4px',
+                boxSizing: 'border-box'
+            }}>
+                {segments.map((seg, idx) => {
+                    const isHovered = hoveredIndex === idx;
+                    const canDrill = !isSubView && seg.subCount > 0;
+                    return (
+                        <div
+                            key={idx}
+                            onMouseEnter={() => setHoveredIndex(idx)}
+                            onMouseLeave={() => setHoveredIndex(null)}
+                            onClick={() => {
+                                if (canDrill) {
+                                    setSelectedMainCategory(seg.key);
+                                    setHoveredIndex(null);
+                                }
+                            }}
+                            style={{
+                                padding: '12px 14px',
+                                borderRadius: '12px',
+                                background: isHovered ? 'var(--card-bg)' : 'var(--bg-color)',
+                                border: `1px solid ${isHovered ? seg.color : 'var(--border-color)'}`,
+                                boxShadow: isHovered ? `0 4px 14px ${seg.color}20` : 'var(--shadow-xs)',
+                                transform: isHovered ? 'translateY(-2px)' : 'none',
+                                cursor: canDrill ? 'pointer' : 'default',
+                                transition: 'all 0.2s ease',
+                                boxSizing: 'border-box',
+                                display: 'flex',
+                                flexDirection: 'column',
+                                gap: '8px'
+                            }}
+                        >
+                            {/* Header Row: Dot + Title & Percentage Badge */}
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', overflow: 'hidden', minWidth: 0 }}>
+                                    <span style={{
+                                        width: '8px',
+                                        height: '8px',
+                                        borderRadius: '50%',
+                                        backgroundColor: seg.color,
+                                        flexShrink: 0,
+                                        boxShadow: `0 0 5px ${seg.color}88`
+                                    }}></span>
+                                    <span style={{ fontWeight: 700, fontSize: '0.88rem', color: 'var(--text-main)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={seg.key}>
+                                        {seg.displayLabel}
+                                    </span>
+                                </div>
+                                <span style={{
+                                    fontSize: '0.74rem',
+                                    fontWeight: 700,
+                                    color: seg.color,
+                                    background: seg.color + '18',
+                                    padding: '2px 7px',
+                                    borderRadius: '10px',
+                                    flexShrink: 0
+                                }}>
+                                    {seg.percentage.toFixed(1)}%
+                                </span>
+                            </div>
+
+                            {/* Amount & Txn count Button Row */}
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '2px' }}>
+                                <span style={{ fontWeight: 800, fontSize: '1.02rem', color: 'var(--text-main)', display: 'block', lineHeight: 1.2 }}>
+                                    {formatCurrency(seg.value)}
+                                </span>
+
+                                {onViewTransactions && seg.count > 0 && (
+                                    <button
+                                        style={{
+                                            fontSize: '0.74rem',
+                                            padding: '3px 9px',
+                                            borderRadius: '8px',
+                                            fontWeight: 700,
+                                            whiteSpace: 'nowrap',
+                                            flexShrink: 0,
+                                            background: 'var(--card-bg)',
+                                            border: '1.5px solid var(--border-color)',
+                                            color: 'var(--text-main)',
+                                            cursor: 'pointer',
+                                            transition: 'all 0.2s ease',
+                                            boxShadow: '0 1px 2px rgba(0,0,0,0.05)'
+                                        }}
+                                        onMouseEnter={(e) => {
+                                            e.currentTarget.style.background = 'var(--primary)';
+                                            e.currentTarget.style.color = '#ffffff';
+                                            e.currentTarget.style.borderColor = 'var(--primary)';
+                                        }}
+                                        onMouseLeave={(e) => {
+                                            e.currentTarget.style.background = 'var(--card-bg)';
+                                            e.currentTarget.style.color = 'var(--text-main)';
+                                            e.currentTarget.style.borderColor = 'var(--border-color)';
+                                        }}
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            onViewTransactions(seg.key);
+                                        }}
+                                        title={`View ${seg.count} transaction${seg.count > 1 ? 's' : ''} for ${seg.key}`}
+                                    >
+                                        {seg.count} ➔
+                                    </button>
+                                )}
+                            </div>
+                        </div>
+                    );
+                })}
+            </div>
+        </div>
+    );
+};
+
+// --- SUB-PAGE: Transactions ---

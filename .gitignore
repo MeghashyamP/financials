@@ -1,0 +1,9 @@
+node_modules
+dist
+.DS_Store
+*.local
+
+# Local financial data & backup files (ignored to keep personal data out of git)
+financials-*.json
+financials-data*.json
+*.json.bak
