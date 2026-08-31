@@ -1048,7 +1048,7 @@ export const DatePickerField = ({ value, onChange, dateFormat, className = "form
                     userSelect: 'none', minHeight: '36px', flex: 1, width: '100%', ...style
                 }}
             >
-                <span style={{ fontWeight: 500, color: displayText ? 'inherit' : 'var(--text-muted)' }}>
+                <span style={{ fontWeight: 500, color: displayText ? 'inherit' : 'var(--text-muted)', whiteSpace: 'nowrap' }}>
                     {displayText || (label || "Select date")}
                 </span>
             </div>
@@ -1738,7 +1738,7 @@ export const calculateNextExpectedDate = (item, refDate = new Date()) => {
         return `${y}-${m}-${day}`;
     };
 
-    const sStartStr = toStr(item.startDate || item.nextDate);
+    const sStartStr = toStr(item.startDate || item.nextDate || item.createdAt || new Date().toISOString().split('T')[0]);
     if (!sStartStr) return "";
 
     const today = new Date(refDate);
@@ -1746,11 +1746,6 @@ export const calculateNextExpectedDate = (item, refDate = new Date()) => {
 
     const sDate = new Date(sStartStr + "T00:00:00");
     if (isNaN(sDate.getTime())) return "";
-
-    // If start date is in the future, next expected date is the start date itself
-    if (sDate >= today) {
-        return localDateStr(sDate);
-    }
 
     const sEndStr = toStr(item.endDate);
     const eDate = sEndStr ? new Date(sEndStr + "T23:59:59") : null;

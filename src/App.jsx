@@ -538,16 +538,45 @@ export const App = () => {
                 receipt: t.receipt ? 1 : 0,
                 source: t.source || "manual",
                 createdAt: t.createdAt || now,
-                documentId: t.documentId || null
+                documentId: t.documentId || null,
+                replaceTargetId: t.replaceTargetId || null,
+                linkedRecurringId: t.linkedRecurringId || null
             };
 
             const finalized = processImportedTransaction(item, rules, availableCats);
             finalized.fingerprint = generateFingerprint(finalized);
+            if (t.replaceTargetId) finalized.replaceTargetId = t.replaceTargetId;
             return finalized;
         });
 
         try {
-            const result = await saveTransactionsInDB(processed);
+            const itemsToInsert = [];
+            for (const t of processed) {
+                if (t.replaceTargetId) {
+                    const existingTx = (transactions || []).find(x => x.id === t.replaceTargetId);
+                    if (existingTx) {
+                        const mergedTx = {
+                            ...existingTx,
+                            date: t.date,
+                            narration: t.narration,
+                            merchant: t.merchant,
+                            refId: t.refId || existingTx.refId,
+                            amount: t.amount,
+                            type: t.type,
+                            account: t.account || existingTx.account,
+                            fingerprint: t.fingerprint,
+                            notes: existingTx.notes ? `${existingTx.notes} (Replaced by statement import)` : "Replaced synthetic payment with statement transaction"
+                        };
+                        await updateTransactionInDB(mergedTx);
+                        continue;
+                    }
+                }
+                itemsToInsert.push(t);
+            }
+            let result = { inserted: 0, duplicates: 0 };
+            if (itemsToInsert.length > 0) {
+                result = await saveTransactionsInDB(itemsToInsert);
+            }
             await loadState();
             return result;
         } catch (e) {
@@ -670,13 +699,17 @@ export const App = () => {
 
         let recurringList = settings.recurring || [];
         let networthList = settings.networthItems || [];
-        let recurringChanged = false, networthChanged = false;
+        let billInstancesList = settings.billInstances || [];
+        let recurringChanged = false, networthChanged = false, billInstancesChanged = false;
 
         linked.forEach(t => {
             const [kind, id] = t.linkTo.split(":");
             if (kind === "recurring") {
                 recurringList = recurringList.map(r => r.id === id ? { ...r, nextDate: advanceDateByCadence(t.date, r.cadence) } : r);
                 recurringChanged = true;
+            } else if (kind === "billInstance") {
+                billInstancesList = billInstancesList.map(b => b.id === id ? { ...b, status: 'paid', linkedTxId: t.id } : b);
+                billInstancesChanged = true;
             } else if (kind === "networth") {
                 networthList = networthList.map(it => {
                     if (it.id !== id) return it;
@@ -692,6 +725,7 @@ export const App = () => {
         });
 
         if (recurringChanged) await updateSetting("recurring", recurringList);
+        if (billInstancesChanged) await updateSetting("billInstances", billInstancesList);
         if (networthChanged) await updateSetting("networthItems", networthList);
     };
 

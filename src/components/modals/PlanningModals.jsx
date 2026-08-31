@@ -2,7 +2,7 @@ import React from 'react';
 import { 
   Icon, DatePickerField, DEFAULT_CATEGORIES, filterCategoriesByType, 
   useEscapeKey, formatCurrencyVal, NET_WORTH_GROUPS, getCurrencySymbol,
-  renderCategoryOptions, formatDate 
+  renderCategoryOptions, formatDate, calculateNextExpectedDate 
 } from '../../utils.jsx';
 import { CategoryPickerModal } from './TransactionModals.jsx';
 
@@ -137,6 +137,8 @@ const FrequencyPicker = ({ value, onChange }) => {
             const [category, setCategory] = React.useState(e.category || (categories[0] || "Utilities"));
             const [showCategoryPicker, setShowCategoryPicker] = React.useState(false);
             const [amount, setAmount] = React.useState(e.amount ?? "");
+            const [isVariableAmount, setIsVariableAmount] = React.useState(!!e.isVariableAmount);
+            const [dateFlexDays, setDateFlexDays] = React.useState(e.dateFlexDays || 0);
             const [type, setType] = React.useState(e.type || "expense");
 
             const handleTypeChange = (newType) => {
@@ -354,10 +356,30 @@ const FrequencyPicker = ({ value, onChange }) => {
                 const effectiveMonthlyDay = monthlyDay || getStartDay(effectiveStartDate);
                 const customDaysStr = Array.isArray(finalCustomDays) ? finalCustomDays.join(", ") : String(finalCustomDays || "");
 
+                let updatedAmountHistory = Array.isArray(e.amountHistory) ? [...e.amountHistory] : [];
+                if (editingItem && editingItem.amount !== undefined && Number(editingItem.amount) !== Number(amount)) {
+                    updatedAmountHistory.push({
+                        amount: Number(editingItem.amount),
+                        changedAt: todayStr
+                    });
+                }
+
+                const computedInitialNextDate = calculateNextExpectedDate({
+                    startDate: effectiveStartDate,
+                    cadence: finalCadence,
+                    weeklyDays: cadenceType === "weekly" ? (Array.isArray(weeklyDays) ? weeklyDays : ["Mon"]) : ["Mon"],
+                    monthlyDays: effectiveMonthlyDay,
+                    customIntervalDays: cadenceType === "every" ? (Number(customIntervalDays) || 14) : 14
+                }, new Date(effectiveStartDate + "T00:00:00")) || effectiveStartDate;
+
                 onSave({
                     name: name.trim(),
                     category,
                     amount: Number(amount),
+                    isVariableAmount,
+                    estimatedAmount: isVariableAmount ? Number(amount) : undefined,
+                    dateFlexDays: Number(dateFlexDays) || 0,
+                    amountHistory: updatedAmountHistory,
                     type,
                     cadence: finalCadence,
                     weeklyDays: cadenceType === "weekly" ? (Array.isArray(weeklyDays) ? weeklyDays : ["Mon"]) : ["Mon"],
@@ -365,7 +387,7 @@ const FrequencyPicker = ({ value, onChange }) => {
                     customIntervalDays: cadenceType === "every" ? (Number(customIntervalDays) || 14) : 14,
                     customDays: cadenceType === "custom_dates" ? customDaysStr : "",
                     startDate: effectiveStartDate,
-                    nextDate: effectiveStartDate,
+                    nextDate: e.nextDate || computedInitialNextDate,
                     endDate: effectiveEndDate,
                     occurrences: cadenceType === "custom_dates" ? finalCustomDays.length : (occurrences ? Number(occurrences) : undefined),
                     excludeFromMonthlyCalculations,
@@ -403,8 +425,8 @@ const FrequencyPicker = ({ value, onChange }) => {
                             </div>
                         </div>
 
-                        <form onSubmit={handleSubmit}>
-                            <div className="modal-body" style={{ maxHeight: 'calc(85vh - 140px)', overflowY: 'auto', paddingRight: '16px' }}>
+                        <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'hidden' }}>
+                            <div className="modal-body" style={{ flex: 1, minHeight: 0, overflowY: 'auto', paddingRight: '16px' }}>
                                 <div className="form-grid">
                                     <div className="form-row">
                                         <div className="form-field">
@@ -413,8 +435,9 @@ const FrequencyPicker = ({ value, onChange }) => {
                                                 value={name} onChange={(ev) => setName(ev.target.value)} required />
                                         </div>
                                         <div className="form-field">
-                                            <label style={{ color: type === 'income' ? 'var(--success)' : 'var(--danger)' }}>
-                                                Amount ({getCurrencySymbol(settings?.currency || "INR")})
+                                            <label style={{ color: type === 'income' ? 'var(--success)' : 'var(--danger)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', minHeight: '20px' }}>
+                                                <span>Amount ({getCurrencySymbol(settings?.currency || "INR")})</span>
+                                                {isVariableAmount && <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--primary)' }}>~ Estimated</span>}
                                             </label>
                                             <input type="number" step="0.01" className="form-control" placeholder="0.00"
                                                 value={amount} onChange={(ev) => setAmount(ev.target.value)} required
@@ -425,6 +448,75 @@ const FrequencyPicker = ({ value, onChange }) => {
                                                 }} />
                                         </div>
                                     </div>
+
+                                    {/* Side-by-side Amount Type Buttons */}
+                                    <div style={{ marginBottom: '16px' }}>
+                                        <label style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '6px', display: 'block' }}>
+                                            Amount Type
+                                        </label>
+                                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', background: 'var(--bg-color)', padding: '4px', borderRadius: '10px', border: '1px solid var(--border-color)', boxSizing: 'border-box' }}>
+                                            <button
+                                                type="button"
+                                                onClick={() => setIsVariableAmount(false)}
+                                                style={{
+                                                    padding: '7px 12px',
+                                                    borderRadius: '7px',
+                                                    border: !isVariableAmount ? '1px solid var(--border-color)' : '1px solid transparent',
+                                                    boxSizing: 'border-box',
+                                                    fontSize: '0.82rem',
+                                                    fontWeight: !isVariableAmount ? 700 : 500,
+                                                    cursor: 'pointer',
+                                                    transition: 'all 0.15s ease',
+                                                    background: !isVariableAmount ? 'var(--card-bg, #ffffff)' : 'transparent',
+                                                    color: !isVariableAmount ? 'var(--primary, #4F46E5)' : 'var(--text-muted)',
+                                                    boxShadow: !isVariableAmount ? '0 1px 4px rgba(0,0,0,0.08)' : 'none',
+                                                    display: 'flex',
+                                                    alignItems: 'center',
+                                                    justifyContent: 'center',
+                                                    gap: '6px'
+                                                }}
+                                            >
+                                                🔒 Fixed Amount
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => setIsVariableAmount(true)}
+                                                style={{
+                                                    padding: '7px 12px',
+                                                    borderRadius: '7px',
+                                                    border: isVariableAmount ? '1px solid #C7D2FE' : '1px solid transparent',
+                                                    boxSizing: 'border-box',
+                                                    fontSize: '0.82rem',
+                                                    fontWeight: isVariableAmount ? 700 : 500,
+                                                    cursor: 'pointer',
+                                                    transition: 'all 0.15s ease',
+                                                    background: isVariableAmount ? 'linear-gradient(135deg, #EEF2FF 0%, #E0E7FF 100%)' : 'transparent',
+                                                    color: isVariableAmount ? '#4338CA' : 'var(--text-muted)',
+                                                    boxShadow: isVariableAmount ? '0 1px 4px rgba(79, 70, 229, 0.15)' : 'none',
+                                                    display: 'flex',
+                                                    alignItems: 'center',
+                                                    justifyContent: 'center',
+                                                    gap: '6px'
+                                                }}
+                                            >
+                                                ⚡ Variable Amount (~)
+                                            </button>
+                                        </div>
+                                    </div>
+
+                                    {((e?.changeLogs && e.changeLogs.length > 0) || (e?.amountHistory && e.amountHistory.length > 0)) && (
+                                        <div style={{ fontSize: '0.78rem', color: 'var(--text-main)', marginBottom: '12px', background: 'rgba(59, 130, 246, 0.08)', padding: '8px 12px', borderRadius: '8px', border: '1px solid rgba(59, 130, 246, 0.2)' }}>
+                                            {e.changeLogs && e.changeLogs.length > 0 ? (
+                                                <>
+                                                    ℹ️ <strong>Last Revision:</strong> {e.changeLogs[0].text} <span style={{ color: 'var(--text-muted)' }}>({e.changeLogs[0].dateStr ? formatDate(e.changeLogs[0].dateStr, settings?.dateFormat) : 'Recently'})</span>
+                                                </>
+                                            ) : (
+                                                <>
+                                                    ℹ️ <strong>Amount Revision History:</strong> Last revised from {formatCurrencyVal(e.amountHistory[e.amountHistory.length - 1].amount, settings?.currency)} on {e.amountHistory[e.amountHistory.length - 1].changedAt}.
+                                                </>
+                                            )}
+                                        </div>
+                                    )}
 
                                     <div className="form-field">
                                         <label>Category</label>
@@ -1119,7 +1211,7 @@ const FrequencyPicker = ({ value, onChange }) => {
                                 <Icon name="close" />
                             </button>
                         </div>
-                        <form onSubmit={handleSubmit}>
+                        <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'hidden' }}>
                             <div className="modal-body">
                                 <div className="form-grid">
                                     <div className="form-field">
@@ -1186,7 +1278,7 @@ const FrequencyPicker = ({ value, onChange }) => {
                                 <Icon name="close" />
                             </button>
                         </div>
-                        <form onSubmit={handleSubmit}>
+                        <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'hidden' }}>
                             <div className="modal-body">
                                 <div className="form-grid">
                                     <div className="form-field">
@@ -1287,7 +1379,7 @@ const FrequencyPicker = ({ value, onChange }) => {
                                 <Icon name="close" />
                             </button>
                         </div>
-                        <form onSubmit={handleSubmit}>
+                        <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'hidden' }}>
                             <div className="modal-body">
                                 <div className="form-grid">
                                     <div className="form-field">
@@ -1320,5 +1412,160 @@ const FrequencyPicker = ({ value, onChange }) => {
             );
         };
 
-        // --- Render React App ---
-        const container = document.getElementById("root");
+        export const LogBillInstanceModal = ({ item, settings, onClose, onSave, onClear }) => {
+            useEscapeKey(onClose);
+            const now = new Date();
+            const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+
+            const isIncome = item?.type === 'income';
+
+            const existingBillInst = React.useMemo(() => {
+                if (!item) return null;
+                return (settings?.billInstances || []).find(b => b.recurringId === item.id && b.status === 'pending');
+            }, [item, settings?.billInstances]);
+
+            // Pre-fill Next Expected Date
+            const initialExpectedDate = React.useMemo(() => {
+                if (existingBillInst?.dueDate) return existingBillInst.dueDate;
+                if (!item) return todayStr;
+                const computed = calculateNextExpectedDate(item);
+                return computed || item.nextDate || item.date || todayStr;
+            }, [item, existingBillInst, todayStr]);
+
+            const [amount, setAmount] = React.useState(existingBillInst ? existingBillInst.amount : (item?.estimatedAmount || item?.amount || ""));
+            const [dueDate, setDueDate] = React.useState(initialExpectedDate);
+
+            const handleSubmit = (ev) => {
+                ev.preventDefault();
+                if (!amount || !dueDate) return;
+                onSave({
+                    id: existingBillInst?.id || ('bill_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5)),
+                    recurringId: item.id,
+                    name: item.name,
+                    category: item.category,
+                    type: item.type || 'expense',
+                    amount: Number(amount),
+                    dueDate,
+                    status: 'pending',
+                    linkedTxId: null,
+                    createdAt: existingBillInst?.createdAt || new Date().toISOString()
+                });
+                onClose();
+            };
+
+            const handleClear = () => {
+                if (onClear && item?.id) {
+                    onClear(item.id);
+                }
+                onClose();
+            };
+
+            const currencySymbol = getCurrencySymbol(settings?.currency || "INR");
+
+            const modalTitle = existingBillInst 
+                ? (isIncome ? "Update Logged Inflow" : "Update Logged Outflow")
+                : (isIncome ? "Log Inflow Received" : "Log Outflow Received");
+
+            const dateLabel = isIncome ? "Actual Expected Date" : "Actual Due Date";
+
+            const submitBtnText = existingBillInst
+                ? (isIncome ? "Update Inflow Log" : "Update Outflow Log")
+                : (isIncome ? "Save Inflow Instance" : "Save Outflow Instance");
+
+            const clearBtnText = isIncome ? "🗑️ Clear Logged Inflow" : "🗑️ Clear Logged Outflow";
+
+            return (
+                <div className="modal-overlay">
+                    <div className="modal-container" style={{ maxWidth: '400px', borderRadius: '16px', padding: '24px 28px', textAlign: 'center' }}>
+                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', marginBottom: '18px' }}>
+                            <div style={{
+                                width: '48px',
+                                height: '48px',
+                                borderRadius: '50%',
+                                background: existingBillInst ? 'linear-gradient(135deg, #ECFDF5 0%, #D1FAE5 100%)' : 'linear-gradient(135deg, #EEF2FF 0%, #E0E7FF 100%)',
+                                color: existingBillInst ? '#047857' : '#4338CA',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                fontSize: '1.4rem',
+                                marginBottom: '12px',
+                                boxShadow: existingBillInst ? '0 2px 8px rgba(16, 185, 129, 0.2)' : '0 2px 8px rgba(79, 70, 229, 0.15)'
+                            }}>
+                                {existingBillInst ? '🧾✓' : '🧾'}
+                            </div>
+                            <h3 style={{ margin: 0, fontSize: '1.15rem', fontWeight: 700, color: 'var(--text-main)' }}>
+                                {modalTitle}
+                            </h3>
+                            <p style={{ margin: '4px 0 0 0', fontSize: '0.82rem', color: 'var(--text-muted)' }}>
+                                {existingBillInst ? (
+                                    <span>Currently logged: <strong style={{ color: 'var(--success)' }}>{formatCurrencyVal(existingBillInst.amount, settings?.currency)}</strong> {isIncome ? 'expected' : 'due'} on <strong>{formatDate(existingBillInst.dueDate, settings?.dateFormat)}</strong></span>
+                                ) : (
+                                    <span>Enter statement figures for <strong style={{ color: 'var(--text-main)' }}>{item?.name}</strong></span>
+                                )}
+                            </p>
+                        </div>
+
+                        <form onSubmit={handleSubmit} style={{ textAlign: 'left' }}>
+                            <div className="form-field" style={{ marginBottom: '16px' }}>
+                                <label style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-main)', marginBottom: '6px', display: 'block', textAlign: 'center' }}>
+                                    Actual Amount ({currencySymbol})
+                                </label>
+                                <input
+                                    type="number"
+                                    step="0.01"
+                                    className="form-control"
+                                    value={amount}
+                                    onChange={(e) => setAmount(e.target.value)}
+                                    required
+                                    autoFocus
+                                    placeholder="0.00"
+                                    style={{ textAlign: 'center', fontSize: '1.1rem', fontWeight: 700, height: '42px', borderRadius: '8px' }}
+                                />
+                            </div>
+
+                            <div className="form-field" style={{ marginBottom: '20px' }}>
+                                <label style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-main)', marginBottom: '6px', display: 'block', textAlign: 'center' }}>
+                                    {dateLabel}
+                                </label>
+                                <DatePickerField
+                                    value={dueDate}
+                                    onChange={setDueDate}
+                                    dateFormat={settings?.dateFormat}
+                                    label="Date"
+                                    style={{ textAlign: 'center', justifyContent: 'center', fontSize: '1rem', fontWeight: 600, height: '42px', borderRadius: '8px' }}
+                                />
+                            </div>
+
+                            {existingBillInst && (
+                                <div style={{ marginBottom: '16px', textAlign: 'center' }}>
+                                    <button
+                                        type="button"
+                                        onClick={handleClear}
+                                        style={{
+                                            background: 'transparent',
+                                            border: 'none',
+                                            color: '#DC2626',
+                                            fontSize: '0.8rem',
+                                            fontWeight: 600,
+                                            cursor: 'pointer',
+                                            textDecoration: 'underline'
+                                        }}
+                                    >
+                                        {clearBtnText}
+                                    </button>
+                                </div>
+                            )}
+
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                                <button type="button" className="btn btn-secondary" onClick={onClose} style={{ borderRadius: '8px', padding: '9px 16px', fontWeight: 600 }}>
+                                    Cancel
+                                </button>
+                                <button type="submit" className="btn btn-primary" style={{ borderRadius: '8px', padding: '9px 16px', fontWeight: 600 }}>
+                                    {submitBtnText}
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            );
+        };

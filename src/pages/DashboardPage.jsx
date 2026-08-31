@@ -5,6 +5,7 @@ import {
     formatCategorySubIconFirst, calculatePeriodDateRange, getCurrencySymbol
 } from '../utils.jsx';
 import { updateTransactionInDB, deleteTransactionFromDB } from '../store.js';
+import { LogBillInstanceModal } from '../components/modals/PlanningModals.jsx';
 
 const MONTHS = [
     "January", "February", "March", "April", "May", "June",
@@ -561,11 +562,30 @@ const PaymentsCalendarWidget = ({ settings, transactions, selectedDay, setSelect
 const PaymentsSectionWidget = ({ settings, transactions, updateSetting, loadState, showToast, selectedDay, setSelectedDay, viewDate }) => {
     const [filter, setFilter] = React.useState("upcoming");
     const [markPaidModalItem, setMarkPaidModalItem] = React.useState(null);
+    const [loggingBillItem, setLoggingBillItem] = React.useState(null);
     const [selectedTxIdToLink, setSelectedTxIdToLink] = React.useState(null);
     const [isMappingMode, setIsMappingMode] = React.useState(false);
     const [selectedMapTxIds, setSelectedMapTxIds] = React.useState([]);
     const [unmarkConfirmItem, setUnmarkConfirmItem] = React.useState(null);
     const [unmarkLinkedTxs, setUnmarkLinkedTxs] = React.useState([]);
+
+    const handleSaveBillInstance = async (billInst) => {
+        const existing = settings.billInstances || [];
+        const filtered = existing.filter(b => !(b.recurringId === billInst.recurringId && b.status === 'pending'));
+        if (updateSetting) await updateSetting("billInstances", [...filtered, billInst]);
+        if (typeof loadState === 'function') await loadState();
+        if (typeof showToast === 'function') showToast(`Logged bill for "${billInst.name}"`);
+        setLoggingBillItem(null);
+    };
+
+    const handleClearBillInstance = async (recurringId) => {
+        const existing = settings.billInstances || [];
+        const filtered = existing.filter(b => !(b.recurringId === recurringId && b.status === 'pending'));
+        if (updateSetting) await updateSetting("billInstances", filtered);
+        if (typeof loadState === 'function') await loadState();
+        if (typeof showToast === 'function') showToast(`Cleared logged bill for "${loggingBillItem?.name || 'Item'}"`);
+        setLoggingBillItem(null);
+    };
 
     const formatCurrency = (val) => formatCurrencyVal(val, settings.currency || "INR");
 
@@ -631,77 +651,161 @@ const PaymentsSectionWidget = ({ settings, transactions, updateSetting, loadStat
     const { upcomingItems, overdueItems } = React.useMemo(() => {
         const upcoming = [];
         const overdue = [];
+        const flexDefault = 0;
 
         (settings.recurring || []).forEach(r => {
             if (r.active === false || (r.endDate && r.endDate < calNow.toISOString().split('T')[0])) return;
-            const anchorDay = getAnchorDayOfMonth(r.nextDate || r.startDate);
-            const itemDueDateStr = getDueDateInMonth(anchorDay, viewYear, viewMonth);
-            const itemDateObj = new Date(itemDueDateStr + "T00:00:00");
+            const flexDays = Number(r.dateFlexDays) || flexDefault;
+            const rawDueDateStr = r.nextDate || r.startDate;
+            const anchorDay = getAnchorDayOfMonth(rawDueDateStr);
+            const monthDueDateStr = getDueDateInMonth(anchorDay, viewYear, viewMonth);
 
-            // Check if already paid in this view month
-            const isPaid = (transactions || []).some(t => {
-                const tDate = toYYYYMMDD(t.date);
-                return tDate && tDate.startsWith(viewMonthPrefix) && (t.linkedRecurringId === r.id || t.merchant === r.name);
-            });
+            // Look for a bill instance created for this recurring template
+            const billInstancesForR = (settings.billInstances || []).filter(b => b.recurringId === r.id);
+            const currentMonthBillInst = billInstancesForR.find(b => b.dueDate && b.dueDate.startsWith(viewMonthPrefix));
 
-            if (isPaid) return;
-
-            const itemObj = {
-                id: r.id,
-                kind: "recurring",
-                date: itemDueDateStr,
-                dateObj: itemDateObj,
-                name: r.name,
-                amount: r.amount,
-                type: r.type || "expense",
-                category: r.category || "Recurring bill",
-                cadence: r.cadence || "monthly",
-                swatch: "warning"
+            // Helper to check if a recurring date is paid via transactions
+            const checkTxPaid = (targetDateStr) => {
+                const targetObj = new Date(targetDateStr + "T00:00:00");
+                return (transactions || []).some(t => {
+                    const tDate = toYYYYMMDD(t.date);
+                    if (!tDate) return false;
+                    if (flexDays > 0) {
+                        const txTs = new Date(tDate + "T00:00:00").getTime();
+                        const anchorTs = targetObj.getTime();
+                        const diffDays = Math.abs(txTs - anchorTs) / (1000 * 60 * 60 * 24);
+                        return diffDays <= flexDays && (t.linkedRecurringId === r.id || t.merchant === r.name || t.category === r.category);
+                    }
+                    return (t.linkedRecurringId === r.id || t.merchant === r.name);
+                });
             };
 
-            if (itemDueDateStr < todayStr) {
-                const diffTime = Math.abs(todayObj - itemDateObj);
-                const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-                itemObj.daysOverdue = diffDays;
-                overdue.push(itemObj);
-            } else {
-                upcoming.push(itemObj);
+            // 1. OVERDUE CHECK: Check if item has a past due date < todayStr that is unpaid
+            const pendingOverdueInst = billInstancesForR.find(b => b.status === 'pending' && b.dueDate && b.dueDate < todayStr);
+            if (pendingOverdueInst) {
+                const instDateObj = new Date(pendingOverdueInst.dueDate + "T00:00:00");
+                const diffTime = Math.abs(todayObj - instDateObj);
+                overdue.push({
+                    id: r.id,
+                    kind: "recurring",
+                    date: pendingOverdueInst.dueDate,
+                    dateObj: instDateObj,
+                    name: r.name,
+                    amount: pendingOverdueInst.amount,
+                    isVariableAmount: false,
+                    hasBillInstance: true,
+                    billInstanceId: pendingOverdueInst.id,
+                    dateFlexDays: flexDays,
+                    type: r.type || "expense",
+                    category: r.category || "Recurring bill",
+                    cadence: r.cadence || "monthly",
+                    swatch: "warning",
+                    daysOverdue: Math.ceil(diffTime / (1000 * 60 * 60 * 24))
+                });
+            } else if (rawDueDateStr && rawDueDateStr < todayStr) {
+                if (!checkTxPaid(rawDueDateStr)) {
+                    const rawDateObj = new Date(rawDueDateStr + "T00:00:00");
+                    const diffTime = Math.abs(todayObj - rawDateObj);
+                    overdue.push({
+                        id: r.id,
+                        kind: "recurring",
+                        date: rawDueDateStr,
+                        dateObj: rawDateObj,
+                        name: r.name,
+                        amount: r.estimatedAmount || r.amount,
+                        isVariableAmount: !!r.isVariableAmount,
+                        hasBillInstance: false,
+                        billInstanceId: null,
+                        dateFlexDays: flexDays,
+                        type: r.type || "expense",
+                        category: r.category || "Recurring bill",
+                        cadence: r.cadence || "monthly",
+                        swatch: "warning",
+                        daysOverdue: Math.ceil(diffTime / (1000 * 60 * 60 * 24))
+                    });
+                }
+            }
+
+            // 2. UPCOMING CHECK: Check current view month item (if >= todayStr)
+            const effectiveUpcomingDateStr = currentMonthBillInst ? currentMonthBillInst.dueDate : monthDueDateStr;
+            if (effectiveUpcomingDateStr >= todayStr && effectiveUpcomingDateStr.startsWith(viewMonthPrefix)) {
+                const isPaidUpcoming = currentMonthBillInst
+                    ? (currentMonthBillInst.status === 'paid')
+                    : checkTxPaid(effectiveUpcomingDateStr);
+
+                if (!isPaidUpcoming) {
+                    const upcomingDateObj = new Date(effectiveUpcomingDateStr + "T00:00:00");
+                    upcoming.push({
+                        id: r.id,
+                        kind: "recurring",
+                        date: effectiveUpcomingDateStr,
+                        dateObj: upcomingDateObj,
+                        name: r.name,
+                        amount: currentMonthBillInst ? currentMonthBillInst.amount : (r.estimatedAmount || r.amount),
+                        isVariableAmount: !!r.isVariableAmount && !currentMonthBillInst,
+                        hasBillInstance: !!currentMonthBillInst,
+                        billInstanceId: currentMonthBillInst ? currentMonthBillInst.id : null,
+                        dateFlexDays: flexDays,
+                        type: r.type || "expense",
+                        category: r.category || "Recurring bill",
+                        cadence: r.cadence || "monthly",
+                        swatch: "warning"
+                    });
+                }
             }
         });
 
         (settings.networthItems || []).forEach(it => {
             if (!it.nextDueDate) return;
-            const anchorDay = getAnchorDayOfMonth(it.nextDueDate);
-            const itemDueDateStr = getDueDateInMonth(anchorDay, viewYear, viewMonth);
-            const itemDateObj = new Date(itemDueDateStr + "T00:00:00");
+            const rawDueDateStr = it.nextDueDate;
+            const anchorDay = getAnchorDayOfMonth(rawDueDateStr);
+            const monthDueDateStr = getDueDateInMonth(anchorDay, viewYear, viewMonth);
 
-            const isPaid = (transactions || []).some(t => {
-                const tDate = toYYYYMMDD(t.date);
-                return tDate && tDate.startsWith(viewMonthPrefix) && (t.linkedRecurringId === it.id || t.merchant === it.name);
-            });
-
-            if (isPaid) return;
-
-            const itemObj = {
-                id: it.id,
-                kind: "networth",
-                date: itemDueDateStr,
-                dateObj: itemDateObj,
-                name: it.name,
-                amount: Math.abs(Number(it.incomeExpense || 0)),
-                type: Number(it.incomeExpense || 0) < 0 ? "expense" : "income",
-                category: it.category || "Loans & Liabilities",
-                frequencyPerYear: it.frequencyPerYear || 12,
-                swatch: (NET_WORTH_GROUPS.find(g => g.key === it.category) || {}).swatch || "primary"
+            const isTxPaid = (targetDateStr) => {
+                return (transactions || []).some(t => {
+                    const tDate = toYYYYMMDD(t.date);
+                    return tDate && (t.linkedRecurringId === it.id || t.merchant === it.name);
+                });
             };
 
-            if (itemDueDateStr < todayStr) {
-                const diffTime = Math.abs(todayObj - itemDateObj);
-                const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-                itemObj.daysOverdue = diffDays;
-                overdue.push(itemObj);
-            } else {
-                upcoming.push(itemObj);
+            // Overdue check
+            if (rawDueDateStr < todayStr) {
+                if (!isTxPaid(rawDueDateStr)) {
+                    const rawDateObj = new Date(rawDueDateStr + "T00:00:00");
+                    const diffTime = Math.abs(todayObj - rawDateObj);
+                    overdue.push({
+                        id: it.id,
+                        kind: "networth",
+                        date: rawDueDateStr,
+                        dateObj: rawDateObj,
+                        name: it.name,
+                        amount: Math.abs(Number(it.incomeExpense || 0)),
+                        type: Number(it.incomeExpense || 0) < 0 ? "expense" : "income",
+                        category: it.category || "Loans & Liabilities",
+                        frequencyPerYear: it.frequencyPerYear || 12,
+                        swatch: (NET_WORTH_GROUPS.find(g => g.key === it.category) || {}).swatch || "primary",
+                        daysOverdue: Math.ceil(diffTime / (1000 * 60 * 60 * 24))
+                    });
+                }
+            }
+
+            // Upcoming check
+            if (monthDueDateStr >= todayStr && monthDueDateStr.startsWith(viewMonthPrefix)) {
+                if (!isTxPaid(monthDueDateStr)) {
+                    const monthDateObj = new Date(monthDueDateStr + "T00:00:00");
+                    upcoming.push({
+                        id: it.id,
+                        kind: "networth",
+                        date: monthDueDateStr,
+                        dateObj: monthDateObj,
+                        name: it.name,
+                        amount: Math.abs(Number(it.incomeExpense || 0)),
+                        type: Number(it.incomeExpense || 0) < 0 ? "expense" : "income",
+                        category: it.category || "Loans & Liabilities",
+                        frequencyPerYear: it.frequencyPerYear || 12,
+                        swatch: (NET_WORTH_GROUPS.find(g => g.key === it.category) || {}).swatch || "primary"
+                    });
+                }
             }
         });
 
@@ -718,7 +822,25 @@ const PaymentsSectionWidget = ({ settings, transactions, updateSetting, loadStat
         });
 
         return { upcomingItems: upcoming, overdueItems: overdue };
-    }, [settings.recurring, settings.networthItems, transactions, viewYear, viewMonth, todayStr]);
+    }, [settings.recurring, settings.billInstances, settings.networthItems, transactions, viewYear, viewMonth, todayStr, viewMonthPrefix]);
+
+    const getItemDueDate = React.useCallback((item) => {
+        if (!item) return item?.date;
+        if (item.dueDate) return item.dueDate;
+        if (item.linkedRecurringId) {
+            const r = (settings.recurring || []).find(rec => rec && rec.id === item.linkedRecurringId);
+            if (r) {
+                const anchorDay = getAnchorDayOfMonth(r.nextDate || r.startDate);
+                return getDueDateInMonth(anchorDay, viewYear, viewMonth);
+            }
+            const netW = (settings.networthItems || []).find(it => it && it.id === item.linkedRecurringId);
+            if (netW && netW.nextDueDate) {
+                const anchorDay = getAnchorDayOfMonth(netW.nextDueDate);
+                return getDueDateInMonth(anchorDay, viewYear, viewMonth);
+            }
+        }
+        return item.date;
+    }, [settings.recurring, settings.networthItems, viewYear, viewMonth]);
 
     const paidItems = React.useMemo(() => {
         const list = (transactions || []).filter(t => t.linkedRecurringId || t.linkTo || t.source === "recurring" || (t.notes && t.notes.includes("Marked as paid")));
@@ -733,7 +855,35 @@ const PaymentsSectionWidget = ({ settings, transactions, updateSetting, loadStat
     const selectedDayStr = selectedDay ? toYYYYMMDD(selectedDay) : null;
 
     const filteredUpcoming = selectedDayStr ? upcomingItems.filter(i => i.date === selectedDayStr) : upcomingItems;
-    const filteredOverdue = selectedDayStr ? overdueItems.filter(i => i.date === selectedDayStr) : overdueItems;
+    const filteredOverdue = React.useMemo(() => {
+        if (selectedDayStr) {
+            if (selectedDayStr === todayStr) {
+                // Selecting "Today": Shows ALL pending items overdue as of today (due_date < Today)
+                return overdueItems.filter(i => i.date < todayStr);
+            } else if (selectedDayStr > todayStr) {
+                // Selecting a Future Date: Show 0 items for that specific date
+                return [];
+            } else {
+                // Selecting a Past Date (selectedDayStr < todayStr):
+                // Show all unpaid items due on or before that selected past date (due_date <= selectedDayStr)
+                return overdueItems.filter(i => i.date <= selectedDayStr);
+            }
+        } else {
+            // Month view level selection
+            const calYear = calNow.getFullYear();
+            const calMonth = calNow.getMonth();
+            const isPrevMonth = viewYear < calYear || (viewYear === calYear && viewMonth < calMonth);
+
+            if (isPrevMonth) {
+                // Selecting a Previous Month: Show overdue items till last date of that previous month
+                const lastDateOfPrevMonthStr = `${viewYear}-${String(viewMonth + 1).padStart(2, '0')}-${String(new Date(viewYear, viewMonth + 1, 0).getDate()).padStart(2, '0')}`;
+                return overdueItems.filter(i => i.date <= lastDateOfPrevMonthStr);
+            } else {
+                // Selecting Current Month (or future month): Show overdue items till < today
+                return overdueItems.filter(i => i.date < todayStr);
+            }
+        }
+    }, [selectedDayStr, todayStr, overdueItems, viewYear, viewMonth]);
     const filteredPaid = selectedDayStr ? paidItems.filter(i => toYYYYMMDD(i.date) === selectedDayStr) : paidItems.filter(i => toYYYYMMDD(i.date).startsWith(viewMonthPrefix));
 
     // Auto-select active filter tab based on calendar view & date selection rules
@@ -812,25 +962,27 @@ const PaymentsSectionWidget = ({ settings, transactions, updateSetting, loadStat
         return () => window.removeEventListener("keydown", handleKeyDown);
     }, [markPaidModalItem, unmarkConfirmItem]);
 
-    // Candidate matching transactions for Mark Paid modal
+    // Candidate matching transactions for Mark Paid modal (excluding already mapped transactions)
     const candidateMatches = React.useMemo(() => {
         if (!markPaidModalItem) return [];
         const itemDateStr = markPaidModalItem.date;
         const itemAmount = Math.abs(Number(markPaidModalItem.amount));
         return (transactions || []).filter(t => {
+            if (t.linkedRecurringId) return false;
             const tDateStr = toYYYYMMDD(t.date);
             const tAmount = Math.abs(Number(t.amount));
             return tDateStr === itemDateStr && Math.abs(tAmount - itemAmount) < 0.01;
         });
     }, [markPaidModalItem, transactions]);
 
-    // Transactions list for multi-transaction mapping mode (type and category matched)
+    // Transactions list for multi-transaction mapping mode (type and category matched, excluding already mapped transactions)
     const candidateTxList = React.useMemo(() => {
         if (!markPaidModalItem) return [];
         const itemType = markPaidModalItem.type || "expense";
         const itemCat = (markPaidModalItem.category || "").trim().toLowerCase();
 
         return (transactions || []).filter(t => {
+            if (t.linkedRecurringId) return false;
             const tType = t.type || "expense";
             if (tType !== itemType) return false;
             const tCat = (t.category || "").trim().toLowerCase();
@@ -870,7 +1022,7 @@ const PaymentsSectionWidget = ({ settings, transactions, updateSetting, loadStat
                 const noteMsg = `Created ${isIncome ? "Inflow" : "Outflow"} from Dashboard on ${dateFormatted}`;
                 const newTx = {
                     id: crypto.randomUUID(),
-                    date: item.date || todayStr,
+                    date: todayStr,
                     merchant: item.name,
                     narration: item.name,
                     amount: item.amount,
@@ -884,8 +1036,17 @@ const PaymentsSectionWidget = ({ settings, transactions, updateSetting, loadStat
                 await updateTransactionInDB(newTx);
             }
 
-            // Advance schedule on item
+            // Advance schedule on item or mark bill instance paid
             if (item.kind === "recurring") {
+                if (item.hasBillInstance && item.billInstanceId) {
+                    const updatedInstances = (settings.billInstances || []).map(b => {
+                        if (b.id === item.billInstanceId) {
+                            return { ...b, status: 'paid', linkedTxId: linkIds[0] || null };
+                        }
+                        return b;
+                    });
+                    await updateSetting("billInstances", updatedInstances);
+                }
                 const updatedList = (settings.recurring || []).map(r => {
                     if (r.id !== item.id) return r;
                     const d = new Date(r.nextDate || new Date());
@@ -1023,7 +1184,11 @@ const PaymentsSectionWidget = ({ settings, transactions, updateSetting, loadStat
 
     const handleUnmarkPaid = (tx) => {
         const linkedRecId = tx.linkedRecurringId;
-        const relatedTxs = linkedRecId ? (transactions || []).filter(t => t.linkedRecurringId === linkedRecId) : [];
+        const txDateStr = toYYYYMMDD(tx.date);
+
+        const relatedTxs = (linkedRecId && txDateStr)
+            ? (transactions || []).filter(t => t.linkedRecurringId === linkedRecId && toYYYYMMDD(t.date) === txDateStr)
+            : [tx];
         const finalTxs = relatedTxs.length > 0 ? relatedTxs : [tx];
 
         setUnmarkConfirmItem(tx);
@@ -1064,7 +1229,7 @@ const PaymentsSectionWidget = ({ settings, transactions, updateSetting, loadStat
                             boxShadow: filter === 'paid' ? '0 2px 6px rgba(16, 185, 129, 0.3)' : 'none'
                         }}
                     >
-                        Paid ({filteredPaid.length})
+                        Paid / Received ({filteredPaid.length})
                     </button>
                 </div>
             </div>
@@ -1101,10 +1266,15 @@ const PaymentsSectionWidget = ({ settings, transactions, updateSetting, loadStat
                                             {dueText}
                                         </span>
                                     </div>
-                                    <div style={{ fontWeight: 700, fontSize: '0.85rem', textAlign: 'right', whiteSpace: 'nowrap', color: item.type === 'neutral' ? 'var(--info)' : (item.type === 'income' ? 'var(--success)' : 'var(--danger)'), overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0 }}>
-                                        {`${item.type === 'neutral' ? (item.neutralSign === '-' ? '-' : '+') : (item.type === 'income' ? '+' : '-')}${formatCurrency(item.amount)}`}
+                                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', whiteSpace: 'nowrap', minWidth: 0 }}>
+                                        <div style={{ fontWeight: 700, fontSize: '0.85rem', color: item.type === 'neutral' ? 'var(--info)' : (item.type === 'income' ? 'var(--success)' : 'var(--danger)'), overflow: 'hidden', textOverflow: 'ellipsis', textAlign: 'center' }}>
+                                            {`${item.type === 'neutral' ? (item.neutralSign === '-' ? '-' : '+') : (item.type === 'income' ? '+' : '-')}${formatCurrency(item.amount)}`}
+                                            {item.isVariableAmount && !item.hasBillInstance && (
+                                                <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontWeight: 600, marginLeft: '3px' }} title="Estimated amount">(E)</span>
+                                            )}
+                                        </div>
                                     </div>
-                                    <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
+                                    <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '4px' }}>
                                         <button
                                             className="btn btn-secondary btn-sm"
                                             style={{ width: '26px', height: '26px', padding: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', borderRadius: '50%', background: '#EEF2FF', color: '#4F46E5', border: '1.5px solid #C7D2FE', cursor: 'pointer', flexShrink: 0, boxShadow: '0 1px 3px rgba(79, 70, 229, 0.15)' }}
@@ -1123,10 +1293,23 @@ const PaymentsSectionWidget = ({ settings, transactions, updateSetting, loadStat
                 {filter === "overdue" && (
                     filteredOverdue.length === 0 ? (
                         <div className="empty-state" style={{ padding: '24px 12px', margin: 'auto 0' }}>
-                            <Icon name="check" />
+                            <Icon name={selectedDayStr && selectedDayStr > todayStr ? "calendar" : "check"} />
                             <div className="empty-state-text">
-                                <h3>All Caught Up!</h3>
-                                <p style={{ fontSize: '0.8rem' }}>No overdue payments found for this month.</p>
+                                <h3>{selectedDayStr && selectedDayStr > todayStr ? "No Overdue Payments for Future Date" : "All Caught Up!"}</h3>
+                                <p style={{ fontSize: '0.8rem', marginBottom: selectedDayStr && selectedDayStr > todayStr ? '8px' : '0' }}>
+                                    {selectedDayStr && selectedDayStr > todayStr
+                                        ? "Overdue items do not apply to future dates."
+                                        : "No overdue payments found for this month."}
+                                </p>
+                                {selectedDayStr && selectedDayStr > todayStr && (
+                                    <button
+                                        className="btn btn-secondary btn-sm"
+                                        style={{ fontSize: '0.75rem', padding: '4px 10px', marginTop: '4px', cursor: 'pointer' }}
+                                        onClick={() => setSelectedDay(null)}
+                                    >
+                                        Clear Date Filter to View Overdue Items
+                                    </button>
+                                )}
                             </div>
                         </div>
                     ) : (
@@ -1144,10 +1327,15 @@ const PaymentsSectionWidget = ({ settings, transactions, updateSetting, loadStat
                                         {item.daysOverdue} Day{item.daysOverdue > 1 ? 's' : ''} Overdue
                                     </span>
                                 </div>
-                                <div style={{ fontWeight: 700, fontSize: '0.85rem', textAlign: 'right', whiteSpace: 'nowrap', color: item.type === 'neutral' ? 'var(--info)' : (item.type === 'income' ? 'var(--success)' : 'var(--danger)'), overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0 }}>
-                                    {`${item.type === 'neutral' ? (item.neutralSign === '-' ? '-' : '+') : (item.type === 'income' ? '+' : '-')}${formatCurrency(item.amount)}`}
+                                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', whiteSpace: 'nowrap', minWidth: 0 }}>
+                                    <div style={{ fontWeight: 700, fontSize: '0.85rem', color: item.type === 'neutral' ? 'var(--info)' : (item.type === 'income' ? 'var(--success)' : 'var(--danger)'), overflow: 'hidden', textOverflow: 'ellipsis', textAlign: 'center' }}>
+                                        {`${item.type === 'neutral' ? (item.neutralSign === '-' ? '-' : '+') : (item.type === 'income' ? '+' : '-')}${formatCurrency(item.amount)}`}
+                                        {item.isVariableAmount && !item.hasBillInstance && (
+                                            <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontWeight: 600, marginLeft: '3px' }} title="Estimated amount">(E)</span>
+                                        )}
+                                    </div>
                                 </div>
-                                <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
+                                <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '4px' }}>
                                     <button
                                         className="btn btn-primary btn-sm"
                                         style={{ width: '26px', height: '26px', padding: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', borderRadius: '50%', background: '#FEE2E2', color: '#DC2626', border: '1.5px solid #FCA5A5', cursor: 'pointer', flexShrink: 0, boxShadow: '0 1px 3px rgba(220, 38, 38, 0.15)' }}
@@ -1167,7 +1355,7 @@ const PaymentsSectionWidget = ({ settings, transactions, updateSetting, loadStat
                         <div className="empty-state" style={{ padding: '24px 12px', margin: 'auto 0' }}>
                             <Icon name="transactions" />
                             <div className="empty-state-text">
-                                <h3>No Paid Payments</h3>
+                                <h3>No Paid / Received Payments</h3>
                                 <p style={{ fontSize: '0.8rem' }}>No completed payment history recorded for this month.</p>
                             </div>
                         </div>
@@ -1181,7 +1369,9 @@ const PaymentsSectionWidget = ({ settings, transactions, updateSetting, loadStat
                                     {item.category || "General"}
                                 </div>
                                 <div style={{ fontSize: '0.76rem', color: '#059669', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0 }}>
-                                    <span className="paid-date-default">{formatDate(item.date, settings.dateFormat)}</span>
+                                    <span className="paid-date-default" style={{ color: 'var(--text-muted)', fontWeight: 500 }}>
+                                        Due {formatDate(getItemDueDate(item), settings.dateFormat)}
+                                    </span>
                                     <span className="paid-date-hover" style={{ fontWeight: 700, background: '#D1FAE5', color: '#065F46', padding: '1px 6px', borderRadius: '4px', border: '1px solid #6EE7B7' }}>
                                         ✓ {formatDate(item.date, settings.dateFormat)}
                                     </span>
@@ -1454,6 +1644,17 @@ const PaymentsSectionWidget = ({ settings, transactions, updateSetting, loadStat
                     </div>
                 );
             })()}
+
+            {/* Log Bill Instance Modal */}
+            {loggingBillItem && (
+                <LogBillInstanceModal
+                    item={loggingBillItem}
+                    settings={settings}
+                    onClose={() => setLoggingBillItem(null)}
+                    onSave={handleSaveBillInstance}
+                    onClear={handleClearBillInstance}
+                />
+            )}
         </div>
     );
 };

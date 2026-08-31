@@ -643,10 +643,11 @@ import {
 
             // Link options
             const linkOptions = {
+                billInstances: (settings?.billInstances || []).filter(b => b.status === 'pending').map(b => ({ id: b.id, label: `${b.name} (Due ${b.dueDate}: ${formatCurrencyVal(b.amount, settings?.currency)})` })),
                 recurring: (settings?.recurring || []).map(r => ({ id: r.id, label: r.name })),
                 networth: (settings?.networthItems || []).filter(it => it.frequencyPerYear > 0).map(it => ({ id: it.id, label: `${it.name} (${it.category})` }))
             };
-            const hasLinkOptions = linkOptions.recurring.length + linkOptions.networth.length > 0;
+            const hasLinkOptions = linkOptions.billInstances.length + linkOptions.recurring.length + linkOptions.networth.length > 0;
 
             const [searchQuery, setSearchQuery] = React.useState("");
             const [rowFilter, setRowFilter] = React.useState("all"); // "all" | "attention"
@@ -717,6 +718,11 @@ import {
             const renderLinkOptions = () => (
                 <React.Fragment>
                     <option value="">— Not linked —</option>
+                    {linkOptions.billInstances.length > 0 && (
+                        <optgroup label="Pending Bills (Bill Instances)">
+                            {linkOptions.billInstances.map(o => <option key={`billInstance:${o.id}`} value={`billInstance:${o.id}`}>{o.label}</option>)}
+                        </optgroup>
+                    )}
                     {linkOptions.recurring.length > 0 && (
                         <optgroup label="Recurring bills">
                             {linkOptions.recurring.map(o => <option key={`recurring:${o.id}`} value={`recurring:${o.id}`}>{o.label}</option>)}
