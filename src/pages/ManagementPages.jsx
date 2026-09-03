@@ -202,6 +202,22 @@ export const RecurringPage = ({
 
     const formatCurrency = (val) => formatCurrencyVal(val, settings?.currency || "INR");
 
+    const renderRecurringCategory = (cat) => {
+        const rawCat = cat || "Uncategorized";
+        if (rawCat.includes(" - ")) {
+            const parts = rawCat.split(" - ");
+            const parent = parts[0];
+            const sub = parts.slice(1).join(" - ");
+            return (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', lineHeight: 1.25 }}>
+                    <span style={{ fontWeight: 500, color: 'var(--text-main)', whiteSpace: 'nowrap' }}>{parent} -</span>
+                    <span style={{ fontSize: '0.82rem', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{sub}</span>
+                </div>
+            );
+        }
+        return <span style={{ fontWeight: 500, color: 'var(--text-main)' }}>{rawCat}</span>;
+    };
+
     // Calculate monthly equivalent amount
     const getItemMonthlyEq = (item) => {
         if (!item) return 0;
@@ -312,6 +328,20 @@ export const RecurringPage = ({
             updatedList = [...confirmedList, { id: crypto.randomUUID(), ...item }];
         }
         if (updateSetting) await updateSetting("recurring", updatedList);
+        if (editingItem && settings?.networthItems && updateSetting) {
+            const newAmt = Number(item.estimatedAmount || item.amount || 0);
+            const networthList = settings.networthItems || [];
+            const hasLinked = networthList.some(nw => nw.linkedRecurringId === editingItem.id && nw.syncMode !== "amortizing" && nw.syncMode !== "loan_principal" && nw.syncMode !== "sip" && nw.syncMode !== "investment_sip");
+            if (hasLinked) {
+                const updatedNwList = networthList.map(nw => {
+                    if (nw.linkedRecurringId === editingItem.id && nw.syncMode !== "amortizing" && nw.syncMode !== "loan_principal" && nw.syncMode !== "sip" && nw.syncMode !== "investment_sip") {
+                        return { ...nw, value: newAmt };
+                    }
+                    return nw;
+                });
+                await updateSetting("networthItems", updatedNwList);
+            }
+        }
         if (showToast) showToast(editingItem ? "Recurring item updated" : "Recurring item added");
         setShowModal(false);
         setEditingItem(null);
@@ -321,6 +351,19 @@ export const RecurringPage = ({
         const existing = settings?.billInstances || [];
         const filtered = existing.filter(b => !(b.recurringId === billInst.recurringId && b.status === 'pending'));
         if (updateSetting) await updateSetting("billInstances", [...filtered, billInst]);
+        if (settings?.networthItems && updateSetting) {
+            const networthList = settings.networthItems || [];
+            const hasLinked = networthList.some(nw => nw.linkedRecurringId === billInst.recurringId && nw.syncMode !== "amortizing" && nw.syncMode !== "loan_principal" && nw.syncMode !== "sip" && nw.syncMode !== "investment_sip");
+            if (hasLinked) {
+                const updatedNwList = networthList.map(nw => {
+                    if (nw.linkedRecurringId === billInst.recurringId && nw.syncMode !== "amortizing" && nw.syncMode !== "loan_principal" && nw.syncMode !== "sip" && nw.syncMode !== "investment_sip") {
+                        return { ...nw, value: Number(billInst.amount) };
+                    }
+                    return nw;
+                });
+                await updateSetting("networthItems", updatedNwList);
+            }
+        }
         if (showToast) showToast(`Bill instance logged for "${billInst.name}"`);
         setLoggingBillItem(null);
     };
@@ -329,6 +372,21 @@ export const RecurringPage = ({
         const existing = settings?.billInstances || [];
         const filtered = existing.filter(b => !(b.recurringId === recurringId && b.status === 'pending'));
         if (updateSetting) await updateSetting("billInstances", filtered);
+        if (settings?.networthItems && updateSetting) {
+            const networthList = settings.networthItems || [];
+            const linkedRec = (settings?.recurring || []).find(r => r.id === recurringId);
+            const fallbackAmt = Number(linkedRec?.estimatedAmount || linkedRec?.amount || 0);
+            const hasLinked = networthList.some(nw => nw.linkedRecurringId === recurringId && nw.syncMode !== "amortizing" && nw.syncMode !== "loan_principal" && nw.syncMode !== "sip" && nw.syncMode !== "investment_sip");
+            if (hasLinked) {
+                const updatedNwList = networthList.map(nw => {
+                    if (nw.linkedRecurringId === recurringId && nw.syncMode !== "amortizing" && nw.syncMode !== "loan_principal" && nw.syncMode !== "sip" && nw.syncMode !== "investment_sip") {
+                        return { ...nw, value: fallbackAmt };
+                    }
+                    return nw;
+                });
+                await updateSetting("networthItems", updatedNwList);
+            }
+        }
         if (showToast) showToast(`Cleared logged bill for "${loggingBillItem?.name || 'Item'}"`);
         setLoggingBillItem(null);
     };
@@ -367,6 +425,13 @@ export const RecurringPage = ({
     const handleRemoveConfirmed = async (id) => {
         const updatedList = confirmedList.filter(c => c.id !== id);
         if (updateSetting) await updateSetting("recurring", updatedList);
+        if (settings?.networthItems && updateSetting) {
+            const networthList = settings.networthItems || [];
+            if (networthList.some(nw => nw.linkedRecurringId === id)) {
+                const updatedNw = networthList.map(nw => nw.linkedRecurringId === id ? { ...nw, linkedRecurringId: null } : nw);
+                await updateSetting("networthItems", updatedNw);
+            }
+        }
         if (showToast) showToast("Recurring item removed");
     };
 
@@ -480,33 +545,33 @@ export const RecurringPage = ({
                     {!hideHeaders && (
                         <thead>
                             <tr>
-                                <th onClick={() => handleSortChange("name")} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap', width: '22%', minWidth: '160px' }} title="Sort by Name">
+                                <th onClick={() => handleSortChange("name")} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap', width: '34%', minWidth: '220px' }} title="Sort by Name">
                                     <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px' }}>
                                         Name
                                         {renderTableSortIcon("name")}
                                     </span>
                                 </th>
-                                <th style={{ whiteSpace: 'nowrap', width: '14%', minWidth: '120px' }}>Category</th>
-                                <th onClick={() => handleSortChange("per_payment")} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap', width: '12%', minWidth: '110px' }} title="Sort by Amount">
+                                <th style={{ whiteSpace: 'nowrap', width: '13%', minWidth: '110px' }}>Category</th>
+                                <th onClick={() => handleSortChange("per_payment")} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap', width: '11%', minWidth: '95px' }} title="Sort by Amount">
                                     <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px' }}>
                                         Amount
                                         {renderTableSortIcon("per_payment")}
                                     </span>
                                 </th>
-                                <th onClick={() => handleSortChange("period_total")} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap', width: '13%', minWidth: '115px' }} title="Sort by Period Total">
+                                <th onClick={() => handleSortChange("period_total")} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap', width: '11%', minWidth: '100px' }} title="Sort by Period Total">
                                     <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px' }}>
                                         Period Total
                                         {renderTableSortIcon("period_total")}
                                     </span>
                                 </th>
-                                <th style={{ whiteSpace: 'nowrap', width: '13%', minWidth: '120px' }}>Frequency</th>
-                                <th onClick={() => handleSortChange("next_due_date")} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap', width: '12%', minWidth: '135px' }} title="Sort by Next Date">
+                                <th style={{ whiteSpace: 'nowrap', width: '9%', minWidth: '90px' }}>Frequency</th>
+                                <th onClick={() => handleSortChange("next_due_date")} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap', width: '9%', minWidth: '100px' }} title="Sort by Next Date">
                                     <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px' }}>
                                         Next Date
                                         {renderTableSortIcon("next_due_date")}
                                     </span>
                                 </th>
-                                <th style={{ whiteSpace: 'nowrap', width: '9%', minWidth: '100px' }}>End Date</th>
+                                <th style={{ whiteSpace: 'nowrap', width: '7%', minWidth: '80px' }}>End Date</th>
                                 <th style={{ whiteSpace: 'nowrap', width: '6%', minWidth: '90px' }}>Actions</th>
                             </tr>
                         </thead>
@@ -570,7 +635,7 @@ export const RecurringPage = ({
                             return (
                                 <tr key={c.id} style={isOutOfPeriod ? { opacity: 0.42, filter: 'grayscale(0.3)' } : {}}>
                                     <td style={{ fontWeight: 600, color: isOutOfPeriod ? 'var(--text-muted)' : undefined }}>{c.name || "Untitled"}</td>
-                                    <td>{c.category || "Uncategorized"}</td>
+                                    <td>{renderRecurringCategory(c.category)}</td>
                                     <td style={{
                                         fontWeight: 600,
                                         color: c.excludeFromMonthlyCalculations ? 'var(--text-muted)' : (c.type === "income" ? "var(--success)" : "var(--danger)"),
@@ -626,16 +691,16 @@ export const RecurringPage = ({
                                                         display: 'inline-flex',
                                                         alignItems: 'center',
                                                         justifyContent: 'center',
-                                                        background: pendingBillInst ? '#ECFDF5' : '#F3F4F6',
+                                                        background: pendingBillInst ? '#ECFDF5' : 'transparent',
                                                         color: pendingBillInst ? '#047857' : '#374151',
-                                                        border: pendingBillInst ? '1px solid #A7F3D0' : '1px solid #D1D5DB',
+                                                        border: pendingBillInst ? '1px solid #A7F3D0' : 'none',
                                                         cursor: 'pointer',
                                                         flexShrink: 0
                                                     }}
                                                     onClick={() => setLoggingBillItem(c)}
                                                     title={pendingBillInst ? `Logged: ${formatCurrency(pendingBillInst.amount)} due ${formatDate(pendingBillInst.dueDate, settings?.dateFormat)} (Click to edit)` : "Log Bill Statement"}
                                                 >
-                                                    {pendingBillInst ? '🧾✓' : '🧾'}
+                                                    🧾
                                                 </button>
                                             ) : (
                                                 <div style={{ width: '28px', height: '26px', flexShrink: 0 }} />
@@ -877,7 +942,7 @@ export const RecurringPage = ({
                                     {suggested.map((s, idx) => (
                                         <tr key={idx}>
                                             <td style={{ fontWeight: 600 }}>{s.merchantDisplay}</td>
-                                            <td>{s.category}</td>
+                                            <td>{renderRecurringCategory(s.category)}</td>
                                             <td>{s.cadence}</td>
                                             <td>{s.occurrences}x ({formatCurrency(s.averageCharge)})</td>
                                             <td>{formatCurrency(s.monthlyEquivalent)}</td>
@@ -1174,17 +1239,17 @@ export const RecurringPage = ({
                         </div>
                     ) : (
                         <div className="table-responsive">
-                            <table className="table">
+                            <table className="table" style={{ width: '100%', tableLayout: 'auto' }}>
                                 <thead>
                                     <tr>
-                                        <th>Name</th>
-                                        <th>Category</th>
-                                        <th>Per Payment</th>
-                                        <th>Period Total</th>
-                                        <th>Frequency</th>
-                                        <th>Next Date</th>
-                                        <th>End Date</th>
-                                        <th>Actions</th>
+                                        <th style={{ whiteSpace: 'nowrap', width: '34%', minWidth: '220px' }}>Name</th>
+                                        <th style={{ whiteSpace: 'nowrap', width: '13%', minWidth: '110px' }}>Category</th>
+                                        <th style={{ whiteSpace: 'nowrap', width: '11%', minWidth: '95px' }}>Per Payment</th>
+                                        <th style={{ whiteSpace: 'nowrap', width: '11%', minWidth: '100px' }}>Period Total</th>
+                                        <th style={{ whiteSpace: 'nowrap', width: '9%', minWidth: '90px' }}>Frequency</th>
+                                        <th style={{ whiteSpace: 'nowrap', width: '9%', minWidth: '100px' }}>Next Date</th>
+                                        <th style={{ whiteSpace: 'nowrap', width: '7%', minWidth: '80px' }}>End Date</th>
+                                        <th style={{ whiteSpace: 'nowrap', width: '6%', minWidth: '90px' }}>Actions</th>
                                     </tr>
                                 </thead>
                                 <tbody>
@@ -1195,7 +1260,7 @@ export const RecurringPage = ({
                                         return (
                                             <tr key={c.id} style={{ opacity: 0.6 }}>
                                                 <td style={{ fontWeight: 600 }}>{c.name || "Untitled"}</td>
-                                                <td>{c.category || "Uncategorized"}</td>
+                                                <td>{renderRecurringCategory(c.category)}</td>
                                                 <td style={{ fontWeight: 600, color: c.type === "income" ? "var(--success)" : "var(--danger)" }}>
                                                     {c.type === "income" ? "+" : "-"}{formatCurrency(c.amount)}
                                                 </td>

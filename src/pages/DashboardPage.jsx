@@ -2,7 +2,8 @@ import React from 'react';
 import {
     Icon, formatCurrencyVal, filterTransactionsByPeriod, formatDate,
     ModernDateFilterPicker, PeriodSelectOptions, getContrastTextColor,
-    formatCategorySubIconFirst, calculatePeriodDateRange, getCurrencySymbol
+    formatCategorySubIconFirst, calculatePeriodDateRange, getCurrencySymbol,
+    getOccurrencesInPeriod
 } from '../utils.jsx';
 import { updateTransactionInDB, deleteTransactionFromDB } from '../store.js';
 import { LogBillInstanceModal } from '../components/modals/PlanningModals.jsx';
@@ -356,9 +357,16 @@ const PaymentsCalendarWidget = ({ settings, transactions, selectedDay, setSelect
         const calNow = new Date();
         const calTodayStr = `${calNow.getFullYear()}-${String(calNow.getMonth() + 1).padStart(2, '0')}-${String(calNow.getDate()).padStart(2, '0')}`;
         const viewMonthPrefix = `${year}-${String(month + 1).padStart(2, '0')}`;
+        const viewMonthStartStr = `${year}-${String(month + 1).padStart(2, '0')}-01`;
+        const daysInViewMonth = new Date(year, month + 1, 0).getDate();
+        const viewMonthEndStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(daysInViewMonth).padStart(2, '0')}`;
 
         (settings.recurring || []).forEach(r => {
             if (r.active === false || (r.endDate && r.endDate < calTodayStr)) return;
+
+            // Only show item if it actually occurs in this view month according to its cadence
+            if (getOccurrencesInPeriod(r, viewMonthStartStr, viewMonthEndStr) <= 0) return;
+
             const anchorDay = getAnchorDayOfMonth(r.nextDate || r.startDate);
             const itemDueDateStr = getDueDateInMonth(anchorDay, year, month);
 
@@ -573,6 +581,19 @@ const PaymentsSectionWidget = ({ settings, transactions, updateSetting, loadStat
         const existing = settings.billInstances || [];
         const filtered = existing.filter(b => !(b.recurringId === billInst.recurringId && b.status === 'pending'));
         if (updateSetting) await updateSetting("billInstances", [...filtered, billInst]);
+        if (settings?.networthItems && updateSetting) {
+            const networthList = settings.networthItems || [];
+            const hasLinked = networthList.some(nw => nw.linkedRecurringId === billInst.recurringId && nw.syncMode !== "amortizing" && nw.syncMode !== "loan_principal" && nw.syncMode !== "sip" && nw.syncMode !== "investment_sip");
+            if (hasLinked) {
+                const updatedNwList = networthList.map(nw => {
+                    if (nw.linkedRecurringId === billInst.recurringId && nw.syncMode !== "amortizing" && nw.syncMode !== "loan_principal" && nw.syncMode !== "sip" && nw.syncMode !== "investment_sip") {
+                        return { ...nw, value: Number(billInst.amount) };
+                    }
+                    return nw;
+                });
+                await updateSetting("networthItems", updatedNwList);
+            }
+        }
         if (typeof loadState === 'function') await loadState();
         if (typeof showToast === 'function') showToast(`Logged bill for "${billInst.name}"`);
         setLoggingBillItem(null);
@@ -582,6 +603,21 @@ const PaymentsSectionWidget = ({ settings, transactions, updateSetting, loadStat
         const existing = settings.billInstances || [];
         const filtered = existing.filter(b => !(b.recurringId === recurringId && b.status === 'pending'));
         if (updateSetting) await updateSetting("billInstances", filtered);
+        if (settings?.networthItems && updateSetting) {
+            const networthList = settings.networthItems || [];
+            const linkedRec = (settings?.recurring || []).find(r => r.id === recurringId);
+            const fallbackAmt = Number(linkedRec?.estimatedAmount || linkedRec?.amount || 0);
+            const hasLinked = networthList.some(nw => nw.linkedRecurringId === recurringId && nw.syncMode !== "amortizing" && nw.syncMode !== "loan_principal" && nw.syncMode !== "sip" && nw.syncMode !== "investment_sip");
+            if (hasLinked) {
+                const updatedNwList = networthList.map(nw => {
+                    if (nw.linkedRecurringId === recurringId && nw.syncMode !== "amortizing" && nw.syncMode !== "loan_principal" && nw.syncMode !== "sip" && nw.syncMode !== "investment_sip") {
+                        return { ...nw, value: fallbackAmt };
+                    }
+                    return nw;
+                });
+                await updateSetting("networthItems", updatedNwList);
+            }
+        }
         if (typeof loadState === 'function') await loadState();
         if (typeof showToast === 'function') showToast(`Cleared logged bill for "${loggingBillItem?.name || 'Item'}"`);
         setLoggingBillItem(null);
@@ -727,8 +763,13 @@ const PaymentsSectionWidget = ({ settings, transactions, updateSetting, loadStat
             }
 
             // 2. UPCOMING CHECK: Check current view month item (if >= todayStr)
+            const viewMonthStartStr = `${viewYear}-${String(viewMonth + 1).padStart(2, '0')}-01`;
+            const daysInViewMonth = new Date(viewYear, viewMonth + 1, 0).getDate();
+            const viewMonthEndStr = `${viewYear}-${String(viewMonth + 1).padStart(2, '0')}-${String(daysInViewMonth).padStart(2, '0')}`;
             const effectiveUpcomingDateStr = currentMonthBillInst ? currentMonthBillInst.dueDate : monthDueDateStr;
-            if (effectiveUpcomingDateStr >= todayStr && effectiveUpcomingDateStr.startsWith(viewMonthPrefix)) {
+            const occursInViewMonth = currentMonthBillInst || (getOccurrencesInPeriod(r, viewMonthStartStr, viewMonthEndStr) > 0);
+
+            if (occursInViewMonth && effectiveUpcomingDateStr >= todayStr && effectiveUpcomingDateStr.startsWith(viewMonthPrefix)) {
                 const isPaidUpcoming = currentMonthBillInst
                     ? (currentMonthBillInst.status === 'paid')
                     : checkTxPaid(effectiveUpcomingDateStr);
@@ -1061,6 +1102,39 @@ const PaymentsSectionWidget = ({ settings, transactions, updateSetting, loadStat
                     return { ...r, nextDate: d.toISOString().split('T')[0] };
                 });
                 await updateSetting("recurring", updatedList);
+
+                // Auto-reduce amortizing loan principal in Net Worth if linked
+                const paidAmount = Number(item.amount || 0);
+                const currentNwItems = settings.networthItems || [];
+                const hasAmortizingLinked = currentNwItems.some(nw => nw.linkedRecurringId === item.id && (nw.syncMode === "amortizing" || nw.syncMode === "loan_principal"));
+                if (hasAmortizingLinked && paidAmount > 0) {
+                    const updatedNw = currentNwItems.map(nw => {
+                        if (nw.linkedRecurringId === item.id && (nw.syncMode === "amortizing" || nw.syncMode === "loan_principal")) {
+                            const remainingVal = Math.max(0, Number(nw.value || 0) - paidAmount);
+                            return { ...nw, value: remainingVal };
+                        }
+                        return nw;
+                    });
+                    await updateSetting("networthItems", updatedNw);
+                }
+
+                // Auto-accumulate recurring SIP payments in Net Worth into both invested & current valuation
+                const hasSipLinked = currentNwItems.some(nw => nw.linkedRecurringId === item.id && (nw.syncMode === "sip" || nw.syncMode === "investment_sip" || (NET_WORTH_GROUPS.find(g => g.key === nw.category)?.kind === "investment" && nw.syncMode !== "revolving")));
+                if (hasSipLinked && paidAmount > 0) {
+                    const updatedNw = currentNwItems.map(nw => {
+                        if (nw.linkedRecurringId === item.id && (nw.syncMode === "sip" || nw.syncMode === "investment_sip" || (NET_WORTH_GROUPS.find(g => g.key === nw.category)?.kind === "investment" && nw.syncMode !== "revolving"))) {
+                            const currentInvested = Number(nw.invested || 0);
+                            const currentValue = Number(nw.value !== undefined ? nw.value : currentInvested);
+                            return {
+                                ...nw,
+                                invested: currentInvested + paidAmount,
+                                value: currentValue + paidAmount
+                            };
+                        }
+                        return nw;
+                    });
+                    await updateSetting("networthItems", updatedNw);
+                }
             } else if (item.kind === "networth") {
                 const updatedList = (settings.networthItems || []).map(it => {
                     if (it.id !== item.id) return it;
@@ -1139,6 +1213,29 @@ const PaymentsSectionWidget = ({ settings, transactions, updateSetting, loadStat
                         return { ...r, nextDate: `${y}-${m}-${day}` };
                     });
                     await updateSetting("recurring", updatedList);
+
+                    // Revert Net Worth updates if linked to amortizing loan or SIP investment
+                    const currentNwItems = settings.networthItems || [];
+                    const nwItem = currentNwItems.find(nw => nw && nw.linkedRecurringId === linkedRecId);
+                    if (nwItem) {
+                        const unmarkAmount = Number(primaryTx?.amount || targetList[0]?.amount || rItem.amount || 0);
+                        if (unmarkAmount > 0) {
+                            if (nwItem.syncMode === "amortizing" || nwItem.syncMode === "loan_principal") {
+                                const updatedNw = currentNwItems.map(nw => nw.id === nwItem.id ? { ...nw, value: Number(nw.value || 0) + unmarkAmount } : nw);
+                                await updateSetting("networthItems", updatedNw);
+                            } else if (nwItem.syncMode === "sip" || nwItem.syncMode === "investment_sip" || (NET_WORTH_GROUPS.find(g => g.key === nwItem.category)?.kind === "investment" && nwItem.syncMode !== "revolving")) {
+                                const updatedNw = currentNwItems.map(nw => {
+                                    if (nw.id === nwItem.id) {
+                                        const newInvested = Math.max(0, Number(nw.invested || 0) - unmarkAmount);
+                                        const newValue = Math.max(0, Number(nw.value || 0) - unmarkAmount);
+                                        return { ...nw, invested: newInvested, value: newValue };
+                                    }
+                                    return nw;
+                                });
+                                await updateSetting("networthItems", updatedNw);
+                            }
+                        }
+                    }
                 } else {
                     const nwItem = (settings.networthItems || []).find(it => it && it.id === linkedRecId);
                     if (nwItem) {

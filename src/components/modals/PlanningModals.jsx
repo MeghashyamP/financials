@@ -864,7 +864,8 @@ const FrequencyPicker = ({ value, onChange }) => {
                     value: finalValue,
                     currentBalance: isBalanceGroup ? finalCurrentBal : undefined,
                     notes,
-                    includeInNetWorth
+                    includeInNetWorth,
+                    linkedRecurringId: e.linkedRecurringId || null
                 });
             };
 
@@ -1491,7 +1492,7 @@ const FrequencyPicker = ({ value, onChange }) => {
                                 marginBottom: '12px',
                                 boxShadow: existingBillInst ? '0 2px 8px rgba(16, 185, 129, 0.2)' : '0 2px 8px rgba(79, 70, 229, 0.15)'
                             }}>
-                                {existingBillInst ? '🧾✓' : '🧾'}
+                                {existingBillInst ? '🧾' : '🧾'}
                             </div>
                             <h3 style={{ margin: 0, fontSize: '1.15rem', fontWeight: 700, color: 'var(--text-main)' }}>
                                 {modalTitle}

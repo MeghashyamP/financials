@@ -575,6 +575,31 @@ export const NET_WORTH_GROUPS = [
 
 export const NET_WORTH_GROUP_KEYS = NET_WORTH_GROUPS.map(g => g.key);
 
+// Dynamic resolution of Net Worth item value (if linked to a recurring template, syncs based on syncMode)
+export const getEffectiveNetWorthItemValue = (it, recurringList = [], billInstances = []) => {
+    if (!it) return 0;
+    // For amortizing loan principal and SIP investments, the item value represents the principal/portfolio valuation
+    if (it.syncMode === "amortizing" || it.syncMode === "loan_principal" || it.syncMode === "sip" || it.syncMode === "investment_sip") {
+        return Number(it.value || 0);
+    }
+    const isInvestment = (NET_WORTH_GROUPS.find(g => g.key === it.category) || {}).kind === "investment";
+    if (isInvestment && it.syncMode !== "revolving") {
+        return Number(it.value || 0);
+    }
+    if (it.linkedRecurringId) {
+        const linkedRec = (recurringList || []).find(r => r && r.id === it.linkedRecurringId);
+        if (linkedRec) {
+            // Check if there is a pending logged bill instance for this recurring transaction
+            const pendingInst = (billInstances || []).find(b => b && b.recurringId === linkedRec.id && b.status === 'pending');
+            if (pendingInst && pendingInst.amount !== undefined && pendingInst.amount !== "") {
+                return Number(pendingInst.amount);
+            }
+            return Number(linkedRec.estimatedAmount || linkedRec.amount || 0);
+        }
+    }
+    return Number(it.value || 0);
+};
+
 // Compute a rough "monthly estimate" cash-flow figure for a net worth item based on its
 // income/expense amount and how many times a year it recurs (mirrors the spreadsheet's
 // "Monthly - 12 / Yearly - 1" + "Monthly Estimate" columns).
@@ -912,6 +937,19 @@ export const Icon = ({ name, currency = "INR", className = "" }) => {
                 <path d="m18 15-6-6-6 6" />
             </svg>
         ),
+        search: (
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="11" cy="11" r="8" />
+                <line x1="21" y1="21" x2="16.65" y2="16.65" />
+            </svg>
+        ),
+        unlink: (
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="m18.84 12.25 1.72-1.71a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
+                <path d="m5.16 11.75-1.72 1.71a5 5 0 0 0 7.07 7.07l1.72-1.71" />
+                <line x1="2" y1="2" x2="22" y2="22" />
+            </svg>
+        ),
         link: (
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
@@ -929,6 +967,14 @@ export const Icon = ({ name, currency = "INR", className = "" }) => {
 
 // --- IndexedDB Database wrapper engine ---
 
+
+export const getTodayStr = () => {
+    const d = new Date();
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+};
 
 export const formatDate = (dateInput, formatStyle = "24/Jun/2002 Sun") => {
     if (!dateInput) return "";

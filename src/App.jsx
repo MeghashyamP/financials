@@ -4,7 +4,7 @@ import {
     detectRecurringTransactions, processImportedTransaction, useEscapeKey,
     formatDate, getContrastTextColor, formatCategorySubIconFirst, filterTransactionsByPeriod,
     ModernDateFilterPicker, NET_WORTH_GROUPS, PeriodSelectOptions, generateFingerprint,
-    getOccurrencesInPeriod
+    getOccurrencesInPeriod, getEffectiveNetWorthItemValue
 } from './utils.jsx';
 import {
     fetchStateFromDB, saveSettingInDB, saveTransactionsInDB, saveTagInDB,
@@ -173,7 +173,7 @@ export const App = () => {
         let maxD = null;
 
         recurringItems.forEach(c => {
-            const sDate = c.startDate || c.date;
+            const sDate = c.startDate || c.date || c.nextDate;
             if (sDate) {
                 const sStr = String(sDate).slice(0, 10);
                 if (!minD || sStr < minD) minD = sStr;
@@ -189,13 +189,30 @@ export const App = () => {
                 if (!t.date) return;
                 const dStr = String(t.date).slice(0, 10);
                 if (!minD || dStr < minD) minD = dStr;
-                if (!maxD || dStr > maxD) maxD = dStr;
             });
         }
 
+        const startStr = minD || todayStr;
+
+        // Calculate 30 years after lowest start date
+        const startDateObj = new Date(startStr + "T00:00:00");
+        let thirtyYearsEndStr = "";
+        if (!isNaN(startDateObj.getTime())) {
+            const endDateObj = new Date(startDateObj);
+            endDateObj.setFullYear(endDateObj.getFullYear() + 30);
+            thirtyYearsEndStr = `${endDateObj.getFullYear()}-${pad(endDateObj.getMonth() + 1)}-${pad(endDateObj.getDate())}`;
+        } else {
+            thirtyYearsEndStr = `${today.getFullYear() + 30}-${pad(today.getMonth() + 1)}-${pad(today.getDate())}`;
+        }
+
+        let finalEndStr = thirtyYearsEndStr;
+        if (maxD && maxD > thirtyYearsEndStr) {
+            finalEndStr = maxD;
+        }
+
         return {
-            start: minD || "2020-01-01",
-            end: maxD || todayStr
+            start: startStr,
+            end: finalEndStr
         };
     }, [settings?.recurring, transactions]);
 
@@ -707,6 +724,35 @@ export const App = () => {
             if (kind === "recurring") {
                 recurringList = recurringList.map(r => r.id === id ? { ...r, nextDate: advanceDateByCadence(t.date, r.cadence) } : r);
                 recurringChanged = true;
+
+                // Also check if any Net Worth item is linked to this recurring template
+                const hasLinkedNw = networthList.some(nw => nw.linkedRecurringId === id);
+                if (hasLinkedNw) {
+                    networthList = networthList.map(it => {
+                        if (it.linkedRecurringId !== id) return it;
+                        const isInvestment = (NET_WORTH_GROUPS.find(g => g.key === it.category) || {}).kind === "investment";
+                        const isSip = it.syncMode === "sip" || it.syncMode === "investment_sip" || (isInvestment && it.syncMode !== "revolving");
+                        if (isSip) {
+                            const curInv = Number(it.invested || 0);
+                            const curVal = Number(it.value !== undefined ? it.value : curInv);
+                            const txAmt = Number(t.amount || 0);
+                            return {
+                                ...it,
+                                invested: curInv + txAmt,
+                                value: curVal + txAmt
+                            };
+                        } else if (it.syncMode === "amortizing" || it.syncMode === "loan_principal") {
+                            const curVal = Number(it.value || 0);
+                            const txAmt = Number(t.amount || 0);
+                            return {
+                                ...it,
+                                value: Math.max(0, curVal - txAmt)
+                            };
+                        }
+                        return it;
+                    });
+                    networthChanged = true;
+                }
             } else if (kind === "billInstance") {
                 billInstancesList = billInstancesList.map(b => b.id === id ? { ...b, status: 'paid', linkedTxId: t.id } : b);
                 billInstancesChanged = true;
@@ -714,9 +760,14 @@ export const App = () => {
                 networthList = networthList.map(it => {
                     if (it.id !== id) return it;
                     const updated = { ...it, nextDueDate: advanceNetWorthDate(t.date, it.frequencyPerYear) };
-                    // For investments/SIPs, roll the payment into the tracked "invested" figure too
-                    if (it.category === "Investments") {
-                        updated.invested = Number(it.invested || 0) + Number(t.amount || 0);
+                    // For investments/SIPs, roll the payment into both invested and value
+                    const isInvestment = it.category === "Investments" || (NET_WORTH_GROUPS.find(g => g.key === it.category) || {}).kind === "investment";
+                    if (isInvestment || it.syncMode === "sip") {
+                        const curInv = Number(it.invested || 0);
+                        const curVal = Number(it.value !== undefined ? it.value : curInv);
+                        const txAmt = Number(t.amount || 0);
+                        updated.invested = curInv + txAmt;
+                        updated.value = curVal + txAmt;
                     }
                     return updated;
                 });
@@ -1178,19 +1229,25 @@ export const App = () => {
                                     const expenseTx = filteredTx.filter(t => t.type === "expense");
                                     const incomeTx = filteredTx.filter(t => t.type === "income");
 
-                                    const networthItems = settings.networthItems || [];
-                                    const hasLedger = networthItems.length > 0;
+                                    const rawNetworthItems = settings.networthItems || [];
+                                    const networthItems = rawNetworthItems.filter(it => it.includeInNetWorth !== false);
+                                    const hasLedger = rawNetworthItems.length > 0;
+                                    const recurringList = settings.recurring || [];
+                                    const billInstances = settings.billInstances || [];
+                                    const ledgerCash = networthItems
+                                        .filter(it => (NET_WORTH_GROUPS.find(g => g.key === it.category) || {}).kind === "balance")
+                                        .reduce((s, it) => s + getEffectiveNetWorthItemValue(it, recurringList, billInstances), 0);
                                     const ledgerAssets = networthItems
-                                        .filter(it => ["asset", "balance"].includes((NET_WORTH_GROUPS.find(g => g.key === it.category) || {}).kind))
-                                        .reduce((s, it) => s + Number(it.value || 0), 0);
+                                        .filter(it => (NET_WORTH_GROUPS.find(g => g.key === it.category) || {}).kind === "asset")
+                                        .reduce((s, it) => s + getEffectiveNetWorthItemValue(it, recurringList, billInstances), 0);
                                     const ledgerInvestments = networthItems
-                                        .filter(it => it.category === "Investments")
-                                        .reduce((s, it) => s + Number(it.value || 0), 0);
+                                        .filter(it => (NET_WORTH_GROUPS.find(g => g.key === it.category) || {}).kind === "investment")
+                                        .reduce((s, it) => s + getEffectiveNetWorthItemValue(it, recurringList, billInstances), 0);
                                     const ledgerLiabilities = networthItems
                                         .filter(it => (NET_WORTH_GROUPS.find(g => g.key === it.category) || {}).kind === "liability")
-                                        .reduce((s, it) => s + Math.abs(Number(it.value || 0)), 0);
+                                        .reduce((s, it) => s + Math.abs(getEffectiveNetWorthItemValue(it, recurringList, billInstances)), 0);
 
-                                    const assets = hasLedger ? (ledgerAssets + ledgerInvestments) : (settings.assetsTotal || 0);
+                                    const assets = hasLedger ? (ledgerCash + ledgerAssets + ledgerInvestments) : (settings.assetsTotal || 0);
                                     const liabilities = hasLedger ? ledgerLiabilities : (settings.liabilitiesTotal || 0);
                                     const netWorthVal = assets - liabilities;
                                     const netWorthReady = hasLedger || settings.netWorthConfigured;
@@ -1202,7 +1259,7 @@ export const App = () => {
                                     const fmt = (v) => formatCurrencyVal(v, settings.currency || "INR");
 
                                     const tiles = [
-                                        { id: 'networth', title: 'Net Worth', displayVal: netWorthReady ? fmt(netWorthVal) : 'Not set', icon: 'networth', color: 'var(--text-main)', iconClass: 'primary', onClick: () => handleNavigatePage('networth'), cursor: 'pointer' },
+                                        { id: 'networth', title: 'Net Worth', displayVal: netWorthReady ? fmt(netWorthVal) : 'Not set', icon: 'networth', color: netWorthVal < 0 ? 'var(--danger)' : 'var(--text-main)', iconClass: netWorthVal < 0 ? 'danger' : 'primary', onClick: () => handleNavigatePage('networth'), cursor: 'pointer' },
                                         { id: 'income', title: 'Inflow', displayVal: fmt(incomeSum), icon: 'arrowDown', color: 'var(--success)', iconClass: 'success' },
                                         { id: 'expenses', title: 'Outflow', displayVal: fmt(spendingSum), icon: 'arrowUp', color: 'var(--warning)', iconClass: 'warning' },
                                         { id: 'savings', title: 'Savings Rate', displayVal: `${savingsRate.toFixed(1)}%`, icon: 'goals', color: savingsRate >= 0 ? 'var(--info)' : 'var(--danger)', iconClass: 'info' }
@@ -1306,26 +1363,31 @@ export const App = () => {
                             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '12px', width: '100%', alignItems: 'center' }}>
                                 {(() => {
                                     const nwItems = (settings.networthItems || []).filter(it => it.includeInNetWorth !== false);
+                                    const nwRecurring = settings.recurring || [];
+                                    const nwBillInstances = settings.billInstances || [];
                                     const nwCash = nwItems
                                         .filter(it => (NET_WORTH_GROUPS.find(g => g.key === it.category) || {}).kind === "balance")
-                                        .reduce((s, it) => s + Number(it.value || 0), 0);
+                                        .reduce((s, it) => s + getEffectiveNetWorthItemValue(it, nwRecurring, nwBillInstances), 0);
                                     const nwAssets = nwItems
                                         .filter(it => (NET_WORTH_GROUPS.find(g => g.key === it.category) || {}).kind === "asset")
-                                        .reduce((s, it) => s + Number(it.value || 0), 0);
+                                        .reduce((s, it) => s + getEffectiveNetWorthItemValue(it, nwRecurring, nwBillInstances), 0);
                                     const nwInvestments = nwItems
                                         .filter(it => (NET_WORTH_GROUPS.find(g => g.key === it.category) || {}).kind === "investment")
-                                        .reduce((s, it) => s + Number(it.value || 0), 0);
+                                        .reduce((s, it) => s + getEffectiveNetWorthItemValue(it, nwRecurring, nwBillInstances), 0);
                                     const nwLiabilities = nwItems
                                         .filter(it => (NET_WORTH_GROUPS.find(g => g.key === it.category) || {}).kind === "liability")
-                                        .reduce((s, it) => s + Math.abs(Number(it.value || 0)), 0);
+                                        .reduce((s, it) => s + Math.abs(getEffectiveNetWorthItemValue(it, nwRecurring, nwBillInstances)), 0);
                                     const nwTotal = nwCash + nwAssets + nwInvestments - nwLiabilities;
                                     const fmt = (v) => formatCurrencyVal(v, settings.currency || "INR");
 
+                                    const isCashNegative = nwCash < 0;
+                                    const isTotalNegative = nwTotal < 0;
+
                                     const tiles = [
-                                        { id: 'all', title: 'Net Worth', val: nwTotal, icon: 'networth', color: 'var(--text-main)', border: 'var(--primary)', bg: 'rgba(99, 102, 241, 0.04)', shadow: 'rgba(99, 102, 241, 0.15)', iconClass: 'primary' },
-                                        { id: 'assets', title: 'Fixed Assets', val: nwAssets, icon: 'home', color: 'var(--primary)', border: 'var(--primary)', bg: 'rgba(99, 102, 241, 0.04)', shadow: 'rgba(99, 102, 241, 0.15)', iconClass: 'primary' },
-                                        { id: 'investments', title: 'Investments', val: nwInvestments, icon: 'goals', color: 'var(--info)', border: 'var(--info)', bg: 'rgba(59, 130, 246, 0.04)', shadow: 'rgba(59, 130, 246, 0.15)', iconClass: 'info' },
-                                        { id: 'cash', title: 'Bank & Cash', val: nwCash, icon: 'arrowDown', color: 'var(--success)', border: 'var(--success)', bg: 'rgba(16, 185, 129, 0.04)', shadow: 'rgba(16, 185, 129, 0.15)', iconClass: 'success' },
+                                        { id: 'all', title: 'Net Worth', val: nwTotal, icon: 'networth', color: isTotalNegative ? 'var(--danger)' : 'var(--text-main)', border: isTotalNegative ? 'var(--danger)' : 'var(--primary)', bg: isTotalNegative ? 'rgba(239, 68, 68, 0.04)' : 'rgba(99, 102, 241, 0.04)', shadow: isTotalNegative ? 'rgba(239, 68, 68, 0.15)' : 'rgba(99, 102, 241, 0.15)', iconClass: isTotalNegative ? 'danger' : 'primary' },
+                                        { id: 'assets', title: 'Fixed Assets', val: nwAssets, icon: 'home', color: nwAssets < 0 ? 'var(--danger)' : 'var(--primary)', border: nwAssets < 0 ? 'var(--danger)' : 'var(--primary)', bg: nwAssets < 0 ? 'rgba(239, 68, 68, 0.04)' : 'rgba(99, 102, 241, 0.04)', shadow: nwAssets < 0 ? 'rgba(239, 68, 68, 0.15)' : 'rgba(99, 102, 241, 0.15)', iconClass: nwAssets < 0 ? 'danger' : 'primary' },
+                                        { id: 'investments', title: 'Investments', val: nwInvestments, icon: 'goals', color: nwInvestments < 0 ? 'var(--danger)' : 'var(--info)', border: nwInvestments < 0 ? 'var(--danger)' : 'var(--info)', bg: nwInvestments < 0 ? 'rgba(239, 68, 68, 0.04)' : 'rgba(59, 130, 246, 0.04)', shadow: nwInvestments < 0 ? 'rgba(239, 68, 68, 0.15)' : 'rgba(59, 130, 246, 0.15)', iconClass: nwInvestments < 0 ? 'danger' : 'info' },
+                                        { id: 'cash', title: 'Bank & Cash', val: nwCash, icon: 'arrowDown', color: isCashNegative ? 'var(--danger)' : 'var(--success)', border: isCashNegative ? 'var(--danger)' : 'var(--success)', bg: isCashNegative ? 'rgba(239, 68, 68, 0.04)' : 'rgba(16, 185, 129, 0.04)', shadow: isCashNegative ? 'rgba(239, 68, 68, 0.15)' : 'rgba(16, 185, 129, 0.15)', iconClass: isCashNegative ? 'danger' : 'success' },
                                         { id: 'liabilities', title: 'Liabilities', val: nwLiabilities, icon: 'arrowUp', color: 'var(--danger)', border: 'var(--danger)', bg: 'rgba(239, 68, 68, 0.04)', shadow: 'rgba(239, 68, 68, 0.15)', iconClass: 'warning' }
                                     ];
 
