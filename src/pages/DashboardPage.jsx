@@ -50,6 +50,28 @@ export const DashboardPage = ({ transactions, allTransactions, settings, setActi
 
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+            {/* Calendar & Payments Row */}
+            <div className="content-columns" style={{ margin: 0, gridTemplateColumns: '2fr 3fr', gap: '16px' }}>
+                <PaymentsCalendarWidget
+                    settings={settings}
+                    transactions={fullTx}
+                    selectedDay={selectedDay}
+                    setSelectedDay={setSelectedDay}
+                    viewDate={calendarViewDate}
+                    setViewDate={setCalendarViewDate}
+                />
+                <PaymentsSectionWidget
+                    settings={settings}
+                    transactions={fullTx}
+                    updateSetting={updateSetting}
+                    loadState={loadState}
+                    showToast={showToast}
+                    selectedDay={selectedDay}
+                    setSelectedDay={setSelectedDay}
+                    viewDate={calendarViewDate}
+                />
+            </div>
+
             {/* Expanded Category Spending Breakdown Section */}
             <div className="section-card" style={{ background: 'var(--card-bg)', margin: 0, padding: '24px' }}>
                 <CategoryDonutSvgChart
@@ -75,28 +97,6 @@ export const DashboardPage = ({ transactions, allTransactions, settings, setActi
                 settings={settings}
                 setActivePage={setActivePage}
             />
-
-            {/* Calendar & Payments Row */}
-            <div className="content-columns" style={{ margin: 0, gridTemplateColumns: '2fr 3fr', gap: '16px' }}>
-                <PaymentsCalendarWidget
-                    settings={settings}
-                    transactions={fullTx}
-                    selectedDay={selectedDay}
-                    setSelectedDay={setSelectedDay}
-                    viewDate={calendarViewDate}
-                    setViewDate={setCalendarViewDate}
-                />
-                <PaymentsSectionWidget
-                    settings={settings}
-                    transactions={fullTx}
-                    updateSetting={updateSetting}
-                    loadState={loadState}
-                    showToast={showToast}
-                    selectedDay={selectedDay}
-                    setSelectedDay={setSelectedDay}
-                    viewDate={calendarViewDate}
-                />
-            </div>
 
             {/* Recent Activities Section */}
             <div className="section-card">
@@ -579,7 +579,7 @@ const PaymentsSectionWidget = ({ settings, transactions, updateSetting, loadStat
 
     const handleSaveBillInstance = async (billInst) => {
         const existing = settings.billInstances || [];
-        const filtered = existing.filter(b => !(b.recurringId === billInst.recurringId && b.status === 'pending'));
+        const filtered = existing.filter(b => !(b.id === billInst.id || (b.recurringId === billInst.recurringId && b.dueDate === billInst.dueDate && b.status === 'pending')));
         if (updateSetting) await updateSetting("billInstances", [...filtered, billInst]);
         if (settings?.networthItems && updateSetting) {
             const networthList = settings.networthItems || [];
@@ -599,9 +599,12 @@ const PaymentsSectionWidget = ({ settings, transactions, updateSetting, loadStat
         setLoggingBillItem(null);
     };
 
-    const handleClearBillInstance = async (recurringId) => {
+    const handleClearBillInstance = async (recurringId, instanceId) => {
         const existing = settings.billInstances || [];
-        const filtered = existing.filter(b => !(b.recurringId === recurringId && b.status === 'pending'));
+        const filtered = existing.filter(b => {
+            if (instanceId) return b.id !== instanceId;
+            return !(b.recurringId === recurringId && b.status === 'pending');
+        });
         if (updateSetting) await updateSetting("billInstances", filtered);
         if (settings?.networthItems && updateSetting) {
             const networthList = settings.networthItems || [];
@@ -1747,6 +1750,7 @@ const PaymentsSectionWidget = ({ settings, transactions, updateSetting, loadStat
                 <LogBillInstanceModal
                     item={loggingBillItem}
                     settings={settings}
+                    referenceDate={viewDate}
                     onClose={() => setLoggingBillItem(null)}
                     onSave={handleSaveBillInstance}
                     onClear={handleClearBillInstance}

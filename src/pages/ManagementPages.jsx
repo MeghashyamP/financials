@@ -245,7 +245,18 @@ export const RecurringPage = ({
         if (!item || item.excludeFromMonthlyCalculations) return 0;
         const { pStartStr, pEndStr } = getPeriodRange();
         const count = getOccurrencesInPeriod(item, pStartStr, pEndStr);
-        const amt = Number(item.amount || 0);
+        const amt = Number(item.estimatedAmount || item.amount || 0);
+        const pendingInst = (settings?.billInstances || []).find(b =>
+            b.recurringId === item.id &&
+            b.status === 'pending' &&
+            b.dueDate &&
+            b.dueDate >= pStartStr &&
+            b.dueDate <= pEndStr
+        );
+        if (pendingInst) {
+            if (count <= 1) return Number(pendingInst.amount) || 0;
+            return (Number(pendingInst.amount) || 0) + (count - 1) * (isNaN(amt) ? 0 : amt);
+        }
         return (isNaN(amt) ? 0 : amt) * (isNaN(count) ? 0 : count);
     };
 
@@ -349,7 +360,7 @@ export const RecurringPage = ({
 
     const handleSaveBillInstance = async (billInst) => {
         const existing = settings?.billInstances || [];
-        const filtered = existing.filter(b => !(b.recurringId === billInst.recurringId && b.status === 'pending'));
+        const filtered = existing.filter(b => !(b.id === billInst.id || (b.recurringId === billInst.recurringId && b.dueDate === billInst.dueDate && b.status === 'pending')));
         if (updateSetting) await updateSetting("billInstances", [...filtered, billInst]);
         if (settings?.networthItems && updateSetting) {
             const networthList = settings.networthItems || [];
@@ -368,9 +379,12 @@ export const RecurringPage = ({
         setLoggingBillItem(null);
     };
 
-    const handleClearBillInstance = async (recurringId) => {
+    const handleClearBillInstance = async (recurringId, instanceId) => {
         const existing = settings?.billInstances || [];
-        const filtered = existing.filter(b => !(b.recurringId === recurringId && b.status === 'pending'));
+        const filtered = existing.filter(b => {
+            if (instanceId) return b.id !== instanceId;
+            return !(b.recurringId === recurringId && b.status === 'pending');
+        });
         if (updateSetting) await updateSetting("billInstances", filtered);
         if (settings?.networthItems && updateSetting) {
             const networthList = settings.networthItems || [];
@@ -552,13 +566,13 @@ export const RecurringPage = ({
                                     </span>
                                 </th>
                                 <th style={{ whiteSpace: 'nowrap', width: '13%', minWidth: '110px' }}>Category</th>
-                                <th onClick={() => handleSortChange("per_payment")} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap', width: '11%', minWidth: '95px' }} title="Sort by Amount">
+                                <th onClick={() => handleSortChange("per_payment")} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap', width: '12%', minWidth: '105px' }} title="Sort by Amount">
                                     <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px' }}>
                                         Amount
                                         {renderTableSortIcon("per_payment")}
                                     </span>
                                 </th>
-                                <th onClick={() => handleSortChange("period_total")} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap', width: '11%', minWidth: '100px' }} title="Sort by Period Total">
+                                <th onClick={() => handleSortChange("period_total")} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap', width: '12%', minWidth: '110px' }} title="Sort by Period Total">
                                     <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px' }}>
                                         Period Total
                                         {renderTableSortIcon("period_total")}
@@ -590,8 +604,10 @@ export const RecurringPage = ({
                                 if (valA > valB) return sortOrder === "asc" ? 1 : -1;
                                 return 0;
                             } else if (sortBy === "per_payment") {
-                                valA = Number(a.amount || 0);
-                                valB = Number(b.amount || 0);
+                                const pendingInstA = (settings?.billInstances || []).find(bi => bi.recurringId === a.id && bi.status === 'pending' && bi.dueDate && bi.dueDate >= pStartStr && bi.dueDate <= pEndStr);
+                                const pendingInstB = (settings?.billInstances || []).find(bi => bi.recurringId === b.id && bi.status === 'pending' && bi.dueDate && bi.dueDate >= pStartStr && bi.dueDate <= pEndStr);
+                                valA = pendingInstA ? Number(pendingInstA.amount) : Number(a.estimatedAmount || a.amount || 0);
+                                valB = pendingInstB ? Number(pendingInstB.amount) : Number(b.estimatedAmount || b.amount || 0);
                             } else if (sortBy === "period_total") {
                                 valA = getPeriodItemAmount(a);
                                 valB = getPeriodItemAmount(b);
@@ -602,8 +618,10 @@ export const RecurringPage = ({
                                     const d = new Date(String(val).includes('T') ? String(val) : String(val) + "T00:00:00");
                                     return isNaN(d.getTime()) ? Infinity : d.getTime();
                                 };
-                                valA = parseTs(calculateNextExpectedDate(a, periodRefDate));
-                                valB = parseTs(calculateNextExpectedDate(b, periodRefDate));
+                                const pendingInstA = (settings?.billInstances || []).find(bi => bi.recurringId === a.id && bi.status === 'pending' && bi.dueDate && bi.dueDate >= pStartStr && bi.dueDate <= pEndStr);
+                                const pendingInstB = (settings?.billInstances || []).find(bi => bi.recurringId === b.id && bi.status === 'pending' && bi.dueDate && bi.dueDate >= pStartStr && bi.dueDate <= pEndStr);
+                                valA = parseTs(pendingInstA ? pendingInstA.dueDate : calculateNextExpectedDate(a, periodRefDate));
+                                valB = parseTs(pendingInstB ? pendingInstB.dueDate : calculateNextExpectedDate(b, periodRefDate));
                             } else {
                                 valA = 0;
                                 valB = 0;
@@ -627,9 +645,16 @@ export const RecurringPage = ({
                             const periodAmt = getPeriodItemAmount(c);
                             const calculatedNextDate = calculateNextExpectedDate(c, periodRefDate);
 
-                            const pendingBillInst = (settings?.billInstances || []).find(b => b.recurringId === c.id && b.status === 'pending');
-                            const displayAmount = pendingBillInst ? pendingBillInst.amount : c.amount;
-                            const displayPeriodAmt = pendingBillInst ? pendingBillInst.amount : periodAmt;
+                            const pendingBillInst = (settings?.billInstances || []).find(b =>
+                                b.recurringId === c.id &&
+                                b.status === 'pending' &&
+                                b.dueDate &&
+                                b.dueDate >= pStartStr &&
+                                b.dueDate <= pEndStr
+                            );
+                            const baseEstimatedAmt = Number(c.estimatedAmount || c.amount || 0);
+                            const displayAmount = pendingBillInst ? pendingBillInst.amount : baseEstimatedAmt;
+                            const displayPeriodAmt = periodAmt;
                             const displayDueDate = pendingBillInst ? pendingBillInst.dueDate : calculatedNextDate;
 
                             return (
@@ -639,28 +664,34 @@ export const RecurringPage = ({
                                     <td style={{
                                         fontWeight: 600,
                                         color: c.excludeFromMonthlyCalculations ? 'var(--text-muted)' : (c.type === "income" ? "var(--success)" : "var(--danger)"),
-                                        textDecoration: c.excludeFromMonthlyCalculations ? 'line-through' : 'none'
+                                        textDecoration: c.excludeFromMonthlyCalculations ? 'line-through' : 'none',
+                                        whiteSpace: 'nowrap'
                                     }}>
-                                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-                                            <div>{c.type === "income" ? "+" : "-"}{formatCurrency(displayAmount)}</div>
+                                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', whiteSpace: 'nowrap' }}>
+                                            <div style={{ whiteSpace: 'nowrap', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
+                                                {c.type === "income" ? "+" : "−"}{formatCurrency(displayAmount)}
+                                            </div>
                                             {pendingBillInst ? (
-                                                <div style={{ fontSize: '0.68rem', color: 'var(--success)', fontWeight: 600, textAlign: 'center' }}>(Logged)</div>
+                                                <div style={{ fontSize: '0.68rem', color: 'var(--success)', fontWeight: 600, textAlign: 'center', whiteSpace: 'nowrap' }}>(Logged)</div>
                                             ) : (
-                                                c.isVariableAmount && <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', fontWeight: 600, textAlign: 'center' }}>~Estimate</div>
+                                                c.isVariableAmount && <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', fontWeight: 600, textAlign: 'center', whiteSpace: 'nowrap' }}>~Estimate</div>
                                             )}
                                         </div>
                                     </td>
                                     <td style={{
                                         fontWeight: 700,
                                         color: c.excludeFromMonthlyCalculations ? 'var(--text-muted)' : (c.type === "income" ? "var(--success)" : "var(--danger)"),
-                                        textDecoration: c.excludeFromMonthlyCalculations ? 'line-through' : 'none'
+                                        textDecoration: c.excludeFromMonthlyCalculations ? 'line-through' : 'none',
+                                        whiteSpace: 'nowrap'
                                     }}>
-                                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-                                            <div>{c.type === "income" ? "+" : "-"}{formatCurrency(displayPeriodAmt)}</div>
+                                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', whiteSpace: 'nowrap' }}>
+                                            <div style={{ whiteSpace: 'nowrap', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
+                                                {c.type === "income" ? "+" : "−"}{formatCurrency(displayPeriodAmt)}
+                                            </div>
                                             {pendingBillInst ? (
-                                                <div style={{ fontSize: '0.68rem', color: 'var(--success)', fontWeight: 600, textAlign: 'center' }}>(Logged)</div>
+                                                <div style={{ fontSize: '0.68rem', color: 'var(--success)', fontWeight: 600, textAlign: 'center', whiteSpace: 'nowrap' }}>(Logged)</div>
                                             ) : (
-                                                c.isVariableAmount && <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', fontWeight: 600, textAlign: 'center' }}>~Estimate</div>
+                                                c.isVariableAmount && <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', fontWeight: 600, textAlign: 'center', whiteSpace: 'nowrap' }}>~Estimate</div>
                                             )}
                                         </div>
                                     </td>
@@ -1261,11 +1292,11 @@ export const RecurringPage = ({
                                             <tr key={c.id} style={{ opacity: 0.6 }}>
                                                 <td style={{ fontWeight: 600 }}>{c.name || "Untitled"}</td>
                                                 <td>{renderRecurringCategory(c.category)}</td>
-                                                <td style={{ fontWeight: 600, color: c.type === "income" ? "var(--success)" : "var(--danger)" }}>
-                                                    {c.type === "income" ? "+" : "-"}{formatCurrency(c.amount)}
+                                                <td style={{ fontWeight: 600, color: c.type === "income" ? "var(--success)" : "var(--danger)", whiteSpace: 'nowrap' }}>
+                                                    <span style={{ whiteSpace: 'nowrap', display: 'inline-block' }}>{c.type === "income" ? "+" : "−"}{formatCurrency(c.amount)}</span>
                                                 </td>
-                                                <td style={{ fontWeight: 700, color: c.type === "income" ? "var(--success)" : (c.excludeFromMonthlyCalculations ? "var(--text-muted)" : "var(--danger)") }}>
-                                                    {c.type === "income" ? "+" : "-"}{formatCurrency(periodAmt)}
+                                                <td style={{ fontWeight: 700, color: c.type === "income" ? "var(--success)" : (c.excludeFromMonthlyCalculations ? "var(--text-muted)" : "var(--danger)"), whiteSpace: 'nowrap' }}>
+                                                    <span style={{ whiteSpace: 'nowrap', display: 'inline-block' }}>{c.type === "income" ? "+" : "−"}{formatCurrency(periodAmt)}</span>
                                                 </td>
                                                 <td><span className="badge badge-info">{getCadenceLabel(c)}</span></td>
                                                 <td>—</td>
@@ -1385,6 +1416,10 @@ export const RecurringPage = ({
                 <LogBillInstanceModal
                     item={loggingBillItem}
                     settings={settings}
+                    referenceDate={(() => {
+                        const { pStartStr } = getPeriodRange();
+                        return pStartStr ? new Date(pStartStr + "T00:00:00") : new Date();
+                    })()}
                     onClose={() => setLoggingBillItem(null)}
                     onSave={handleSaveBillInstance}
                     onClear={handleClearBillInstance}

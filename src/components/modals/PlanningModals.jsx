@@ -1413,28 +1413,39 @@ const FrequencyPicker = ({ value, onChange }) => {
             );
         };
 
-        export const LogBillInstanceModal = ({ item, settings, onClose, onSave, onClear }) => {
+        export const LogBillInstanceModal = ({ item, settings, onClose, onSave, onClear, referenceDate }) => {
             useEscapeKey(onClose);
             const now = new Date();
             const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
 
             const isIncome = item?.type === 'income';
 
+            // Pre-fill Next Expected Date using referenceDate if provided
+            const initialExpectedDate = React.useMemo(() => {
+                if (!item) return todayStr;
+                const computed = calculateNextExpectedDate(item, referenceDate || new Date());
+                return computed || item.nextDate || item.date || todayStr;
+            }, [item, referenceDate, todayStr]);
+
             const existingBillInst = React.useMemo(() => {
                 if (!item) return null;
-                return (settings?.billInstances || []).find(b => b.recurringId === item.id && b.status === 'pending');
-            }, [item, settings?.billInstances]);
-
-            // Pre-fill Next Expected Date
-            const initialExpectedDate = React.useMemo(() => {
-                if (existingBillInst?.dueDate) return existingBillInst.dueDate;
-                if (!item) return todayStr;
-                const computed = calculateNextExpectedDate(item);
-                return computed || item.nextDate || item.date || todayStr;
-            }, [item, existingBillInst, todayStr]);
+                const pendingList = (settings?.billInstances || []).filter(b => b.recurringId === item.id && b.status === 'pending');
+                if (pendingList.length === 0) return null;
+                if (initialExpectedDate) {
+                    const match = pendingList.find(b => b.dueDate === initialExpectedDate || (b.dueDate && b.dueDate.substring(0, 7) === initialExpectedDate.substring(0, 7)));
+                    if (match) return match;
+                }
+                return pendingList[0];
+            }, [item, settings?.billInstances, initialExpectedDate]);
 
             const [amount, setAmount] = React.useState(existingBillInst ? existingBillInst.amount : (item?.estimatedAmount || item?.amount || ""));
-            const [dueDate, setDueDate] = React.useState(initialExpectedDate);
+            const [dueDate, setDueDate] = React.useState(existingBillInst?.dueDate || initialExpectedDate);
+
+            // Keep state in sync if item or existing bill instance changes
+            React.useEffect(() => {
+                setAmount(existingBillInst ? existingBillInst.amount : (item?.estimatedAmount || item?.amount || ""));
+                setDueDate(existingBillInst?.dueDate || initialExpectedDate);
+            }, [existingBillInst, item, initialExpectedDate]);
 
             const handleSubmit = (ev) => {
                 ev.preventDefault();
@@ -1456,7 +1467,7 @@ const FrequencyPicker = ({ value, onChange }) => {
 
             const handleClear = () => {
                 if (onClear && item?.id) {
-                    onClear(item.id);
+                    onClear(item.id, existingBillInst?.id);
                 }
                 onClose();
             };
