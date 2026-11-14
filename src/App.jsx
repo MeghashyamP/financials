@@ -320,6 +320,8 @@ export const App = () => {
     const [showImportModal, setShowImportModal] = React.useState(false);
     const [showSyncModal, setShowSyncModal] = React.useState(false);
     const [showAuthModal, setShowAuthModal] = React.useState(false);
+    const [authModalNotice, setAuthModalNotice] = React.useState("");
+    const [authModalView, setAuthModalView] = React.useState("signIn");
     const [currentUser, setCurrentUser] = React.useState(null);
     const [cloudSyncStatus, setCloudSyncStatus] = React.useState("idle"); // "idle" | "syncing" | "synced" | "error"
     const [subpageActionSignal, setSubpageActionSignal] = React.useState(0);
@@ -438,13 +440,51 @@ export const App = () => {
             setCurrentUser(user || null);
         }).catch(err => console.warn("Supabase user check:", err));
 
+        // Detect Supabase Auth redirect errors & recovery flows
+        try {
+            const hash = window.location.hash;
+            const search = window.location.search;
+            if (hash || search) {
+                const raw = hash.startsWith('#') ? hash.substring(1) : (search.startsWith('?') ? search.substring(1) : search);
+                const params = new URLSearchParams(raw);
+                const errorCode = params.get('error_code');
+                const errorDesc = params.get('error_description');
+                const error = params.get('error');
+                const type = params.get('type');
+
+                if (type === 'recovery') {
+                    setAuthModalView("setNewPassword");
+                    setShowAuthModal(true);
+                    window.history.replaceState(null, '', window.location.pathname);
+                } else if (error || errorCode || errorDesc) {
+                    // Remove error hash from address bar so page URL remains clean
+                    window.history.replaceState(null, '', window.location.pathname);
+
+                    if (errorCode === 'otp_expired' || (errorDesc && errorDesc.toLowerCase().includes('expired'))) {
+                        showToast(
+                            "The email link was already used or expired. If Gmail pre-scanned the link, your account may already be confirmed — try signing in!",
+                            "warning"
+                        );
+                        setAuthModalNotice("Email link expired or was auto-verified by Gmail's link scanner. Try signing in with your email and password below! If you still need to verify, you can enter the 6-digit code or resend.");
+                        setShowAuthModal(true);
+                    } else {
+                        const message = errorDesc ? decodeURIComponent(errorDesc).replace(/\+/g, ' ') : (error || "Authentication error occurred");
+                        showToast(`Auth error: ${message}`, "error");
+                    }
+                }
+            }
+        } catch (urlErr) {
+            console.warn("Error parsing auth URL parameters:", urlErr);
+        }
+
         // Listen for auth state changes. Pulling cloud data on sign-in is handled by
-        // AuthModal, which asks before replacing anything. Pulling here as well ran a
-        // second wipe-and-restore in parallel, and Supabase also emits SIGNED_IN when a
-        // session is re-validated (e.g. on tab focus), which would silently replace
-        // local data.
+        // AuthModal, which asks before replacing anything.
         const { data: authListener } = supabase.auth.onAuthStateChange((event, session) => {
             setCurrentUser(session?.user || null);
+            if (event === 'PASSWORD_RECOVERY') {
+                setAuthModalView("setNewPassword");
+                setShowAuthModal(true);
+            }
         });
 
         return () => {
@@ -1405,7 +1445,7 @@ export const App = () => {
                     {activePage === "dashboard" && (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', width: '100%' }}>
                             {/* Line 1: All the tiles */}
-                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '12px', width: '100%', alignItems: 'center' }}>
+                            <div className="topbar-tiles-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '12px', width: '100%', alignItems: 'center' }}>
                                 {(() => {
                                     const expenseTx = filteredTx.filter(t => t.type === "expense");
                                     const incomeTx = filteredTx.filter(t => t.type === "income");
@@ -1478,7 +1518,7 @@ export const App = () => {
                             {/* Line 2: Period (center aligned) */}
                             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: '100%' }}>
                                 {/* Unified Date Selector controls */}
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'nowrap', background: 'var(--card-bg)', padding: '3px 8px', height: '36px', borderRadius: '8px', border: '1px solid var(--border-color)', boxShadow: '0 1px 3px rgba(0,0,0,0.04)', boxSizing: 'border-box', width: '403px', minWidth: '403px', maxWidth: '403px' }}>
+                                <div className="unified-date-selector" style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'nowrap', background: 'var(--card-bg)', padding: '3px 8px', height: '36px', borderRadius: '8px', border: '1px solid var(--border-color)', boxShadow: '0 1px 3px rgba(0,0,0,0.04)', boxSizing: 'border-box', width: '403px', minWidth: '403px', maxWidth: '403px' }}>
                                     {/* Left: Start Date Picker */}
                                     <div
                                         style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', cursor: 'pointer' }}
@@ -1668,7 +1708,7 @@ export const App = () => {
                     {activePage === "recurring" && (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', width: '100%' }}>
                             {/* Line 1: Tiles */}
-                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '12px', width: '100%', alignItems: 'center' }}>
+                            <div className="topbar-tiles-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '12px', width: '100%', alignItems: 'center' }}>
                                 {(() => {
                                     const confirmedList = (settings?.recurring || []).filter(Boolean);
                                     const now = new Date();
@@ -1854,7 +1894,7 @@ export const App = () => {
                     {activePage === "transactions" && (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', width: '100%' }}>
                             {/* Row 1: Global search + date range + import + add */}
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', width: '100%' }}>
+                            <div className="tx-topbar-row1" style={{ display: 'flex', alignItems: 'center', gap: '8px', width: '100%' }}>
                                 {/* Global search */}
                                 <div style={{ position: 'relative', flex: 1, minWidth: '160px' }}>
                                     <span style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)', pointerEvents: 'none', fontSize: '0.9rem' }}>🔍</span>
@@ -1869,7 +1909,7 @@ export const App = () => {
                                 </div>
 
                                 {/* Date range picker */}
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '5px', background: 'var(--card-bg)', padding: '3px 8px', height: '34px', borderRadius: '8px', border: '1px solid var(--border-color)', boxSizing: 'border-box', flexShrink: 0, width: '403px', minWidth: '403px', maxWidth: '403px' }}>
+                                <div className="unified-date-selector" style={{ display: 'flex', alignItems: 'center', gap: '5px', background: 'var(--card-bg)', padding: '3px 8px', height: '34px', borderRadius: '8px', border: '1px solid var(--border-color)', boxSizing: 'border-box', flexShrink: 0, width: '403px', minWidth: '403px', maxWidth: '403px' }}>
                                     {/* Start Date */}
                                     <div
                                         style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', cursor: 'pointer' }}
@@ -1930,7 +1970,7 @@ export const App = () => {
                             </div>
 
                             {/* Row 2: Interactive column header bar */}
-                            <div style={{
+                            <div className="tx-column-headers-bar" style={{
                                 display: 'grid',
                                 gridTemplateColumns: '120px 1fr 160px 130px 150px 120px 110px 120px',
                                 alignItems: 'center',
@@ -2294,7 +2334,11 @@ export const App = () => {
             {/* Cloud Auth / Account Modal */}
             <AuthModal
                 isOpen={showAuthModal}
-                onClose={() => setShowAuthModal(false)}
+                onClose={() => {
+                    setShowAuthModal(false);
+                    setAuthModalNotice("");
+                    setAuthModalView("signIn");
+                }}
                 onAuthSuccess={async (user) => {
                     setCurrentUser(user);
                     // AuthModal has just restored or uploaded, so local and cloud now match.
@@ -2303,6 +2347,8 @@ export const App = () => {
                 }}
                 showToast={showToast}
                 localState={{ transactions, tags, rules, settings, documents }}
+                initialNotice={authModalNotice}
+                initialView={authModalView}
             />
 
             {/* CSV Column Mapping Dialog overlay */}

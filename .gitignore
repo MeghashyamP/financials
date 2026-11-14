@@ -7,3 +7,5 @@ dist
 financials-*.json
 financials-data*.json
 *.json.bak
+.claude
+

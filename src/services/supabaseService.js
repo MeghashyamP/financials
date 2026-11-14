@@ -102,9 +102,63 @@ export const getSessionEncryptionKey = () => {
 
 // Authentication helpers
 export const signUpUser = async (email, password) => {
-    const { data, error } = await supabase.auth.signUp({ email, password });
+    const { data, error } = await supabase.auth.signUp({
+        email,
+        password,
+        options: {
+            emailRedirectTo: typeof window !== 'undefined' ? window.location.origin : undefined
+        }
+    });
     if (error) throw error;
     setSessionEncryptionKey(password);
+    return data;
+};
+
+export const resendVerificationEmail = async (email) => {
+    const { error } = await supabase.auth.resend({
+        type: 'signup',
+        email,
+        options: {
+            emailRedirectTo: typeof window !== 'undefined' ? window.location.origin : undefined
+        }
+    });
+    if (error) throw error;
+};
+
+export const verifyOtpCode = async (email, token) => {
+    const { data, error } = await supabase.auth.verifyOtp({
+        email,
+        token,
+        type: 'signup'
+    });
+    if (error) throw error;
+    return data;
+};
+
+export const sendPasswordResetEmail = async (email) => {
+    const { data, error } = await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo: typeof window !== 'undefined' ? window.location.origin : undefined
+    });
+    if (error) throw error;
+    return data;
+};
+
+export const verifyRecoveryOtp = async (email, token) => {
+    const { data, error } = await supabase.auth.verifyOtp({
+        email,
+        token,
+        type: 'recovery'
+    });
+    if (error) throw error;
+    return data;
+};
+
+export const updateUserPassword = async (newPassword) => {
+    const { data, error } = await supabase.auth.updateUser({
+        password: newPassword
+    });
+    if (error) throw error;
+    setSessionEncryptionKey(newPassword);
     return data;
 };
 
