@@ -2,7 +2,7 @@ import { createClient } from '@supabase/supabase-js';
 import { fetchStateFromDB, initDB, saveSettingInDB, saveTagInDB, saveRuleInDB, saveDocumentInDB, wipeDatabase } from '../store.js';
 import { restoreBackup } from './backup.js';
 import { encryptPayload, decryptPayload } from './crypto.js';
-import { DEFAULT_CATEGORIES } from '../utils.jsx';
+import { DEFAULT_CATEGORIES, stripLocalOnlySettings } from '../utils.jsx';
 
 const SUPABASE_URL = "https://gsdddichdmfpmdbufmad.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_23pX17k4nzfpmiiubWbSUA_0OCA_UCW";
@@ -29,7 +29,7 @@ const compactTransaction = (tx) => {
 
 // Helper: Prune redundant default categories from settings before syncing
 const optimizeSettingsForSync = (settingsObj = {}) => {
-    const cleanSettings = { ...settingsObj };
+    const cleanSettings = stripLocalOnlySettings(settingsObj);
     if (Array.isArray(cleanSettings.categories)) {
         // Compare with DEFAULT_CATEGORIES; if it contains only defaults, omit it
         const isDefaultList = cleanSettings.categories.length === DEFAULT_CATEGORIES.length &&
@@ -61,6 +61,24 @@ const rehydrateSettingsFromSync = (settingsObj = {}) => {
         hydrated.categories = DEFAULT_CATEGORIES;
     }
     return hydrated;
+};
+
+// While a sign-in is deciding between the cloud copy and the local copy, automatic
+// pushes must wait, or they could upload local data over the cloud copy mid-restore.
+let cloudSyncPaused = false;
+export const setCloudSyncPaused = (paused) => { cloudSyncPaused = Boolean(paused); };
+export const isCloudSyncPaused = () => cloudSyncPaused;
+
+// Content fingerprint of the synced state, used to skip pushes when nothing changed.
+// Covers every field, so edits that keep array lengths the same are still detected.
+export const hashSyncState = ({ transactions = [], tags = [], rules = [], settings = {}, documents = [] } = {}) => {
+    const str = JSON.stringify([transactions, tags, rules, stripLocalOnlySettings(settings), documents]);
+    let h = 0x811c9dc5; // FNV-1a 32-bit
+    for (let i = 0; i < str.length; i++) {
+        h ^= str.charCodeAt(i);
+        h = Math.imul(h, 0x01000193);
+    }
+    return `${str.length}:${(h >>> 0).toString(16)}`;
 };
 
 // In-memory key caching for active session encryption

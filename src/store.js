@@ -121,6 +121,18 @@ export const fetchStateFromDB = async () => {
         }
     });
 
+    // Migrate the Gemini API key out of synced settings into this browser's localStorage.
+    // It used to be stored here, which put it in exports, the linked file and the cloud copy.
+    if (settings.geminiApiKey !== undefined) {
+        try {
+            if (settings.geminiApiKey && !localStorage.getItem("gemini_api_key")) {
+                localStorage.setItem("gemini_api_key", settings.geminiApiKey);
+            }
+        } catch (e) { }
+        delete settings.geminiApiKey;
+        deleteSettingFromDB("geminiApiKey").catch(() => { });
+    }
+
     // Ensure accounts default
     if (!settings.accounts || settings.accounts.length === 0 || JSON.stringify(settings.accounts) === JSON.stringify(["Main Checking", "Everyday Visa", "Rewards Card", "Cash"])) {
         settings.accounts = ["Bank 1", "Bank 2", "Credit Card 1"];
@@ -236,10 +248,11 @@ export const fetchStateFromDB = async () => {
         }
     }
 
-    // Sort transactions: newest first, capped to 5000
-    const sortedTransactions = [...transactions].sort((a, b) => new Date(b.date) - new Date(a.date)).slice(0, 5000);
-    // Sort documents: newest first, capped to 100
-    const sortedDocuments = [...documents].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)).slice(0, 100);
+    // Sort newest first. No cap: this state is what gets written to the linked file,
+    // JSON backups and the cloud copy, so truncating it here would drop older records
+    // from all of them.
+    const sortedTransactions = [...transactions].sort((a, b) => new Date(b.date) - new Date(a.date));
+    const sortedDocuments = [...documents].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 
     return {
         transactions: sortedTransactions,
@@ -261,6 +274,17 @@ export const saveSettingInDB = async (key, value) => {
             value: JSON.stringify(value),
             updatedAt: new Date().toISOString()
         });
+        req.onsuccess = () => resolve();
+        req.onerror = () => reject(req.error);
+    });
+};
+
+// Remove a settings key from IndexedDB
+export const deleteSettingFromDB = async (key) => {
+    const db = await initDB();
+    return new Promise((resolve, reject) => {
+        const tx = db.transaction("settings", "readwrite");
+        const req = tx.objectStore("settings").delete(key);
         req.onsuccess = () => resolve();
         req.onerror = () => reject(req.error);
     });

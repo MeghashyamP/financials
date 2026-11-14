@@ -5,7 +5,7 @@
  * importBackup(): Parses an uploaded .json file and restores all data into IndexedDB.
  */
 
-import { getISOStringInTimezone } from '../utils.jsx';
+import { getISOStringInTimezone, stripLocalOnlySettings, LOCAL_ONLY_SETTING_KEYS } from '../utils.jsx';
 
 export const BACKUP_VERSION = 1;
 
@@ -25,7 +25,7 @@ export const exportBackup = async (state) => {
         version: BACKUP_VERSION,
         exportedAt,
         appVersion: "1.0.0",
-        settings,
+        settings: stripLocalOnlySettings(settings),
         tags,
         rules,
         transactions,
@@ -98,6 +98,8 @@ export const restoreBackup = async (backup, {
     // 2. Restore settings
     if (backup.settings && typeof backup.settings === "object") {
         for (const [key, value] of Object.entries(backup.settings)) {
+            // Older backups may still carry browser-local secrets; don't bring them back.
+            if (LOCAL_ONLY_SETTING_KEYS.includes(key)) continue;
             await saveSettingInDB(key, value);
         }
     }

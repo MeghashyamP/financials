@@ -1,5 +1,46 @@
 import React from 'react';
-import { supabase, signUpUser, signInUser, signOutUser, saveUserDataToCloud, fetchUserDataFromCloud, syncCloudToLocal } from '../../services/supabaseService.js';
+import { signUpUser, signInUser, signOutUser, saveUserDataToCloud, fetchUserDataFromCloud, syncCloudToLocal, setCloudSyncPaused } from '../../services/supabaseService.js';
+
+const hasMeaningfulData = (state) => {
+    if (!state) return false;
+    const s = state.settings || {};
+    return (state.transactions?.length || 0) > 0 ||
+        (state.rules?.length || 0) > 0 ||
+        ["recurring", "networthItems", "budgets", "goals", "billInstances"].some(k => Array.isArray(s[k]) && s[k].length > 0);
+};
+
+// Decide what happens on sign-in when the cloud and this device may both hold data.
+// Returns "cloud" (restore cloud copy here), "local" (upload this device's copy),
+// "none" (nothing to move) or "cancel" (user backed out; sign out again).
+const chooseSyncDirection = (cloudData, localState) => {
+    const cloudHas = hasMeaningfulData(cloudData);
+    const localHas = hasMeaningfulData(localState);
+
+    if (cloudHas && !localHas) return "cloud";
+    if (!cloudHas && localHas) return "local";
+    if (!cloudHas && !localHas) return "none";
+
+    const cloudCount = cloudData.transactions?.length || 0;
+    const localCount = localState.transactions?.length || 0;
+    const syncedAt = cloudData.syncedAt ? new Date(cloudData.syncedAt).toLocaleString() : "an unknown time";
+
+    if (window.confirm(
+        `Both this device and your cloud account have data.\n\n` +
+        `Cloud copy: ${cloudCount} transactions (last synced ${syncedAt})\n` +
+        `This device: ${localCount} transactions\n\n` +
+        `OK: replace this device's data with the cloud copy.\n` +
+        `Cancel: see other options.`
+    )) return "cloud";
+
+    if (window.confirm(
+        `Upload this device's data to the cloud instead?\n\n` +
+        `This replaces the cloud copy (${cloudCount} transactions).\n\n` +
+        `OK: upload this device's data.\n` +
+        `Cancel: sign out and change nothing.`
+    )) return "local";
+
+    return "cancel";
+};
 
 export const AuthModal = ({ isOpen, onClose, onAuthSuccess, showToast, localState }) => {
     const [isSignUp, setIsSignUp] = React.useState(false);
@@ -15,6 +56,8 @@ export const AuthModal = ({ isOpen, onClose, onAuthSuccess, showToast, localStat
         setErrorMsg("");
         setLoading(true);
 
+        // Hold automatic pushes until this flow has decided which copy wins.
+        setCloudSyncPaused(true);
         try {
             if (isSignUp) {
                 const data = await signUpUser(email, password);
@@ -30,31 +73,48 @@ export const AuthModal = ({ isOpen, onClose, onAuthSuccess, showToast, localStat
                             console.warn("Initial sync after signup:", saveErr);
                         }
                     }
-                    if (onAuthSuccess) onAuthSuccess(data.user);
+                    if (onAuthSuccess) await onAuthSuccess(data.user);
                 }
                 onClose();
             } else {
                 const data = await signInUser(email, password);
-                showToast("Signed in successfully!", "success");
 
-                // Check for cloud data
-                const cloudData = await fetchUserDataFromCloud();
-                if (cloudData && (cloudData.transactions?.length > 0 || Object.keys(cloudData.settings || {}).length > 0)) {
-                    await syncCloudToLocal(cloudData);
-                    showToast("Restored your financial data from cloud!", "success");
-                } else if (localState && localState.transactions?.length > 0) {
-                    // Back up existing local data to cloud
-                    await saveUserDataToCloud(localState);
-                    showToast("Backed up your local data to cloud!", "success");
+                let cloudData;
+                try {
+                    cloudData = await fetchUserDataFromCloud();
+                    if (cloudData?.needsPassword) throw new Error("encryption key unavailable");
+                } catch (fetchErr) {
+                    // Most likely the cloud copy was encrypted with a different password.
+                    // Stay signed out so auto-sync can't overwrite that copy with local data.
+                    await signOutUser().catch(() => {});
+                    throw new Error(`Signed in, but the cloud data could not be read (${fetchErr.message}). You have been signed out so nothing gets overwritten.`);
                 }
 
-                if (onAuthSuccess) onAuthSuccess(data.user);
+                const choice = chooseSyncDirection(cloudData, localState);
+                if (choice === "cancel") {
+                    await signOutUser().catch(() => {});
+                    showToast("Sign-in cancelled. Nothing was changed.", "info");
+                    onClose();
+                    return;
+                }
+                if (choice === "cloud") {
+                    await syncCloudToLocal(cloudData);
+                    showToast("Signed in and restored your data from the cloud.", "success");
+                } else if (choice === "local") {
+                    await saveUserDataToCloud(localState);
+                    showToast("Signed in and uploaded this device's data to the cloud.", "success");
+                } else {
+                    showToast("Signed in successfully!", "success");
+                }
+
+                if (onAuthSuccess) await onAuthSuccess(data.user);
                 onClose();
             }
         } catch (err) {
             console.error("Auth error:", err);
             setErrorMsg(err.message || "Authentication failed. Please check your credentials.");
         } finally {
+            setCloudSyncPaused(false);
             setLoading(false);
         }
     };

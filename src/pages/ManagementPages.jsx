@@ -3,7 +3,7 @@ import {
     Icon, formatCurrencyVal, formatDate, formatDateTime, DatePickerField, DEFAULT_CATEGORIES,
     filterCategoriesByType, getContrastTextColor, formatCategorySubIconFirst,
     renderCategoryOptions, getOccurrencesInPeriod, calculateNextExpectedDate, useEscapeKey, CATEGORY_DESCRIPTIONS,
-    calculatePeriodDateRange, getISOStringInTimezone
+    calculatePeriodDateRange, getISOStringInTimezone, isRuleEnabled
 } from '../utils.jsx';
 import {
     updateTransactionInDB, deleteTransactionFromDB, saveRuleInDB, deleteRuleFromDB, wipeDatabase,
@@ -1847,7 +1847,7 @@ export const RulesPage = ({ rules, tags, settings, onSaveRule, onDeleteRule, sub
     const categories = settings.categories || [];
 
     const handleToggleRule = async (rule) => {
-        const updated = { ...rule, enabled: rule.enabled === 1 ? 0 : 1 };
+        const updated = { ...rule, enabled: isRuleEnabled(rule) ? 0 : 1 };
         await onSaveRule(updated);
     };
 
@@ -1887,7 +1887,7 @@ export const RulesPage = ({ rules, tags, settings, onSaveRule, onDeleteRule, sub
                                         <td>
                                             <input
                                                 type="checkbox"
-                                                checked={r.enabled === 1}
+                                                checked={isRuleEnabled(r)}
                                                 onChange={() => handleToggleRule(r)}
                                                 style={{ transform: 'scale(1.2)', cursor: 'pointer' }}
                                             />
@@ -1945,6 +1945,9 @@ export const SettingsPage = ({
 }) => {
 
     // Net worth configurations
+    const [geminiKeyInput, setGeminiKeyInput] = React.useState(() => {
+        try { return localStorage.getItem("gemini_api_key") || ""; } catch (e) { return ""; }
+    });
     const [assets, setAssets] = React.useState(settings.assetsTotal || 0);
     const [liabilities, setLiabilities] = React.useState(settings.liabilitiesTotal || 0);
 
@@ -2642,17 +2645,21 @@ export const SettingsPage = ({
                 </div>
                 <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', marginBottom: '12px' }}>
                     Passes bank statement PDFs directly to Google's Gemini Vision AI to extract transactions with much higher precision across any bank format globally.
+                    The key is kept in this browser only. It is not included in backups, the linked file, or cloud sync.
                 </p>
                 <div style={{ display: 'flex', gap: '10px', alignItems: 'center', maxWidth: '640px' }}>
                     <input
                         type="password"
                         className="form-control"
                         placeholder="Paste your free Gemini API key (AIzaSy…)"
-                        value={settings.geminiApiKey || localStorage.getItem("gemini_api_key") || ""}
-                        onChange={async (e) => {
+                        value={geminiKeyInput}
+                        onChange={(e) => {
                             const val = e.target.value.trim();
-                            localStorage.setItem("gemini_api_key", val);
-                            await updateSetting("geminiApiKey", val);
+                            setGeminiKeyInput(val);
+                            try {
+                                if (val) localStorage.setItem("gemini_api_key", val);
+                                else localStorage.removeItem("gemini_api_key");
+                            } catch (storageErr) { }
                         }}
                         style={{ flex: 1 }}
                     />
@@ -3292,7 +3299,7 @@ export const SettingsPage = ({
                                 {currentUser ? (
                                     <span className="status-pill status-pill-success">
                                         <span className="pulse-dot pulse-dot-success"></span>
-                                        {cloudSyncStatus === "syncing" ? "Syncing..." : cloudSyncStatus === "synced" ? "Synced ✓" : "Connected"}
+                                        {cloudSyncStatus === "syncing" ? "Syncing..." : cloudSyncStatus === "synced" ? "Synced ✓" : cloudSyncStatus === "locked" ? "Paused: sign in again" : cloudSyncStatus === "error" ? "Sync failed" : "Connected"}
                                     </span>
                                 ) : (
                                     <span className="status-pill" style={{ background: '#F1F5F9', color: '#475569', border: '1px solid #E2E8F0' }}>

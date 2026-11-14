@@ -5,7 +5,7 @@
  * to link and auto-sync JSON data directly to a local project file on disk.
  */
 
-import { getISOStringInTimezone } from '../utils.jsx';
+import { getISOStringInTimezone, stripLocalOnlySettings } from '../utils.jsx';
 
 // Check if File System Access API is supported in the browser
 export const isFileSystemAccessSupported = () => {
@@ -238,7 +238,7 @@ export const writeStateToLocalFile = async (handle, state) => {
             version: 1,
             exportedAt,
             appVersion: "1.0.0",
-            settings,
+            settings: stripLocalOnlySettings(settings),
             tags,
             rules,
             transactions,

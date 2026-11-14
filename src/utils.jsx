@@ -470,6 +470,9 @@ export const predictBestCategory = (narration = "", type = "expense", availableC
 };
 
 // Process imported transaction: predict category, apply user rules (rule overwrites), enforce category boundaries
+// Rules are saved with enabled: 1/0, but imported or hand-edited data may use true/false.
+export const isRuleEnabled = (rule) => Boolean(rule) && (rule.enabled === 1 || rule.enabled === true);
+
 export const processImportedTransaction = (tx, rules = [], availableCategories = DEFAULT_CATEGORIES) => {
     const categoriesPool = (availableCategories && availableCategories.length > 0) ? availableCategories : DEFAULT_CATEGORIES;
     const merch = String(tx?.merchant || tx?.narration || "Unknown").trim();
@@ -486,7 +489,7 @@ export const processImportedTransaction = (tx, rules = [], availableCategories =
 
     // 2. Evaluate user categorization rules (Rules OVERWRITE initial suggestions)
     (rules || []).forEach(rule => {
-        if (rule && rule.enabled === 1 && rule.whenText && merch.toLowerCase().includes(String(rule.whenText).toLowerCase())) {
+        if (rule && isRuleEnabled(rule) && rule.whenText && merch.toLowerCase().includes(String(rule.whenText).toLowerCase())) {
             if (rule.thenText) {
                 categoryVal = rule.thenText;
             }
@@ -1290,13 +1293,9 @@ export const detectRecurringTransactions = (transactions = [], rules = [], dismi
         }
 
         // Calculate Next Expected Date calendar-aware (Section 9.6)
+        // dates[] were parsed from "YYYY-MM-DD" as UTC midnight, so toISOString recovers the original day.
         const lastDate = dates[dates.length - 1];
-        let nextDate = new Date(lastDate);
-        if (cadence === "weekly") nextDate.setDate(nextDate.getDate() + 7);
-        else if (cadence === "biweekly") nextDate.setDate(nextDate.getDate() + 14);
-        else if (cadence === "monthly") nextDate.setMonth(nextDate.getMonth() + 1);
-        else if (cadence === "quarterly") nextDate.setMonth(nextDate.getMonth() + 3);
-        else if (cadence === "annual") nextDate.setFullYear(nextDate.getFullYear() + 1);
+        const nextDateStr = shiftDateByCadence(lastDate.toISOString().split('T')[0], cadence, 1);
 
         // Convert to monthly equivalents (Section 9.6)
         let monthlyEquivalent = avgAmount;
@@ -1317,7 +1316,7 @@ export const detectRecurringTransactions = (transactions = [], rules = [], dismi
             confidence,
             averageCharge: avgAmount,
             monthlyEquivalent,
-            nextDate: nextDate.toISOString().split('T')[0],
+            nextDate: nextDateStr,
             isSubscription: isSubHint
         });
     });
@@ -1814,6 +1813,106 @@ export const ModernDateFilterPicker = ({ value, onChange }) => {
     );
 };
 
+// Settings that belong to this browser only and must never leave it: not in JSON
+// exports, the linked local file, or the cloud copy (e.g. third-party API keys).
+export const LOCAL_ONLY_SETTING_KEYS = ["geminiApiKey"];
+
+export const stripLocalOnlySettings = (settingsObj = {}) => {
+    const clean = { ...(settingsObj || {}) };
+    LOCAL_ONLY_SETTING_KEYS.forEach(k => { delete clean[k]; });
+    return clean;
+};
+
+// --- Calendar-safe date arithmetic (local time, no UTC drift, no month overflow) ---
+
+export const toLocalDateStr = (d) =>
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
+// Parse "YYYY-MM-DD" (or a Date) into a local-midnight Date. Returns null when invalid.
+export const parseLocalDate = (value) => {
+    if (value instanceof Date) {
+        return isNaN(value.getTime()) ? null : new Date(value.getFullYear(), value.getMonth(), value.getDate());
+    }
+    const m = /^(\d{4})-(\d{1,2})-(\d{1,2})/.exec(String(value || "").trim());
+    if (m) return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+    const d = new Date(value);
+    return isNaN(d.getTime()) ? null : new Date(d.getFullYear(), d.getMonth(), d.getDate());
+};
+
+// Add n months (n may be negative). The result lands on anchorDay, or on the month's
+// last day when the month is shorter: Jan 31 + 1 month = Feb 28, not Mar 3.
+// anchorDay is 1-31 or 'last'; it defaults to the date's own day.
+export const addMonthsClamped = (date, n, anchorDay) => {
+    const day = anchorDay === 'last' ? 31 : (Number(anchorDay) || date.getDate());
+    const y = date.getFullYear();
+    const m = date.getMonth() + n;
+    const maxDays = new Date(y, m + 1, 0).getDate();
+    return new Date(y, m, Math.min(day, maxDays));
+};
+
+export const getAnchorDayOfMonth = (dStr) => {
+    if (!dStr) return 1;
+    if (typeof dStr === 'string' && dStr.includes('-')) {
+        const parts = dStr.split('-');
+        if (parts.length === 3) {
+            const dayNum = parseInt(parts[2].substring(0, 2), 10);
+            if (!isNaN(dayNum) && dayNum >= 1 && dayNum <= 31) return dayNum;
+        }
+    }
+    const d = new Date(dStr);
+    if (!isNaN(d.getTime())) return d.getDate();
+    return 1;
+};
+
+// Day of month a recurring item is due on: its monthlyDays setting, else its start date's day.
+export const getAnchorDayForRecurring = (r) => {
+    if (!r) return 1;
+    if (r.monthlyDays) {
+        const rawMD = r.monthlyDays;
+        const isLast = (typeof rawMD === 'string' && rawMD.trim().toLowerCase() === 'last') ||
+            (Array.isArray(rawMD) && rawMD.length === 1 && String(rawMD[0]).toLowerCase() === 'last');
+        if (isLast) return 'last';
+        const parsed = Array.isArray(rawMD)
+            ? parseInt(rawMD[0], 10)
+            : parseInt(String(rawMD).split(',')[0].trim(), 10);
+        if (!isNaN(parsed) && parsed >= 1 && parsed <= 31) return parsed;
+    }
+    const sDate = r.startDate || r.nextDate;
+    return getAnchorDayOfMonth(sDate);
+};
+
+// Move a "YYYY-MM-DD" date forward (steps > 0) or back (steps < 0) by whole cadence cycles.
+export const shiftDateByCadence = (dateStr, cadence, steps = 1, { anchorDay, intervalDays } = {}) => {
+    const base = parseLocalDate(dateStr) || parseLocalDate(new Date());
+    const addDays = (n) => {
+        const d = new Date(base);
+        d.setDate(d.getDate() + n);
+        return d;
+    };
+    let out;
+    switch (cadence) {
+        case "daily": out = addDays(steps); break;
+        case "weekly":
+        case "weekly_days": out = addDays(7 * steps); break;
+        case "biweekly": out = addDays(14 * steps); break;
+        case "every":
+        case "custom_interval": out = addDays(Math.max(1, Number(intervalDays) || 14) * steps); break;
+        case "quarterly": out = addMonthsClamped(base, 3 * steps, anchorDay); break;
+        case "half_yearly":
+        case "semi_annual": out = addMonthsClamped(base, 6 * steps, anchorDay); break;
+        case "annual":
+        case "yearly":
+        case "annually": out = addMonthsClamped(base, 12 * steps, anchorDay); break;
+        case "monthly":
+        default: out = addMonthsClamped(base, steps, anchorDay); break;
+    }
+    return toLocalDateStr(out);
+};
+
+// Net Worth ledger items store payments-per-year; map that to a month step.
+export const netWorthMonthsPerCycle = (frequencyPerYear) =>
+    frequencyPerYear >= 12 ? 1 : frequencyPerYear === 4 ? 3 : frequencyPerYear === 2 ? 6 : 12;
+
 export const calculateNextExpectedDate = (item, refDate = new Date()) => {
     if (!item) return "";
     const toStr = (v) => typeof v === 'string' ? v : (v instanceof Date ? v.toISOString().split('T')[0] : (v ? String(v) : ''));
@@ -1908,18 +2007,14 @@ export const calculateNextExpectedDate = (item, refDate = new Date()) => {
         }
     }
 
-    if (cadence === "quarterly") {
+    if (cadence === "quarterly" || cadence === "half_yearly" || cadence === "semi_annual") {
+        // Step from the original start date each time so short months don't drift the due day.
+        const step = cadence === "quarterly" ? 3 : 6;
+        let k = 0;
         let curr = new Date(sDate);
-        while (curr < today) {
-            curr.setMonth(curr.getMonth() + 3);
-        }
-        if (!eDate || curr <= eDate) return localDateStr(curr);
-    }
-
-    if (cadence === "half_yearly" || cadence === "semi_annual") {
-        let curr = new Date(sDate);
-        while (curr < today) {
-            curr.setMonth(curr.getMonth() + 6);
+        while (curr < today && k < 2400) {
+            k++;
+            curr = addMonthsClamped(sDate, k * step);
         }
         if (!eDate || curr <= eDate) return localDateStr(curr);
     }
@@ -2080,66 +2175,20 @@ export const getOccurrencesInPeriod = (item, pStartStr, pEndStr) => {
         return count;
     }
 
-    if (cadence === "quarterly") {
-        let curr = new Date(validAnchor.getTime());
-        if (curr > pStart) {
-            while (curr > pStart) {
-                const prevQ = new Date(curr.getTime());
-                prevQ.setMonth(prevQ.getMonth() - 3);
-                if (prevQ >= pStart) {
-                    curr = prevQ;
-                } else {
-                    break;
-                }
-            }
-        } else if (curr < pStart) {
-            while (curr < pStart) {
-                curr.setMonth(curr.getMonth() + 3);
-            }
-            curr.setMonth(curr.getMonth() - 3);
-        }
-
-        while (true) {
-            const occDate = new Date(curr.getFullYear(), curr.getMonth(), curr.getDate(), 12, 0, 0);
+    if (cadence === "quarterly" || cadence === "half_yearly" || cadence === "semi_annual") {
+        // Each occurrence is anchor + k*step months (clamped), computed from the anchor
+        // rather than the previous occurrence, so a 31st anchor never drifts to the 1st.
+        const step = cadence === "quarterly" ? 3 : 6;
+        const monthsFromAnchor = (pStart.getFullYear() - validAnchor.getFullYear()) * 12 + (pStart.getMonth() - validAnchor.getMonth());
+        let k = Math.floor(monthsFromAnchor / step) - 1;
+        for (let guard = 0; guard < 2400; guard++, k++) {
+            const occ = addMonthsClamped(validAnchor, k * step);
+            const occDate = new Date(occ.getFullYear(), occ.getMonth(), occ.getDate(), 12, 0, 0);
             if (occDate > pEnd) break;
 
-            if (occDate >= pStart && occDate <= pEnd && (!effectiveStart || occDate >= effectiveStart) && (!itemEnd || occDate <= itemEnd)) {
+            if (occDate >= pStart && (!effectiveStart || occDate >= effectiveStart) && (!itemEnd || occDate <= itemEnd)) {
                 count++;
             }
-
-            curr.setMonth(curr.getMonth() + 3);
-        }
-        return count;
-    }
-
-    if (cadence === "half_yearly" || cadence === "semi_annual") {
-        let curr = new Date(validAnchor.getTime());
-        if (curr > pStart) {
-            while (curr > pStart) {
-                const prevH = new Date(curr.getTime());
-                prevH.setMonth(prevH.getMonth() - 6);
-                if (prevH >= pStart) {
-                    curr = prevH;
-                } else {
-                    break;
-                }
-            }
-        } else if (curr < pStart) {
-            while (curr < pStart) {
-                curr.setMonth(curr.getMonth() + 6);
-            }
-            curr.setMonth(curr.getMonth() - 6);
-        }
-
-        while (true) {
-            const occDate = new Date(curr.getFullYear(), curr.getMonth(), curr.getDate(), 12, 0, 0);
-            if (occDate > pEnd) break;
-
-            if (occDate >= pStart && occDate <= pEnd && (!effectiveStart || occDate >= effectiveStart) && (!itemEnd || occDate <= itemEnd)) {
-                count++;
-            }
-
-            curr.setMonth(curr.getMonth() + 6);
         }
         return count;
     }
@@ -2228,15 +2277,14 @@ export const getOccurrencesInPeriod = (item, pStartStr, pEndStr) => {
         return count;
     }
 
-    // Default monthly fallback
-    let curr = new Date(pStart.getTime());
-    while (curr <= pEnd) {
+    // Default monthly fallback (each step computed from pStart so short months don't drift it)
+    for (let k = 0; k < 2400; k++) {
+        const curr = addMonthsClamped(pStart, k);
         const occDate = new Date(curr.getFullYear(), curr.getMonth(), curr.getDate(), 12, 0, 0);
         if (occDate > pEnd) break;
         if ((!effectiveStart || occDate >= effectiveStart) && (!itemEnd || occDate <= itemEnd)) {
             count++;
         }
-        curr.setMonth(curr.getMonth() + 1);
     }
     return count;
 };

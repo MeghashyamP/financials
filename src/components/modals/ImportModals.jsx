@@ -10,7 +10,7 @@ import {
             useEscapeKey(onClose);
             const [importType, setImportType] = React.useState("pdf");
             const [pdfEngine, setPdfEngine] = React.useState("ai"); // "ai" or "local"
-            const [apiKey, setApiKey] = React.useState(() => localStorage.getItem("gemini_api_key") || settings?.geminiApiKey || "");
+            const [apiKey, setApiKey] = React.useState(() => localStorage.getItem("gemini_api_key") || "");
             const [processing, setProcessing] = React.useState(false);
             const [statusMsg, setStatusMsg] = React.useState("Extracting text and identifying transactions…");
 

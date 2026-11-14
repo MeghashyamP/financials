@@ -2,9 +2,31 @@ import React from 'react';
 import { 
   Icon, DatePickerField, DEFAULT_CATEGORIES, filterCategoriesByType, 
   useEscapeKey, formatCurrencyVal, NET_WORTH_GROUPS, getCurrencySymbol,
-  renderCategoryOptions, formatDate, calculateNextExpectedDate 
+  renderCategoryOptions, formatDate, calculateNextExpectedDate, addMonthsClamped
 } from '../../utils.jsx';
 import { CategoryPickerModal } from './TransactionModals.jsx';
+
+// Date of the k-th occurrence (k = 0 is the start date) of a schedule. Computed from
+// the start date each time, so month-based cadences keep their due day instead of
+// drifting after short months (e.g. Jan 31 monthly -> Feb 28 -> Mar 31).
+const nthCadenceDate = (base, k, cad, monthDay, intervalDays) => {
+    if (k === 0) return new Date(base);
+    const dayStep = cad === 'daily' ? 1
+        : cad === 'weekly' ? 7
+        : cad === 'biweekly' ? 14
+        : cad === 'every' ? (Number(intervalDays) || 14)
+        : null;
+    if (dayStep) {
+        const d = new Date(base);
+        d.setDate(d.getDate() + k * dayStep);
+        return d;
+    }
+    const monthStep = cad === 'quarterly' ? 3 : cad === 'half_yearly' ? 6 : cad === 'yearly' ? 12 : 1;
+    const anchor = (cad === 'monthly' && monthDay)
+        ? (monthDay === 'last' ? 'last' : (Number(monthDay) || base.getDate()))
+        : base.getDate();
+    return addMonthsClamped(base, k * monthStep, anchor);
+};
 
 const FREQUENCY_OPTIONS = [
     { value: 'monthly', icon: '📅', label: 'Monthly', desc: 'Every month on the same date' },
@@ -227,25 +249,7 @@ const FrequencyPicker = ({ value, onChange }) => {
                 if (isNaN(base.getTime())) return "";
                 const pad2 = (x) => String(x).padStart(2, '0');
                 const localStr = (d) => `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}`;
-                let cur = new Date(base);
-                for (let i = 1; i < n; i++) {
-                    if (cad === 'daily') cur.setDate(cur.getDate() + 1);
-                    else if (cad === 'weekly') cur.setDate(cur.getDate() + 7);
-                    else if (cad === 'biweekly') cur.setDate(cur.getDate() + 14);
-                    else if (cad === 'every') cur.setDate(cur.getDate() + (Number(intervalDays) || 14));
-                    else if (cad === 'monthly') {
-                        cur.setMonth(cur.getMonth() + 1);
-                        const day = monthDay === 'last'
-                            ? new Date(cur.getFullYear(), cur.getMonth() + 1, 0).getDate()
-                            : Math.min(Number(monthDay) || base.getDate(), new Date(cur.getFullYear(), cur.getMonth() + 1, 0).getDate());
-                        cur.setDate(day);
-                    }
-                    else if (cad === 'quarterly') cur.setMonth(cur.getMonth() + 3);
-                    else if (cad === 'half_yearly') cur.setMonth(cur.getMonth() + 6);
-                    else if (cad === 'yearly') cur.setFullYear(cur.getFullYear() + 1);
-                    else cur.setMonth(cur.getMonth() + 1);
-                }
-                return localStr(cur);
+                return localStr(nthCadenceDate(base, n - 1, cad, monthDay, intervalDays));
             };
 
             const computeOccurrencesFromEndDate = (sd, ed, cad, monthDay, intervalDays) => {
@@ -254,18 +258,8 @@ const FrequencyPicker = ({ value, onChange }) => {
                 const end = new Date(ed + "T23:59:59");
                 if (isNaN(base.getTime()) || isNaN(end.getTime()) || end < base) return "";
                 let count = 0;
-                let cur = new Date(base);
-                while (cur <= end && count < 1000) {
+                while (count < 1000 && nthCadenceDate(base, count, cad, monthDay, intervalDays) <= end) {
                     count++;
-                    if (cad === 'daily') cur.setDate(cur.getDate() + 1);
-                    else if (cad === 'weekly') cur.setDate(cur.getDate() + 7);
-                    else if (cad === 'biweekly') cur.setDate(cur.getDate() + 14);
-                    else if (cad === 'every') cur.setDate(cur.getDate() + (Number(intervalDays) || 14));
-                    else if (cad === 'monthly') cur.setMonth(cur.getMonth() + 1);
-                    else if (cad === 'quarterly') cur.setMonth(cur.getMonth() + 3);
-                    else if (cad === 'half_yearly') cur.setMonth(cur.getMonth() + 6);
-                    else if (cad === 'yearly') cur.setFullYear(cur.getFullYear() + 1);
-                    else cur.setMonth(cur.getMonth() + 1);
                 }
                 return String(count);
             };

@@ -3,7 +3,8 @@ import {
     Icon, formatCurrencyVal, filterTransactionsByPeriod, formatDate,
     ModernDateFilterPicker, PeriodSelectOptions, getContrastTextColor,
     formatCategorySubIconFirst, calculatePeriodDateRange, getCurrencySymbol,
-    getOccurrencesInPeriod
+    getOccurrencesInPeriod, NET_WORTH_GROUPS, getAnchorDayOfMonth, getAnchorDayForRecurring,
+    shiftDateByCadence, netWorthMonthsPerCycle
 } from '../utils.jsx';
 import { updateTransactionInDB, deleteTransactionFromDB } from '../store.js';
 import { LogBillInstanceModal } from '../components/modals/PlanningModals.jsx';
@@ -297,36 +298,7 @@ const FinancialInsightsPanel = ({ transactions, settings, setActivePage }) => {
 };
 
 // --- SHARED DATE HELPERS FOR PAYMENTS WIDGETS ---
-const getAnchorDayOfMonth = (dStr) => {
-    if (!dStr) return 1;
-    if (typeof dStr === 'string' && dStr.includes('-')) {
-        const parts = dStr.split('-');
-        if (parts.length === 3) {
-            const dayNum = parseInt(parts[2].substring(0, 2), 10);
-            if (!isNaN(dayNum) && dayNum >= 1 && dayNum <= 31) return dayNum;
-        }
-    }
-    const d = new Date(dStr);
-    if (!isNaN(d.getTime())) return d.getDate();
-    return 1;
-};
-
-const getAnchorDayForRecurring = (r) => {
-    if (!r) return 1;
-    if (r.monthlyDays) {
-        const rawMD = r.monthlyDays;
-        const isLast = (typeof rawMD === 'string' && rawMD.trim().toLowerCase() === 'last') ||
-            (Array.isArray(rawMD) && rawMD.length === 1 && String(rawMD[0]).toLowerCase() === 'last');
-        if (isLast) return 'last';
-        const parsed = Array.isArray(rawMD)
-            ? parseInt(rawMD[0], 10)
-            : parseInt(String(rawMD).split(',')[0].trim(), 10);
-        if (!isNaN(parsed) && parsed >= 1 && parsed <= 31) return parsed;
-    }
-    const sDate = r.startDate || r.nextDate;
-    return getAnchorDayOfMonth(sDate);
-};
-
+// (getAnchorDayOfMonth / getAnchorDayForRecurring live in utils.jsx)
 const getDueDateInMonth = (anchorDay, viewYear, viewMonth) => {
     const maxDays = new Date(viewYear, viewMonth + 1, 0).getDate();
     const day = anchorDay === 'last' ? maxDays : Math.min(Math.max(Number(anchorDay) || 1, 1), maxDays);
@@ -1098,16 +1070,11 @@ const PaymentsSectionWidget = ({ settings, transactions, updateSetting, loadStat
                 }
                 const updatedList = (settings.recurring || []).map(r => {
                     if (r.id !== item.id) return r;
-                    const d = new Date(r.nextDate || new Date());
-                    switch (r.cadence) {
-                        case "weekly": d.setDate(d.getDate() + 7); break;
-                        case "biweekly": d.setDate(d.getDate() + 14); break;
-                        case "quarterly": d.setMonth(d.getMonth() + 3); break;
-                        case "annual": d.setFullYear(d.getFullYear() + 1); break;
-                        case "monthly":
-                        default: d.setMonth(d.getMonth() + 1); break;
-                    }
-                    return { ...r, nextDate: d.toISOString().split('T')[0] };
+                    const nextDate = shiftDateByCadence(r.nextDate, r.cadence, 1, {
+                        anchorDay: getAnchorDayForRecurring(r),
+                        intervalDays: r.customIntervalDays
+                    });
+                    return { ...r, nextDate };
                 });
                 await updateSetting("recurring", updatedList);
 
@@ -1146,10 +1113,8 @@ const PaymentsSectionWidget = ({ settings, transactions, updateSetting, loadStat
             } else if (item.kind === "networth") {
                 const updatedList = (settings.networthItems || []).map(it => {
                     if (it.id !== item.id) return it;
-                    const d = new Date(it.nextDueDate || new Date());
-                    const monthsToAdd = (it.frequencyPerYear >= 12) ? 1 : (it.frequencyPerYear === 4) ? 3 : (it.frequencyPerYear === 2) ? 6 : 12;
-                    d.setMonth(d.getMonth() + monthsToAdd);
-                    return { ...it, nextDueDate: d.toISOString().split('T')[0] };
+                    const nextDueDate = shiftDateByCadence(it.nextDueDate, "monthly", netWorthMonthsPerCycle(it.frequencyPerYear));
+                    return { ...it, nextDueDate };
                 });
                 await updateSetting("networthItems", updatedList);
             }
@@ -1206,19 +1171,11 @@ const PaymentsSectionWidget = ({ settings, transactions, updateSetting, loadStat
                 if (rItem) {
                     const updatedList = (settings.recurring || []).map(r => {
                         if (!r || r.id !== linkedRecId) return r;
-                        const d = new Date(r.nextDate || new Date());
-                        switch (r.cadence) {
-                            case "weekly": d.setDate(d.getDate() - 7); break;
-                            case "biweekly": d.setDate(d.getDate() - 14); break;
-                            case "quarterly": d.setMonth(d.getMonth() - 3); break;
-                            case "annual": d.setFullYear(d.getFullYear() - 1); break;
-                            case "monthly":
-                            default: d.setMonth(d.getMonth() - 1); break;
-                        }
-                        const y = d.getFullYear();
-                        const m = String(d.getMonth() + 1).padStart(2, '0');
-                        const day = String(d.getDate()).padStart(2, '0');
-                        return { ...r, nextDate: `${y}-${m}-${day}` };
+                        const nextDate = shiftDateByCadence(r.nextDate, r.cadence, -1, {
+                            anchorDay: getAnchorDayForRecurring(r),
+                            intervalDays: r.customIntervalDays
+                        });
+                        return { ...r, nextDate };
                     });
                     await updateSetting("recurring", updatedList);
 
@@ -1249,13 +1206,8 @@ const PaymentsSectionWidget = ({ settings, transactions, updateSetting, loadStat
                     if (nwItem) {
                         const updatedList = (settings.networthItems || []).map(it => {
                             if (!it || it.id !== linkedRecId) return it;
-                            const d = new Date(it.nextDueDate || new Date());
-                            const monthsToSub = (it.frequencyPerYear >= 12) ? 1 : (it.frequencyPerYear === 4) ? 3 : (it.frequencyPerYear === 2) ? 6 : 12;
-                            d.setMonth(d.getMonth() - monthsToSub);
-                            const y = d.getFullYear();
-                            const m = String(d.getMonth() + 1).padStart(2, '0');
-                            const day = String(d.getDate()).padStart(2, '0');
-                            return { ...it, nextDueDate: `${y}-${m}-${day}` };
+                            const nextDueDate = shiftDateByCadence(it.nextDueDate, "monthly", -netWorthMonthsPerCycle(it.frequencyPerYear));
+                            return { ...it, nextDueDate };
                         });
                         await updateSetting("networthItems", updatedList);
                     }

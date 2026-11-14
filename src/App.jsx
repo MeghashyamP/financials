@@ -4,7 +4,8 @@ import {
     detectRecurringTransactions, processImportedTransaction, useEscapeKey,
     formatDate, getContrastTextColor, formatCategorySubIconFirst, filterTransactionsByPeriod,
     ModernDateFilterPicker, NET_WORTH_GROUPS, PeriodSelectOptions, generateFingerprint,
-    getOccurrencesInPeriod, getEffectiveNetWorthItemValue, getISOStringInTimezone
+    getOccurrencesInPeriod, getEffectiveNetWorthItemValue, getISOStringInTimezone,
+    shiftDateByCadence, getAnchorDayForRecurring, netWorthMonthsPerCycle
 } from './utils.jsx';
 import {
     fetchStateFromDB, saveSettingInDB, saveTransactionsInDB, saveTagInDB,
@@ -22,9 +23,12 @@ import { RecurringPage, DocumentsPage, RulesPage, SettingsPage } from './pages/M
 import { AddEntryModal } from './components/modals/TransactionModals.jsx';
 import { ImportFileModal, CsvMappingDialog, PdfColumnMappingDialog, PdfImportConfirmDialog } from './components/modals/ImportModals.jsx';
 import { AuthModal } from './components/modals/AuthModal.jsx';
-import { extractTextFromPDF, parseTransactionsFromPDFText } from './services/importers.js';
+import { extractTextFromPDF, parseTransactionsFromPDFText, parseCSVText } from './services/importers.js';
 import { getGlobalFileHandle, writeStateToLocalFile, restoreGlobalFileHandle } from './services/localFileSync.js';
-import { supabase, getCurrentUser, signOutUser, saveUserDataToCloud, fetchUserDataFromCloud, syncCloudToLocal } from './services/supabaseService.js';
+import {
+    supabase, getCurrentUser, signOutUser, saveUserDataToCloud,
+    getSessionEncryptionKey, hashSyncState, isCloudSyncPaused
+} from './services/supabaseService.js';
 
 
 class ModalErrorBoundary extends React.Component {
@@ -389,7 +393,7 @@ export const App = () => {
         );
     };
 
-    // Fetch unified state on mount and when updates occur
+    // Fetch unified state on mount and when updates occur. Returns the loaded state (or null).
     const loadState = async () => {
         try {
             const state = await fetchStateFromDB();
@@ -398,15 +402,28 @@ export const App = () => {
             setRules(state.rules);
             setSettings(state.settings);
             setDocuments(state.documents);
+            return state;
         } catch (e) {
             showToast("Error loading local database", "error");
+            return null;
         } finally {
             setLoading(false);
         }
     };
 
+    // Fingerprint of the state last known to match the cloud copy. Pushes only happen
+    // when the current state differs from it.
+    const lastSyncedHashRef = React.useRef(null);
+
+    // Treat the given state as already in sync (after load, restore or upload).
+    const markStateAsSynced = (state) => {
+        if (state) lastSyncedHashRef.current = hashSyncState(state);
+    };
+
     React.useEffect(() => {
-        loadState();
+        // The state as loaded is the baseline: opening the app must not push this
+        // device's copy over the cloud; only changes made here should be uploaded.
+        loadState().then(markStateAsSynced);
         requestStoragePersistence();
 
         // Restore local project file handle from IndexedDB if available
@@ -421,21 +438,13 @@ export const App = () => {
             setCurrentUser(user || null);
         }).catch(err => console.warn("Supabase user check:", err));
 
-        // Listen for auth state changes
-        const { data: authListener } = supabase.auth.onAuthStateChange(async (event, session) => {
-            const user = session?.user || null;
-            setCurrentUser(user);
-            if (event === 'SIGNED_IN' && user) {
-                try {
-                    const cloudData = await fetchUserDataFromCloud();
-                    if (cloudData && (cloudData.transactions?.length > 0 || Object.keys(cloudData.settings || {}).length > 0)) {
-                        await syncCloudToLocal(cloudData);
-                        await loadState();
-                    }
-                } catch (e) {
-                    console.error("Initial cloud pull on sign in:", e);
-                }
-            }
+        // Listen for auth state changes. Pulling cloud data on sign-in is handled by
+        // AuthModal, which asks before replacing anything. Pulling here as well ran a
+        // second wipe-and-restore in parallel, and Supabase also emits SIGNED_IN when a
+        // session is re-validated (e.g. on tab focus), which would silently replace
+        // local data.
+        const { data: authListener } = supabase.auth.onAuthStateChange((event, session) => {
+            setCurrentUser(session?.user || null);
         });
 
         return () => {
@@ -443,30 +452,29 @@ export const App = () => {
         };
     }, []);
 
-    // Automatic Cloud Sync when logged in (debounced with change detection)
-    const isCloudSyncInitial = React.useRef(true);
-    const lastSyncedHashRef = React.useRef("");
-
+    // Automatic Cloud Sync when logged in (debounced, content-based change detection)
     React.useEffect(() => {
-        if (isCloudSyncInitial.current) {
-            isCloudSyncInitial.current = false;
-            // Record initial hash
-            lastSyncedHashRef.current = `${transactions.length}_${tags.length}_${rules.length}_${documents.length}_${JSON.stringify(settings)}`;
-            return;
-        }
-        if (!currentUser) return;
+        if (loading || !currentUser || lastSyncedHashRef.current === null) return;
 
-        // Dirty-check: only sync if state actually changed
-        const currentHash = `${transactions.length}_${tags.length}_${rules.length}_${documents.length}_${JSON.stringify(settings)}`;
-        if (currentHash === lastSyncedHashRef.current) return;
-
-        setCloudSyncStatus("syncing");
         const timer = setTimeout(async () => {
+            if (isCloudSyncPaused()) return;
+            const snapshot = { transactions, tags, rules, settings, documents };
+            const currentHash = hashSyncState(snapshot);
+            if (currentHash === lastSyncedHashRef.current) return;
+
+            // The encryption key lives in sessionStorage, so a new tab or browser restart
+            // keeps the Supabase session but loses the key. Pause instead of failing.
+            if (!getSessionEncryptionKey()) {
+                setCloudSyncStatus("locked");
+                return;
+            }
+
+            setCloudSyncStatus("syncing");
             try {
-                await saveUserDataToCloud({ transactions, tags, rules, settings, documents });
+                await saveUserDataToCloud(snapshot);
                 lastSyncedHashRef.current = currentHash;
                 setCloudSyncStatus("synced");
-                setTimeout(() => setCloudSyncStatus("idle"), 2500);
+                setTimeout(() => setCloudSyncStatus(s => (s === "synced" ? "idle" : s)), 2500);
             } catch (err) {
                 console.error("Auto cloud sync error:", err);
                 setCloudSyncStatus("error");
@@ -474,7 +482,12 @@ export const App = () => {
         }, 1500);
 
         return () => clearTimeout(timer);
-    }, [transactions, tags, rules, settings, documents, currentUser]);
+    }, [transactions, tags, rules, settings, documents, currentUser, loading]);
+
+    // Surface the paused state as soon as a session without a key is detected.
+    React.useEffect(() => {
+        if (currentUser && !getSessionEncryptionKey()) setCloudSyncStatus("locked");
+    }, [currentUser]);
 
     // Real-time automatic sync to linked local project file when storage mode is project_file
     const isAutoSyncInitial = React.useRef(true);
@@ -491,7 +504,8 @@ export const App = () => {
                 const success = await writeStateToLocalFile(handle, { transactions, tags, rules, settings, documents });
                 if (success) {
                     const nowIso = getISOStringInTimezone(new Date(), settings?.timezone);
-                    saveSettingInDB({ key: "lastFileSyncedAt", value: nowIso }).catch(() => {});
+                    // Written to the DB only (not React state) so it doesn't re-trigger this effect.
+                    saveSettingInDB("lastFileSyncedAt", nowIso).catch(() => {});
                 } else {
                     console.warn("Auto-sync to local file failed (permission or invalid handle). User re-authorization may be required.");
                 }
@@ -763,29 +777,17 @@ export const App = () => {
     };
 
 
-    // Advance a cadence-based date forward by one cycle from a given anchor date
-    const advanceDateByCadence = (dateStr, cadence) => {
-        const d = new Date(dateStr || new Date());
-        if (isNaN(d.getTime())) return dateStr;
-        switch (cadence) {
-            case "weekly": d.setDate(d.getDate() + 7); break;
-            case "biweekly": d.setDate(d.getDate() + 14); break;
-            case "quarterly": d.setMonth(d.getMonth() + 3); break;
-            case "annual": d.setFullYear(d.getFullYear() + 1); break;
-            case "monthly":
-            default: d.setMonth(d.getMonth() + 1); break;
-        }
-        return d.toISOString().split('T')[0];
-    };
+    // Advance a recurring item's date by one cycle, keeping its due day
+    // (Jan 31 monthly -> Feb 28 -> Mar 31, never Mar 3).
+    const advanceRecurringDate = (dateStr, r) =>
+        shiftDateByCadence(dateStr, r.cadence, 1, {
+            anchorDay: getAnchorDayForRecurring(r),
+            intervalDays: r.customIntervalDays
+        });
 
     // Advance a Net Worth ledger item's Next Due Date based on its frequency-per-year
-    const advanceNetWorthDate = (dateStr, frequencyPerYear) => {
-        const d = new Date(dateStr || new Date());
-        if (isNaN(d.getTime())) return dateStr;
-        const monthsToAdd = frequencyPerYear >= 12 ? 1 : frequencyPerYear === 4 ? 3 : frequencyPerYear === 2 ? 6 : 12;
-        d.setMonth(d.getMonth() + monthsToAdd);
-        return d.toISOString().split('T')[0];
-    };
+    const advanceNetWorthDate = (dateStr, frequencyPerYear) =>
+        shiftDateByCadence(dateStr, "monthly", netWorthMonthsPerCycle(frequencyPerYear));
 
     // Apply "Link to Ledger" selections made in the PDF review table: advances the linked
     // Recurring / Net Worth item's next due date so the ledger stays live.
@@ -801,7 +803,7 @@ export const App = () => {
         linked.forEach(t => {
             const [kind, id] = t.linkTo.split(":");
             if (kind === "recurring") {
-                recurringList = recurringList.map(r => r.id === id ? { ...r, nextDate: advanceDateByCadence(t.date, r.cadence) } : r);
+                recurringList = recurringList.map(r => r.id === id ? { ...r, nextDate: advanceRecurringDate(t.date, r) } : r);
                 recurringChanged = true;
 
                 // Also check if any Net Worth item is linked to this recurring template
@@ -1254,7 +1256,18 @@ export const App = () => {
                                 <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
                                     <div style={{ fontSize: '0.73rem', fontWeight: 700, color: 'var(--primary)', display: 'flex', alignItems: 'center', gap: '4px' }}>
                                         <span>☁️</span>
-                                        <span>{cloudSyncStatus === "syncing" ? "Syncing..." : cloudSyncStatus === "synced" ? "Synced ✓" : "Cloud Account"}</span>
+                                        {cloudSyncStatus === "locked" ? (
+                                            <span
+                                                role="button"
+                                                onClick={() => setShowAuthModal(true)}
+                                                title="Your encryption key isn't available in this tab. Sign in again to resume cloud sync."
+                                                style={{ cursor: 'pointer', color: 'var(--warning)', textDecoration: 'underline' }}
+                                            >
+                                                Sync paused: sign in
+                                            </span>
+                                        ) : (
+                                            <span>{cloudSyncStatus === "syncing" ? "Syncing..." : cloudSyncStatus === "synced" ? "Synced ✓" : cloudSyncStatus === "error" ? "Sync failed" : "Cloud Account"}</span>
+                                        )}
                                     </div>
                                     <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis' }} title={currentUser.email}>
                                         {currentUser.email}
@@ -2284,7 +2297,9 @@ export const App = () => {
                 onClose={() => setShowAuthModal(false)}
                 onAuthSuccess={async (user) => {
                     setCurrentUser(user);
-                    await loadState();
+                    // AuthModal has just restored or uploaded, so local and cloud now match.
+                    markStateAsSynced(await loadState());
+                    setCloudSyncStatus("idle");
                 }}
                 showToast={showToast}
                 localState={{ transactions, tags, rules, settings, documents }}
