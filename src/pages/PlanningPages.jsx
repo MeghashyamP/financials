@@ -1,6 +1,6 @@
 import React from 'react';
 import {
-    Icon, formatCurrencyVal, filterTransactionsByPeriod, getContrastTextColor,
+    Icon, formatCurrencyVal, formatDate, filterTransactionsByPeriod, getContrastTextColor,
     formatCategorySubIconFirst
 } from '../utils.jsx';
 import { CreateBudgetModal, CreateGoalModal } from '../components/modals/PlanningModals.jsx';
@@ -8,6 +8,7 @@ import { CreateBudgetModal, CreateGoalModal } from '../components/modals/Plannin
 export const BudgetsPage = ({ transactions, settings, updateSetting, showToast, subpageActionSignal }) => {
     const budgetsList = settings.budgets || [];
     const [showCreateModal, setShowCreateModal] = React.useState(false);
+    const [budgetToDelete, setBudgetToDelete] = React.useState(null);
 
     const prevSubpageActionSignal = React.useRef(subpageActionSignal);
     React.useEffect(() => {
@@ -119,7 +120,8 @@ export const BudgetsPage = ({ transactions, settings, updateSetting, showToast, 
                                         <button
                                             className="btn btn-secondary btn-sm"
                                             style={{ border: 'none', color: 'var(--danger)', padding: 0 }}
-                                            onClick={() => handleDeleteBudget(b.id)}
+                                            onClick={() => setBudgetToDelete(b)}
+                                            title="Delete Budget"
                                         >
                                             <Icon name="trash" />
                                         </button>
@@ -162,6 +164,50 @@ export const BudgetsPage = ({ transactions, settings, updateSetting, showToast, 
                     settings={settings}
                 />
             )}
+
+            {/* Confirm Delete Budget Modal */}
+            {budgetToDelete && (
+                <div className="modal-overlay confirm-modal-overlay" onClick={() => setBudgetToDelete(null)}>
+                    <div className="modal-container" style={{ maxWidth: '400px' }} onClick={(e) => e.stopPropagation()}>
+                        <div className="modal-header">
+                            <h3 className="modal-title" style={{ color: 'var(--danger)' }}>Delete Budget</h3>
+                            <button className="modal-close-btn" onClick={() => setBudgetToDelete(null)}>
+                                <Icon name="close" />
+                            </button>
+                        </div>
+                        <div className="modal-body" style={{ padding: '16px 20px' }}>
+                            <p style={{ margin: '0 0 12px 0', fontSize: '0.88rem', color: 'var(--text-main)' }}>
+                                Are you sure you want to delete this budget envelope?
+                            </p>
+                            <div style={{ padding: '12px', background: 'var(--bg-color)', borderRadius: '8px', border: '1px solid var(--border-color)', fontSize: '0.85rem' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
+                                    <span style={{ color: 'var(--text-muted)' }}>Category:</span>
+                                    <span style={{ fontWeight: 600 }}>{budgetToDelete.category}</span>
+                                </div>
+                                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                                    <span style={{ color: 'var(--text-muted)' }}>Limit:</span>
+                                    <span style={{ fontWeight: 600 }}>{formatCurrency(budgetToDelete.limit)}</span>
+                                </div>
+                            </div>
+                        </div>
+                        <div className="modal-footer" style={{ padding: '12px 20px', display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+                            <button type="button" className="btn btn-secondary" onClick={() => setBudgetToDelete(null)}>
+                                Cancel
+                            </button>
+                            <button
+                                type="button"
+                                className="btn btn-danger"
+                                onClick={async () => {
+                                    await handleDeleteBudget(budgetToDelete.id);
+                                    setBudgetToDelete(null);
+                                }}
+                            >
+                                Delete Budget
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 };
@@ -173,6 +219,7 @@ export const BudgetsPage = ({ transactions, settings, updateSetting, showToast, 
 export const GoalsPage = ({ settings, updateSetting, showToast, subpageActionSignal }) => {
     const goalsList = settings.goals || [];
     const [showCreateModal, setShowCreateModal] = React.useState(false);
+    const [goalToDelete, setGoalToDelete] = React.useState(null);
 
     const prevSubpageActionSignal = React.useRef(subpageActionSignal);
     React.useEffect(() => {
@@ -242,7 +289,8 @@ export const GoalsPage = ({ settings, updateSetting, showToast, subpageActionSig
                                     <button
                                         className="btn btn-secondary btn-sm"
                                         style={{ border: 'none', color: 'var(--danger)', padding: 0 }}
-                                        onClick={() => handleDeleteGoal(g.id)}
+                                        onClick={() => setGoalToDelete(g)}
+                                        title="Delete Goal"
                                     >
                                         <Icon name="trash" />
                                     </button>
@@ -294,6 +342,50 @@ export const GoalsPage = ({ settings, updateSetting, showToast, subpageActionSig
                     onSave={handleCreateGoal}
                     settings={settings}
                 />
+            )}
+
+            {/* Confirm Delete Goal Modal */}
+            {goalToDelete && (
+                <div className="modal-overlay confirm-modal-overlay" onClick={() => setGoalToDelete(null)}>
+                    <div className="modal-container" style={{ maxWidth: '400px' }} onClick={(e) => e.stopPropagation()}>
+                        <div className="modal-header">
+                            <h3 className="modal-title" style={{ color: 'var(--danger)' }}>Delete Goal</h3>
+                            <button className="modal-close-btn" onClick={() => setGoalToDelete(null)}>
+                                <Icon name="close" />
+                            </button>
+                        </div>
+                        <div className="modal-body" style={{ padding: '16px 20px' }}>
+                            <p style={{ margin: '0 0 12px 0', fontSize: '0.88rem', color: 'var(--text-main)' }}>
+                                Are you sure you want to delete this savings goal?
+                            </p>
+                            <div style={{ padding: '12px', background: 'var(--bg-color)', borderRadius: '8px', border: '1px solid var(--border-color)', fontSize: '0.85rem' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
+                                    <span style={{ color: 'var(--text-muted)' }}>Goal Name:</span>
+                                    <span style={{ fontWeight: 600 }}>{goalToDelete.name}</span>
+                                </div>
+                                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                                    <span style={{ color: 'var(--text-muted)' }}>Target:</span>
+                                    <span style={{ fontWeight: 600 }}>{formatCurrency(goalToDelete.target)}</span>
+                                </div>
+                            </div>
+                        </div>
+                        <div className="modal-footer" style={{ padding: '12px 20px', display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+                            <button type="button" className="btn btn-secondary" onClick={() => setGoalToDelete(null)}>
+                                Cancel
+                            </button>
+                            <button
+                                type="button"
+                                className="btn btn-danger"
+                                onClick={async () => {
+                                    await handleDeleteGoal(goalToDelete.id);
+                                    setGoalToDelete(null);
+                                }}
+                            >
+                                Delete Goal
+                            </button>
+                        </div>
+                    </div>
+                </div>
             )}
         </div>
     );

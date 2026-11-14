@@ -1,6 +1,8 @@
 import { createClient } from '@supabase/supabase-js';
 import { fetchStateFromDB, initDB, saveSettingInDB, saveTagInDB, saveRuleInDB, saveDocumentInDB, wipeDatabase } from '../store.js';
 import { restoreBackup } from './backup.js';
+import { encryptPayload, decryptPayload } from './crypto.js';
+import { DEFAULT_CATEGORIES } from '../utils.jsx';
 
 const SUPABASE_URL = "https://gsdddichdmfpmdbufmad.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_23pX17k4nzfpmiiubWbSUA_0OCA_UCW";
@@ -13,20 +15,90 @@ export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
     }
 });
 
+// Helper: Prune empty/null fields from a transaction object to save bytes
+const compactTransaction = (tx) => {
+    if (!tx || typeof tx !== 'object') return tx;
+    const clean = {};
+    for (const [key, val] of Object.entries(tx)) {
+        if (val === null || val === undefined || val === "") continue;
+        if (Array.isArray(val) && val.length === 0) continue;
+        clean[key] = val;
+    }
+    return clean;
+};
+
+// Helper: Prune redundant default categories from settings before syncing
+const optimizeSettingsForSync = (settingsObj = {}) => {
+    const cleanSettings = { ...settingsObj };
+    if (Array.isArray(cleanSettings.categories)) {
+        // Compare with DEFAULT_CATEGORIES; if it contains only defaults, omit it
+        const isDefaultList = cleanSettings.categories.length === DEFAULT_CATEGORIES.length &&
+            cleanSettings.categories.every((c, i) => c === DEFAULT_CATEGORIES[i]);
+
+        if (isDefaultList) {
+            delete cleanSettings.categories;
+        } else {
+            // Keep only custom added categories
+            const customOnly = cleanSettings.categories.filter(c => !DEFAULT_CATEGORIES.includes(c));
+            if (customOnly.length === 0) {
+                delete cleanSettings.categories;
+            } else {
+                cleanSettings.customCategories = customOnly;
+                delete cleanSettings.categories;
+            }
+        }
+    }
+    return cleanSettings;
+};
+
+// Helper: Rehydrate pruned settings on restore
+const rehydrateSettingsFromSync = (settingsObj = {}) => {
+    const hydrated = { ...settingsObj };
+    if (hydrated.customCategories && Array.isArray(hydrated.customCategories)) {
+        hydrated.categories = [...DEFAULT_CATEGORIES, ...hydrated.customCategories];
+        delete hydrated.customCategories;
+    } else if (!hydrated.categories) {
+        hydrated.categories = DEFAULT_CATEGORIES;
+    }
+    return hydrated;
+};
+
+// In-memory key caching for active session encryption
+let sessionEncryptionKey = null;
+
+export const setSessionEncryptionKey = (passphrase) => {
+    sessionEncryptionKey = passphrase;
+    if (passphrase) {
+        sessionStorage.setItem('fin_enc_key', passphrase);
+    } else {
+        sessionStorage.removeItem('fin_enc_key');
+    }
+};
+
+export const getSessionEncryptionKey = () => {
+    if (!sessionEncryptionKey) {
+        sessionEncryptionKey = sessionStorage.getItem('fin_enc_key') || null;
+    }
+    return sessionEncryptionKey;
+};
+
 // Authentication helpers
 export const signUpUser = async (email, password) => {
     const { data, error } = await supabase.auth.signUp({ email, password });
     if (error) throw error;
+    setSessionEncryptionKey(password);
     return data;
 };
 
 export const signInUser = async (email, password) => {
     const { data, error } = await supabase.auth.signInWithPassword({ email, password });
     if (error) throw error;
+    setSessionEncryptionKey(password);
     return data;
 };
 
 export const signOutUser = async () => {
+    setSessionEncryptionKey(null);
     const { error } = await supabase.auth.signOut();
     if (error) throw error;
 };
@@ -36,32 +108,46 @@ export const getCurrentUser = async () => {
     return user;
 };
 
-// Sync state up to Supabase
-export const saveUserDataToCloud = async (state) => {
+// Sync state up to Supabase (Encrypted with client AES-GCM 256-bit)
+export const saveUserDataToCloud = async (state, customKey = null) => {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return null;
 
-    // Filter out bulky binary or unnecessary fields from documents if any
+    const encKey = customKey || getSessionEncryptionKey();
+    if (!encKey) {
+        throw new Error("Encryption key not found in session. Please sign in again.");
+    }
+
+    // 1. Filter out bulky binary or unnecessary fields from documents (never store fileData blobs in cloud)
     const cleanDocuments = (state.documents || []).map(d => {
         const { fileData, ...clean } = d;
         return clean;
     });
 
-    const payload = {
-        version: "1.0",
+    // 2. Compact transactions (omit empty strings, nulls, and empty arrays)
+    const compactTxs = (state.transactions || []).map(compactTransaction);
+
+    // 3. Prune redundant default categories from settings
+    const cleanSettings = optimizeSettingsForSync(state.settings || {});
+
+    const plainPayload = {
+        version: "2.0",
         syncedAt: new Date().toISOString(),
-        transactions: state.transactions || [],
+        transactions: compactTxs,
         tags: state.tags || [],
         rules: state.rules || [],
-        settings: state.settings || {},
+        settings: cleanSettings,
         documents: cleanDocuments
     };
+
+    // Encrypt the payload (runs CompressionStream gzip + AES-GCM 256)
+    const encryptedPayload = await encryptPayload(plainPayload, encKey);
 
     const { error } = await supabase
         .from('user_financials')
         .upsert({
             user_id: user.id,
-            data: payload,
+            data: encryptedPayload,
             updated_at: new Date().toISOString()
         }, { onConflict: 'user_id' });
 
@@ -69,13 +155,15 @@ export const saveUserDataToCloud = async (state) => {
         console.error("Failed to save data to Supabase:", error);
         throw error;
     }
-    return payload;
+    return plainPayload;
 };
 
-// Fetch state down from Supabase
-export const fetchUserDataFromCloud = async () => {
+// Fetch state down from Supabase and decrypt on the client
+export const fetchUserDataFromCloud = async (customKey = null) => {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return null;
+
+    const encKey = customKey || getSessionEncryptionKey();
 
     const { data, error } = await supabase
         .from('user_financials')
@@ -88,7 +176,23 @@ export const fetchUserDataFromCloud = async () => {
         throw error;
     }
 
-    return data ? data.data : null;
+    if (!data || !data.data) return null;
+
+    // Check if payload is encrypted
+    let payload = data.data;
+    if (data.data.isEncrypted) {
+        if (!encKey) {
+            return { needsPassword: true, raw: data.data };
+        }
+        payload = await decryptPayload(data.data, encKey);
+    }
+
+    // Rehydrate settings (re-attach default categories if pruned)
+    if (payload && payload.settings) {
+        payload.settings = rehydrateSettingsFromSync(payload.settings);
+    }
+
+    return payload;
 };
 
 // Restore cloud state into local IndexedDB

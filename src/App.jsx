@@ -436,26 +436,35 @@ export const App = () => {
         };
     }, []);
 
-    // Automatic Cloud Sync when logged in
+    // Automatic Cloud Sync when logged in (debounced with change detection)
     const isCloudSyncInitial = React.useRef(true);
+    const lastSyncedHashRef = React.useRef("");
+
     React.useEffect(() => {
         if (isCloudSyncInitial.current) {
             isCloudSyncInitial.current = false;
+            // Record initial hash
+            lastSyncedHashRef.current = `${transactions.length}_${tags.length}_${rules.length}_${documents.length}_${JSON.stringify(settings)}`;
             return;
         }
         if (!currentUser) return;
+
+        // Dirty-check: only sync if state actually changed
+        const currentHash = `${transactions.length}_${tags.length}_${rules.length}_${documents.length}_${JSON.stringify(settings)}`;
+        if (currentHash === lastSyncedHashRef.current) return;
 
         setCloudSyncStatus("syncing");
         const timer = setTimeout(async () => {
             try {
                 await saveUserDataToCloud({ transactions, tags, rules, settings, documents });
+                lastSyncedHashRef.current = currentHash;
                 setCloudSyncStatus("synced");
                 setTimeout(() => setCloudSyncStatus("idle"), 2500);
             } catch (err) {
                 console.error("Auto cloud sync error:", err);
                 setCloudSyncStatus("error");
             }
-        }, 1200);
+        }, 1500);
 
         return () => clearTimeout(timer);
     }, [transactions, tags, rules, settings, documents, currentUser]);
@@ -2197,13 +2206,25 @@ export const App = () => {
                             onDeleteTag={handleDeleteTag}
                             onUpdateTag={handleUpdateTag}
                             onUpdateTransactions={setTransactions}
+                            loadState={loadState}
+                            currentUser={currentUser}
+                            cloudSyncStatus={cloudSyncStatus}
+                            onOpenCloudAuth={() => setShowAuthModal(true)}
+                            onSignOutCloud={async () => {
+                                try {
+                                    await signOutUser();
+                                    setCurrentUser(null);
+                                    showToast("Signed out successfully", "info");
+                                } catch (err) {
+                                    showToast("Sign out failed", "error");
+                                }
+                            }}
                             onWipe={async () => {
                                 await wipeDatabase();
                                 await loadState();
                                 showToast("All financial data successfully erased", "warning");
                                 setActivePage("dashboard");
                             }}
-                            loadState={loadState}
                             showToast={showToast}
                         />
                     )}

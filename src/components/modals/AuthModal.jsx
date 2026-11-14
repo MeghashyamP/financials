@@ -60,17 +60,17 @@ export const AuthModal = ({ isOpen, onClose, onAuthSuccess, showToast, localStat
     };
 
     return (
-        <div className="modal-backdrop" onClick={onClose} style={{ zIndex: 9999 }}>
+        <div className="modal-overlay confirm-modal-overlay" onClick={onClose} style={{ zIndex: 9999 }}>
             <div
-                className="modal-card"
+                className="modal-container"
                 onClick={(e) => e.stopPropagation()}
                 style={{
-                    maxWidth: '420px',
-                    width: '90%',
+                    maxWidth: '440px',
+                    width: '92%',
                     padding: '28px',
                     borderRadius: '16px',
                     background: 'var(--card-bg, #ffffff)',
-                    boxShadow: '0 20px 40px rgba(0,0,0,0.15)',
+                    boxShadow: '0 20px 45px rgba(0,0,0,0.22)',
                     border: '1px solid var(--border-color, #E2E8F0)'
                 }}
             >
@@ -245,8 +245,8 @@ export const AuthModal = ({ isOpen, onClose, onAuthSuccess, showToast, localStat
                     fontSize: '0.75rem',
                     color: 'var(--text-muted)'
                 }}>
-                    <span>🔒</span>
-                    <span>Protected by Row Level Security. Only you have access to your private database row.</span>
+                    <span>🔐</span>
+                    <span><strong>End-to-End Encrypted:</strong> Data is encrypted using AES-256 before leaving your browser. Nobody (not even Supabase or database admins) can read your finances.</span>
                 </div>
             </div>
         </div>

@@ -1927,7 +1927,11 @@ export const SettingsPage = ({
     onDeleteTag,
     onUpdateTag,
     onUpdateTransactions,
-    loadState
+    loadState,
+    currentUser,
+    cloudSyncStatus,
+    onOpenCloudAuth,
+    onSignOutCloud
 }) => {
 
     // Net worth configurations
@@ -3148,6 +3152,90 @@ export const SettingsPage = ({
 
                 {/* Storage Options Selection Grid */}
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '18px', marginBottom: '24px' }}>
+
+                    {/* Option 0: Cloud Account & End-to-End Encrypted Sync */}
+                    <div className={`storage-option-card ${currentUser ? 'active' : ''}`} style={{ borderColor: currentUser ? 'var(--primary)' : 'var(--border-color)' }}>
+                        <div>
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                    <div className="storage-icon-box" style={{ background: '#ECFDF5', border: '1px solid #A7F3D0', color: '#059669' }}>☁️</div>
+                                    <h4 style={{ margin: 0, fontSize: '0.96rem', fontWeight: 700 }}>
+                                        Cloud Sync (End-to-End Encrypted)
+                                    </h4>
+                                </div>
+                                {currentUser ? (
+                                    <span className="status-pill status-pill-success">
+                                        <span className="pulse-dot pulse-dot-success"></span>
+                                        {cloudSyncStatus === "syncing" ? "Syncing..." : cloudSyncStatus === "synced" ? "Synced ✓" : "Connected"}
+                                    </span>
+                                ) : (
+                                    <span className="status-pill" style={{ background: '#F1F5F9', color: '#475569', border: '1px solid #E2E8F0' }}>
+                                        Optional
+                                    </span>
+                                )}
+                            </div>
+
+                            <p style={{ margin: '0 0 14px 0', fontSize: '0.82rem', color: 'var(--text-muted)', lineHeight: '1.5' }}>
+                                Automatic multi-device sync encrypted via <strong>AES-256</strong> before leaving your browser. Protected with your password — zero readability in the cloud database.
+                            </p>
+
+                            {/* Cloud Status Box */}
+                            <div style={{
+                                background: currentUser ? '#ECFDF5' : 'var(--bg-color)',
+                                border: `1px solid ${currentUser ? '#A7F3D0' : 'var(--border-color)'}`,
+                                borderRadius: '10px',
+                                padding: '10px 12px',
+                                marginBottom: '12px'
+                            }}>
+                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '4px' }}>
+                                    <span style={{ fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-main)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                        {currentUser ? "Active Cloud Account:" : "Account Status:"}
+                                    </span>
+                                    <span style={{ fontSize: '0.75rem', fontWeight: 600, color: currentUser ? '#047857' : 'var(--text-muted)' }}>
+                                        {currentUser ? "🔒 E2E Encrypted" : "Offline / Unlinked"}
+                                    </span>
+                                </div>
+                                <div style={{ fontSize: '0.74rem', color: currentUser ? '#047857' : 'var(--text-muted)', lineHeight: '1.4', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                    {currentUser
+                                        ? `Signed in as ${currentUser.email}. All updates auto-sync in the background.`
+                                        : "Sign in or create an account to access your finances from any computer or mobile browser."}
+                                </div>
+                            </div>
+                        </div>
+
+                        <div style={{ display: 'flex', gap: '10px' }}>
+                            {currentUser ? (
+                                <button
+                                    type="button"
+                                    className="btn btn-secondary"
+                                    onClick={onSignOutCloud}
+                                    style={{ flex: 1, fontSize: '0.82rem', fontWeight: 600, padding: '8px 12px', borderRadius: '8px' }}
+                                >
+                                    🚪 Sign Out ({currentUser.email.split('@')[0]})
+                                </button>
+                            ) : (
+                                <button
+                                    type="button"
+                                    className="btn btn-primary"
+                                    onClick={onOpenCloudAuth}
+                                    style={{
+                                        flex: 1,
+                                        fontSize: '0.82rem',
+                                        fontWeight: 600,
+                                        padding: '8px 14px',
+                                        borderRadius: '8px',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        justifyContent: 'center',
+                                        gap: '6px'
+                                    }}
+                                >
+                                    <span>☁️</span>
+                                    <span>Sign In / Create Account</span>
+                                </button>
+                            )}
+                        </div>
+                    </div>
 
                     {/* Option 1: Web Browser Database (IndexedDB) */}
                     <div className={`storage-option-card ${settings.storageMode !== 'project_file' ? 'active' : ''}`}>
