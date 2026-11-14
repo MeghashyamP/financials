@@ -21,8 +21,10 @@ import { RecurringPage, DocumentsPage, RulesPage, SettingsPage } from './pages/M
 
 import { AddEntryModal } from './components/modals/TransactionModals.jsx';
 import { ImportFileModal, CsvMappingDialog, PdfColumnMappingDialog, PdfImportConfirmDialog } from './components/modals/ImportModals.jsx';
+import { AuthModal } from './components/modals/AuthModal.jsx';
 import { extractTextFromPDF, parseTransactionsFromPDFText } from './services/importers.js';
 import { getGlobalFileHandle, writeStateToLocalFile } from './services/localFileSync.js';
+import { supabase, getCurrentUser, signOutUser, saveUserDataToCloud, fetchUserDataFromCloud, syncCloudToLocal } from './services/supabaseService.js';
 
 
 class ModalErrorBoundary extends React.Component {
@@ -313,6 +315,9 @@ export const App = () => {
     const [showAddEntryModal, setShowAddEntryModal] = React.useState(false);
     const [showImportModal, setShowImportModal] = React.useState(false);
     const [showSyncModal, setShowSyncModal] = React.useState(false);
+    const [showAuthModal, setShowAuthModal] = React.useState(false);
+    const [currentUser, setCurrentUser] = React.useState(null);
+    const [cloudSyncStatus, setCloudSyncStatus] = React.useState("idle"); // "idle" | "syncing" | "synced" | "error"
     const [subpageActionSignal, setSubpageActionSignal] = React.useState(0);
 
     // Transactions search and filter states in topbar
@@ -403,7 +408,57 @@ export const App = () => {
     React.useEffect(() => {
         loadState();
         requestStoragePersistence();
+
+        // Check active Supabase session
+        getCurrentUser().then(user => {
+            setCurrentUser(user || null);
+        }).catch(err => console.warn("Supabase user check:", err));
+
+        // Listen for auth state changes
+        const { data: authListener } = supabase.auth.onAuthStateChange(async (event, session) => {
+            const user = session?.user || null;
+            setCurrentUser(user);
+            if (event === 'SIGNED_IN' && user) {
+                try {
+                    const cloudData = await fetchUserDataFromCloud();
+                    if (cloudData && (cloudData.transactions?.length > 0 || Object.keys(cloudData.settings || {}).length > 0)) {
+                        await syncCloudToLocal(cloudData);
+                        await loadState();
+                    }
+                } catch (e) {
+                    console.error("Initial cloud pull on sign in:", e);
+                }
+            }
+        });
+
+        return () => {
+            authListener?.subscription?.unsubscribe();
+        };
     }, []);
+
+    // Automatic Cloud Sync when logged in
+    const isCloudSyncInitial = React.useRef(true);
+    React.useEffect(() => {
+        if (isCloudSyncInitial.current) {
+            isCloudSyncInitial.current = false;
+            return;
+        }
+        if (!currentUser) return;
+
+        setCloudSyncStatus("syncing");
+        const timer = setTimeout(async () => {
+            try {
+                await saveUserDataToCloud({ transactions, tags, rules, settings, documents });
+                setCloudSyncStatus("synced");
+                setTimeout(() => setCloudSyncStatus("idle"), 2500);
+            } catch (err) {
+                console.error("Auto cloud sync error:", err);
+                setCloudSyncStatus("error");
+            }
+        }, 1200);
+
+        return () => clearTimeout(timer);
+    }, [transactions, tags, rules, settings, documents, currentUser]);
 
     // Real-time automatic sync to linked local project file when storage mode is project_file
     const isAutoSyncInitial = React.useRef(true);
@@ -1151,6 +1206,87 @@ export const App = () => {
                         </li>
                     ))}
                 </ul>
+                {/* Cloud Account & Sidebar Bottom Controls */}
+                <div style={{
+                    padding: isSidebarCollapsed ? '12px 6px' : '12px 14px',
+                    borderTop: '1px solid var(--border-color)',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '8px',
+                    alignItems: isSidebarCollapsed ? 'center' : 'stretch'
+                }}>
+                    {currentUser ? (
+                        <div style={{
+                            background: 'var(--bg-color, #F8FAFC)',
+                            border: '1px solid var(--border-color)',
+                            borderRadius: '8px',
+                            padding: isSidebarCollapsed ? '6px' : '8px 10px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: isSidebarCollapsed ? 'center' : 'space-between',
+                            gap: '6px'
+                        }}>
+                            {!isSidebarCollapsed && (
+                                <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
+                                    <div style={{ fontSize: '0.73rem', fontWeight: 700, color: 'var(--primary)', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                        <span>☁️</span>
+                                        <span>{cloudSyncStatus === "syncing" ? "Syncing..." : cloudSyncStatus === "synced" ? "Synced ✓" : "Cloud Account"}</span>
+                                    </div>
+                                    <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis' }} title={currentUser.email}>
+                                        {currentUser.email}
+                                    </div>
+                                </div>
+                            )}
+                            <button
+                                type="button"
+                                onClick={async () => {
+                                    try {
+                                        await signOutUser();
+                                        setCurrentUser(null);
+                                        showToast("Signed out successfully", "info");
+                                    } catch (err) {
+                                        showToast("Sign out failed", "error");
+                                    }
+                                }}
+                                title="Sign Out"
+                                style={{
+                                    background: 'none',
+                                    border: 'none',
+                                    cursor: 'pointer',
+                                    color: 'var(--text-muted)',
+                                    fontSize: '0.8rem',
+                                    padding: '4px'
+                                }}
+                            >
+                                🚪
+                            </button>
+                        </div>
+                    ) : (
+                        <button
+                            type="button"
+                            className="btn btn-outline"
+                            onClick={() => setShowAuthModal(true)}
+                            title="Sign In or Create Account"
+                            style={{
+                                width: '100%',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                gap: '6px',
+                                padding: isSidebarCollapsed ? '8px 0' : '8px 10px',
+                                fontSize: '0.82rem',
+                                borderRadius: '8px',
+                                border: '1px solid var(--primary)',
+                                color: 'var(--primary)',
+                                background: 'transparent',
+                                cursor: 'pointer'
+                            }}
+                        >
+                            <span>☁️</span>
+                            {!isSidebarCollapsed && <span style={{ fontWeight: 600 }}>Cloud Sign In</span>}
+                        </button>
+                    )}
+                </div>
                 <button
                     className="sidebar-toggle-btn"
                     onClick={toggleSidebar}
@@ -1166,7 +1302,15 @@ export const App = () => {
                     <Icon name="transactions" currency={settings.currency} />
                     <span style={{ fontSize: '1.15rem' }}>Financials</span>
                 </div>
-                <div style={{ display: 'flex', gap: '8px' }}>
+                <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                    <button
+                        className="btn btn-secondary btn-sm"
+                        onClick={() => setShowAuthModal(true)}
+                        title={currentUser ? currentUser.email : "Cloud Account"}
+                        style={{ display: 'flex', alignItems: 'center', gap: '4px' }}
+                    >
+                        <span>☁️</span>
+                    </button>
                     {activePage === "documents" && (
                         <button className="btn btn-secondary btn-sm" onClick={handleSyncLocalFolder} title="Sync Folder">
                             <Icon name="sync" />
@@ -2097,6 +2241,18 @@ export const App = () => {
                     rules={rules}
                 />
             )}
+
+            {/* Cloud Auth / Account Modal */}
+            <AuthModal
+                isOpen={showAuthModal}
+                onClose={() => setShowAuthModal(false)}
+                onAuthSuccess={async (user) => {
+                    setCurrentUser(user);
+                    await loadState();
+                }}
+                showToast={showToast}
+                localState={{ transactions, tags, rules, settings, documents }}
+            />
 
             {/* CSV Column Mapping Dialog overlay */}
             {csvMappingData && (
