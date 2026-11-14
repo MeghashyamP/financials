@@ -369,8 +369,28 @@ const FrequencyPicker = ({ value, onChange }) => {
                     cadence: finalCadence,
                     weeklyDays: cadenceType === "weekly" ? (Array.isArray(weeklyDays) ? weeklyDays : ["Mon"]) : ["Mon"],
                     monthlyDays: effectiveMonthlyDay,
-                    customIntervalDays: cadenceType === "every" ? (Number(customIntervalDays) || 14) : 14
+                    customIntervalDays: cadenceType === "every" ? (Number(customIntervalDays) || 14) : 14,
+                    customDays: cadenceType === "custom_dates" ? customDaysStr : "",
+                    endDate: effectiveEndDate
                 }, new Date(effectiveStartDate + "T00:00:00")) || effectiveStartDate;
+
+                const shouldRecalculateNextDate = !e.nextDate ||
+                    e.startDate !== effectiveStartDate ||
+                    e.cadence !== finalCadence ||
+                    String(e.monthlyDays || '') !== String(effectiveMonthlyDay || '') ||
+                    e.nextDate < effectiveStartDate;
+
+                const effectiveNextDate = shouldRecalculateNextDate
+                    ? (calculateNextExpectedDate({
+                        startDate: effectiveStartDate,
+                        cadence: finalCadence,
+                        weeklyDays: cadenceType === "weekly" ? (Array.isArray(weeklyDays) ? weeklyDays : ["Mon"]) : ["Mon"],
+                        monthlyDays: effectiveMonthlyDay,
+                        customIntervalDays: cadenceType === "every" ? (Number(customIntervalDays) || 14) : 14,
+                        customDays: cadenceType === "custom_dates" ? customDaysStr : "",
+                        endDate: effectiveEndDate
+                    }, new Date(todayStr + "T00:00:00")) || computedInitialNextDate)
+                    : e.nextDate;
 
                 onSave({
                     name: name.trim(),
@@ -387,7 +407,7 @@ const FrequencyPicker = ({ value, onChange }) => {
                     customIntervalDays: cadenceType === "every" ? (Number(customIntervalDays) || 14) : 14,
                     customDays: cadenceType === "custom_dates" ? customDaysStr : "",
                     startDate: effectiveStartDate,
-                    nextDate: e.nextDate || computedInitialNextDate,
+                    nextDate: effectiveNextDate,
                     endDate: effectiveEndDate,
                     occurrences: cadenceType === "custom_dates" ? finalCustomDays.length : (occurrences ? Number(occurrences) : undefined),
                     excludeFromMonthlyCalculations,

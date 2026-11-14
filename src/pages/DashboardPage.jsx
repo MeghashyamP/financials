@@ -296,6 +296,45 @@ const FinancialInsightsPanel = ({ transactions, settings, setActivePage }) => {
     );
 };
 
+// --- SHARED DATE HELPERS FOR PAYMENTS WIDGETS ---
+const getAnchorDayOfMonth = (dStr) => {
+    if (!dStr) return 1;
+    if (typeof dStr === 'string' && dStr.includes('-')) {
+        const parts = dStr.split('-');
+        if (parts.length === 3) {
+            const dayNum = parseInt(parts[2].substring(0, 2), 10);
+            if (!isNaN(dayNum) && dayNum >= 1 && dayNum <= 31) return dayNum;
+        }
+    }
+    const d = new Date(dStr);
+    if (!isNaN(d.getTime())) return d.getDate();
+    return 1;
+};
+
+const getAnchorDayForRecurring = (r) => {
+    if (!r) return 1;
+    if (r.monthlyDays) {
+        const rawMD = r.monthlyDays;
+        const isLast = (typeof rawMD === 'string' && rawMD.trim().toLowerCase() === 'last') ||
+            (Array.isArray(rawMD) && rawMD.length === 1 && String(rawMD[0]).toLowerCase() === 'last');
+        if (isLast) return 'last';
+        const parsed = Array.isArray(rawMD)
+            ? parseInt(rawMD[0], 10)
+            : parseInt(String(rawMD).split(',')[0].trim(), 10);
+        if (!isNaN(parsed) && parsed >= 1 && parsed <= 31) return parsed;
+    }
+    const sDate = r.startDate || r.nextDate;
+    return getAnchorDayOfMonth(sDate);
+};
+
+const getDueDateInMonth = (anchorDay, viewYear, viewMonth) => {
+    const maxDays = new Date(viewYear, viewMonth + 1, 0).getDate();
+    const day = anchorDay === 'last' ? maxDays : Math.min(Math.max(Number(anchorDay) || 1, 1), maxDays);
+    const m = String(viewMonth + 1).padStart(2, '0');
+    const d = String(day).padStart(2, '0');
+    return `${viewYear}-${m}-${d}`;
+};
+
 // --- SUB-COMPONENT: Calendar widget for the Dashboard ---
 const PaymentsCalendarWidget = ({ settings, transactions, selectedDay, setSelectedDay, viewDate, setViewDate }) => {
     const toYYYYMMDD = (dStr) => {
@@ -327,28 +366,6 @@ const PaymentsCalendarWidget = ({ settings, transactions, selectedDay, setSelect
         return `${y}-${m}-${day}`;
     };
 
-    const getAnchorDayOfMonth = (dStr) => {
-        if (!dStr) return 1;
-        if (typeof dStr === 'string' && dStr.includes('-')) {
-            const parts = dStr.split('-');
-            if (parts.length === 3) {
-                const dayNum = parseInt(parts[2].substring(0, 2), 10);
-                if (!isNaN(dayNum) && dayNum >= 1 && dayNum <= 31) return dayNum;
-            }
-        }
-        const d = new Date(dStr);
-        if (!isNaN(d.getTime())) return d.getDate();
-        return 1;
-    };
-
-    const getDueDateInMonth = (anchorDay, viewYear, viewMonth) => {
-        const maxDays = new Date(viewYear, viewMonth + 1, 0).getDate();
-        const day = Math.min(Math.max(anchorDay, 1), maxDays);
-        const m = String(viewMonth + 1).padStart(2, '0');
-        const d = String(day).padStart(2, '0');
-        return `${viewYear}-${m}-${d}`;
-    };
-
     const year = viewDate.getFullYear();
     const month = viewDate.getMonth();
 
@@ -367,14 +384,22 @@ const PaymentsCalendarWidget = ({ settings, transactions, selectedDay, setSelect
             // Only show item if it actually occurs in this view month according to its cadence
             if (getOccurrencesInPeriod(r, viewMonthStartStr, viewMonthEndStr) <= 0) return;
 
-            const anchorDay = getAnchorDayOfMonth(r.nextDate || r.startDate);
-            const itemDueDateStr = getDueDateInMonth(anchorDay, year, month);
+            const billInstancesForR = (settings.billInstances || []).filter(b => b.recurringId === r.id);
+            const currentMonthBillInst = billInstancesForR.find(b => b.dueDate && b.dueDate.startsWith(viewMonthPrefix));
+
+            const anchorDay = getAnchorDayForRecurring(r);
+            const itemDueDateStr = currentMonthBillInst ? currentMonthBillInst.dueDate : getDueDateInMonth(anchorDay, year, month);
+
+            if (r.startDate && itemDueDateStr < r.startDate) return;
+            if (r.endDate && itemDueDateStr > r.endDate) return;
 
             // Check if already paid in this view month
-            const isPaid = (transactions || []).some(t => {
-                const tDate = toYYYYMMDD(t.date);
-                return tDate && tDate.startsWith(viewMonthPrefix) && (t.linkedRecurringId === r.id || t.merchant === r.name);
-            });
+            const isPaid = currentMonthBillInst
+                ? (currentMonthBillInst.status === 'paid')
+                : (transactions || []).some(t => {
+                    const tDate = toYYYYMMDD(t.date);
+                    return tDate && tDate.startsWith(viewMonthPrefix) && (t.linkedRecurringId === r.id || t.merchant === r.name);
+                });
 
             if (!isPaid) {
                 items.push({ date: itemDueDateStr });
@@ -396,7 +421,7 @@ const PaymentsCalendarWidget = ({ settings, transactions, selectedDay, setSelect
             }
         });
         return items.filter(i => !isNaN(new Date(i.date).getTime()));
-    }, [settings.recurring, settings.networthItems, transactions, year, month]);
+    }, [settings.recurring, settings.billInstances, settings.networthItems, transactions, year, month]);
 
     const today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -657,28 +682,6 @@ const PaymentsSectionWidget = ({ settings, transactions, updateSetting, loadStat
         return `${y}-${m}-${day}`;
     };
 
-    const getAnchorDayOfMonth = (dStr) => {
-        if (!dStr) return 1;
-        if (typeof dStr === 'string' && dStr.includes('-')) {
-            const parts = dStr.split('-');
-            if (parts.length === 3) {
-                const dayNum = parseInt(parts[2].substring(0, 2), 10);
-                if (!isNaN(dayNum) && dayNum >= 1 && dayNum <= 31) return dayNum;
-            }
-        }
-        const d = new Date(dStr);
-        if (!isNaN(d.getTime())) return d.getDate();
-        return 1;
-    };
-
-    const getDueDateInMonth = (anchorDay, viewYear, viewMonth) => {
-        const maxDays = new Date(viewYear, viewMonth + 1, 0).getDate();
-        const day = Math.min(Math.max(anchorDay, 1), maxDays);
-        const m = String(viewMonth + 1).padStart(2, '0');
-        const d = String(day).padStart(2, '0');
-        return `${viewYear}-${m}-${d}`;
-    };
-
     const calNow = new Date();
     const todayStr = `${calNow.getFullYear()}-${String(calNow.getMonth() + 1).padStart(2, '0')}-${String(calNow.getDate()).padStart(2, '0')}`;
     const todayObj = new Date(calNow.getFullYear(), calNow.getMonth(), calNow.getDate());
@@ -695,8 +698,7 @@ const PaymentsSectionWidget = ({ settings, transactions, updateSetting, loadStat
         (settings.recurring || []).forEach(r => {
             if (r.active === false || (r.endDate && r.endDate < calNow.toISOString().split('T')[0])) return;
             const flexDays = Number(r.dateFlexDays) || flexDefault;
-            const rawDueDateStr = r.nextDate || r.startDate;
-            const anchorDay = getAnchorDayOfMonth(rawDueDateStr);
+            const anchorDay = getAnchorDayForRecurring(r);
             const monthDueDateStr = getDueDateInMonth(anchorDay, viewYear, viewMonth);
 
             // Look for a bill instance created for this recurring template
@@ -719,8 +721,17 @@ const PaymentsSectionWidget = ({ settings, transactions, updateSetting, loadStat
                 });
             };
 
+            const viewMonthStartStr = `${viewYear}-${String(viewMonth + 1).padStart(2, '0')}-01`;
+            const daysInViewMonth = new Date(viewYear, viewMonth + 1, 0).getDate();
+            const viewMonthEndStr = `${viewYear}-${String(viewMonth + 1).padStart(2, '0')}-${String(daysInViewMonth).padStart(2, '0')}`;
+            const effectiveDueDateStr = currentMonthBillInst ? currentMonthBillInst.dueDate : monthDueDateStr;
+            const occursInViewMonth = currentMonthBillInst || (getOccurrencesInPeriod(r, viewMonthStartStr, viewMonthEndStr) > 0);
+
+            // Ensure the due date is valid according to startDate and endDate
+            const isWithinActiveRange = (!r.startDate || effectiveDueDateStr >= r.startDate) && (!r.endDate || effectiveDueDateStr <= r.endDate);
+
             // 1. OVERDUE CHECK: Check if item has a past due date < todayStr that is unpaid
-            const pendingOverdueInst = billInstancesForR.find(b => b.status === 'pending' && b.dueDate && b.dueDate < todayStr);
+            const pendingOverdueInst = billInstancesForR.find(b => b.status === 'pending' && b.dueDate && b.dueDate < todayStr && (!r.startDate || b.dueDate >= r.startDate));
             if (pendingOverdueInst) {
                 const instDateObj = new Date(pendingOverdueInst.dueDate + "T00:00:00");
                 const diffTime = Math.abs(todayObj - instDateObj);
@@ -741,14 +752,14 @@ const PaymentsSectionWidget = ({ settings, transactions, updateSetting, loadStat
                     swatch: "warning",
                     daysOverdue: Math.ceil(diffTime / (1000 * 60 * 60 * 24))
                 });
-            } else if (rawDueDateStr && rawDueDateStr < todayStr) {
-                if (!checkTxPaid(rawDueDateStr)) {
-                    const rawDateObj = new Date(rawDueDateStr + "T00:00:00");
+            } else if (occursInViewMonth && isWithinActiveRange && effectiveDueDateStr < todayStr && effectiveDueDateStr.startsWith(viewMonthPrefix)) {
+                if (!checkTxPaid(effectiveDueDateStr)) {
+                    const rawDateObj = new Date(effectiveDueDateStr + "T00:00:00");
                     const diffTime = Math.abs(todayObj - rawDateObj);
                     overdue.push({
                         id: r.id,
                         kind: "recurring",
-                        date: rawDueDateStr,
+                        date: effectiveDueDateStr,
                         dateObj: rawDateObj,
                         name: r.name,
                         amount: r.estimatedAmount || r.amount,
@@ -766,23 +777,17 @@ const PaymentsSectionWidget = ({ settings, transactions, updateSetting, loadStat
             }
 
             // 2. UPCOMING CHECK: Check current view month item (if >= todayStr)
-            const viewMonthStartStr = `${viewYear}-${String(viewMonth + 1).padStart(2, '0')}-01`;
-            const daysInViewMonth = new Date(viewYear, viewMonth + 1, 0).getDate();
-            const viewMonthEndStr = `${viewYear}-${String(viewMonth + 1).padStart(2, '0')}-${String(daysInViewMonth).padStart(2, '0')}`;
-            const effectiveUpcomingDateStr = currentMonthBillInst ? currentMonthBillInst.dueDate : monthDueDateStr;
-            const occursInViewMonth = currentMonthBillInst || (getOccurrencesInPeriod(r, viewMonthStartStr, viewMonthEndStr) > 0);
-
-            if (occursInViewMonth && effectiveUpcomingDateStr >= todayStr && effectiveUpcomingDateStr.startsWith(viewMonthPrefix)) {
+            if (occursInViewMonth && isWithinActiveRange && effectiveDueDateStr >= todayStr && effectiveDueDateStr.startsWith(viewMonthPrefix)) {
                 const isPaidUpcoming = currentMonthBillInst
                     ? (currentMonthBillInst.status === 'paid')
-                    : checkTxPaid(effectiveUpcomingDateStr);
+                    : checkTxPaid(effectiveDueDateStr);
 
                 if (!isPaidUpcoming) {
-                    const upcomingDateObj = new Date(effectiveUpcomingDateStr + "T00:00:00");
+                    const upcomingDateObj = new Date(effectiveDueDateStr + "T00:00:00");
                     upcoming.push({
                         id: r.id,
                         kind: "recurring",
-                        date: effectiveUpcomingDateStr,
+                        date: effectiveDueDateStr,
                         dateObj: upcomingDateObj,
                         name: r.name,
                         amount: currentMonthBillInst ? currentMonthBillInst.amount : (r.estimatedAmount || r.amount),
@@ -874,7 +879,7 @@ const PaymentsSectionWidget = ({ settings, transactions, updateSetting, loadStat
         if (item.linkedRecurringId) {
             const r = (settings.recurring || []).find(rec => rec && rec.id === item.linkedRecurringId);
             if (r) {
-                const anchorDay = getAnchorDayOfMonth(r.nextDate || r.startDate);
+                const anchorDay = getAnchorDayForRecurring(r);
                 return getDueDateInMonth(anchorDay, viewYear, viewMonth);
             }
             const netW = (settings.networthItems || []).find(it => it && it.id === item.linkedRecurringId);

@@ -339,6 +339,14 @@ export const RecurringPage = ({
             updatedList = [...confirmedList, { id: crypto.randomUUID(), ...item }];
         }
         if (updateSetting) await updateSetting("recurring", updatedList);
+        if (editingItem && settings?.billInstances && updateSetting) {
+            const pendingInstances = settings.billInstances || [];
+            const hasInvalidPending = pendingInstances.some(b => b.recurringId === editingItem.id && b.status === 'pending' && item.startDate && b.dueDate < item.startDate);
+            if (hasInvalidPending) {
+                const cleaned = pendingInstances.filter(b => !(b.recurringId === editingItem.id && b.status === 'pending' && item.startDate && b.dueDate < item.startDate));
+                await updateSetting("billInstances", cleaned);
+            }
+        }
         if (editingItem && settings?.networthItems && updateSetting) {
             const newAmt = Number(item.estimatedAmount || item.amount || 0);
             const networthList = settings.networthItems || [];
