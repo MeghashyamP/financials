@@ -4,7 +4,7 @@ import {
     detectRecurringTransactions, processImportedTransaction, useEscapeKey,
     formatDate, getContrastTextColor, formatCategorySubIconFirst, filterTransactionsByPeriod,
     ModernDateFilterPicker, NET_WORTH_GROUPS, PeriodSelectOptions, generateFingerprint,
-    getOccurrencesInPeriod, getEffectiveNetWorthItemValue
+    getOccurrencesInPeriod, getEffectiveNetWorthItemValue, getISOStringInTimezone
 } from './utils.jsx';
 import {
     fetchStateFromDB, saveSettingInDB, saveTransactionsInDB, saveTagInDB,
@@ -23,7 +23,7 @@ import { AddEntryModal } from './components/modals/TransactionModals.jsx';
 import { ImportFileModal, CsvMappingDialog, PdfColumnMappingDialog, PdfImportConfirmDialog } from './components/modals/ImportModals.jsx';
 import { AuthModal } from './components/modals/AuthModal.jsx';
 import { extractTextFromPDF, parseTransactionsFromPDFText } from './services/importers.js';
-import { getGlobalFileHandle, writeStateToLocalFile } from './services/localFileSync.js';
+import { getGlobalFileHandle, writeStateToLocalFile, restoreGlobalFileHandle } from './services/localFileSync.js';
 import { supabase, getCurrentUser, signOutUser, saveUserDataToCloud, fetchUserDataFromCloud, syncCloudToLocal } from './services/supabaseService.js';
 
 
@@ -409,6 +409,13 @@ export const App = () => {
         loadState();
         requestStoragePersistence();
 
+        // Restore local project file handle from IndexedDB if available
+        restoreGlobalFileHandle().then(({ handle, permissionGranted }) => {
+            if (handle && permissionGranted) {
+                console.log("Restored active file handle with write permission:", handle.name);
+            }
+        }).catch(err => console.warn("Restore file handle error:", err));
+
         // Check active Supabase session
         getCurrentUser().then(user => {
             setCurrentUser(user || null);
@@ -476,10 +483,18 @@ export const App = () => {
             isAutoSyncInitial.current = false;
             return;
         }
+        if (settings.storageMode !== 'project_file') return;
+
         const handle = getGlobalFileHandle();
-        if (settings.storageMode === 'project_file' && handle) {
-            const timer = setTimeout(() => {
-                writeStateToLocalFile(handle, { transactions, tags, rules, settings, documents });
+        if (handle) {
+            const timer = setTimeout(async () => {
+                const success = await writeStateToLocalFile(handle, { transactions, tags, rules, settings, documents });
+                if (success) {
+                    const nowIso = getISOStringInTimezone(new Date(), settings?.timezone);
+                    saveSettingInDB({ key: "lastFileSyncedAt", value: nowIso }).catch(() => {});
+                } else {
+                    console.warn("Auto-sync to local file failed (permission or invalid handle). User re-authorization may be required.");
+                }
             }, 600);
             return () => clearTimeout(timer);
         }

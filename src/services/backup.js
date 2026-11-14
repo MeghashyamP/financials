@@ -5,6 +5,8 @@
  * importBackup(): Parses an uploaded .json file and restores all data into IndexedDB.
  */
 
+import { getISOStringInTimezone } from '../utils.jsx';
+
 export const BACKUP_VERSION = 1;
 
 // ---------------------------------------------------------------------------
@@ -16,9 +18,12 @@ export const exportBackup = async (state) => {
     // Strip binary blobs — never export fileData
     const cleanDocuments = documents.map(({ fileData, ...rest }) => rest);
 
+    const tz = settings?.timezone || "Asia/Calcutta";
+    const exportedAt = getISOStringInTimezone(new Date(), tz);
+
     const backup = {
         version: BACKUP_VERSION,
-        exportedAt: new Date().toISOString(),
+        exportedAt,
         appVersion: "1.0.0",
         settings,
         tags,
@@ -31,7 +36,7 @@ export const exportBackup = async (state) => {
     const blob = new Blob([json], { type: "application/json" });
     const url = URL.createObjectURL(blob);
 
-    const today = new Date().toISOString().slice(0, 10);
+    const today = exportedAt.slice(0, 10);
     const a = document.createElement("a");
     a.href = url;
     a.download = `financials-backup-${today}.json`;

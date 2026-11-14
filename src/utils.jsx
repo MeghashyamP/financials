@@ -1075,6 +1075,48 @@ export const formatDateTime = (dateInput, formatStyle = "24/Jun/2002 Sun") => {
     return `${dateStr} · ${strHours}:${minutes} ${ampm}`;
 };
 
+/**
+ * Format a Date object into an ISO 8601 string adjusted to a given timezone with exact offset.
+ * Example for Asia/Calcutta: "2026-11-14T15:58:30.123+05:30"
+ */
+export const getISOStringInTimezone = (dateInput = new Date(), timezone = "Asia/Calcutta") => {
+    try {
+        const d = dateInput instanceof Date ? dateInput : new Date(dateInput);
+        if (isNaN(d.getTime())) return new Date().toISOString();
+
+        const tz = timezone || "Asia/Calcutta";
+        const formatter = new Intl.DateTimeFormat("en-CA", {
+            timeZone: tz,
+            year: "numeric",
+            month: "2-digit",
+            day: "2-digit",
+            hour: "2-digit",
+            minute: "2-digit",
+            second: "2-digit",
+            hour12: false
+        });
+        const parts = formatter.formatToParts(d);
+        const map = {};
+        for (const p of parts) map[p.type] = p.value;
+        const ms = String(d.getMilliseconds()).padStart(3, "0");
+
+        // Calculate offset in target timezone
+        const utcDate = new Date(d.toLocaleString("en-US", { timeZone: "UTC" }));
+        const tzDate = new Date(d.toLocaleString("en-US", { timeZone: tz }));
+        const diffMinutes = Math.round((tzDate.getTime() - utcDate.getTime()) / 60000);
+        const sign = diffMinutes >= 0 ? "+" : "-";
+        const absDiff = Math.abs(diffMinutes);
+        const offHours = String(Math.floor(absDiff / 60)).padStart(2, "0");
+        const offMinutes = String(absDiff % 60).padStart(2, "0");
+        const offsetStr = `${sign}${offHours}:${offMinutes}`;
+
+        let hour = map.hour === "24" ? "00" : map.hour;
+        return `${map.year}-${map.month}-${map.day}T${hour}:${map.minute}:${map.second}.${ms}${offsetStr}`;
+    } catch (e) {
+        return (dateInput instanceof Date ? dateInput : new Date()).toISOString();
+    }
+};
+
 // Reusable date field: shows date in settings.dateFormat, opens native date picker on click/focus
 export const DatePickerField = ({ value, onChange, dateFormat, className = "form-control", style = {}, label, required }) => {
     const displayText = value ? formatDate(value, dateFormat) : "";

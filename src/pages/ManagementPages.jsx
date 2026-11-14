@@ -3,14 +3,24 @@ import {
     Icon, formatCurrencyVal, formatDate, formatDateTime, DatePickerField, DEFAULT_CATEGORIES,
     filterCategoriesByType, getContrastTextColor, formatCategorySubIconFirst,
     renderCategoryOptions, getOccurrencesInPeriod, calculateNextExpectedDate, useEscapeKey, CATEGORY_DESCRIPTIONS,
-    calculatePeriodDateRange
+    calculatePeriodDateRange, getISOStringInTimezone
 } from '../utils.jsx';
 import {
     updateTransactionInDB, deleteTransactionFromDB, saveRuleInDB, deleteRuleFromDB, wipeDatabase,
     initDB, saveSettingInDB, saveTagInDB, saveDocumentInDB, checkStoragePersistence, requestStoragePersistence
 } from '../store.js';
 import { exportBackup, importBackup, restoreBackup } from '../services/backup.js';
-import { pickLocalProjectFile, writeStateToLocalFile, setGlobalFileHandle, getGlobalFileHandle } from '../services/localFileSync.js';
+import {
+    pickLocalProjectFile,
+    openLocalProjectFile,
+    readStateFromLocalFile,
+    writeStateToLocalFile,
+    setGlobalFileHandle,
+    getGlobalFileHandle,
+    restoreGlobalFileHandle,
+    getHandleFromIndexedDB,
+    verifyFileHandlePermission
+} from '../services/localFileSync.js';
 import { CreateRecurringModal, CreateRuleModal, LogBillInstanceModal } from '../components/modals/PlanningModals.jsx';
 
 export const RecurringPage = ({
@@ -1947,13 +1957,31 @@ export const SettingsPage = ({
     // Storage Persistence & Local Project File Sync
     const [isPersisted, setIsPersisted] = React.useState(false);
     const [linkedFile, setLinkedFile] = React.useState(() => getGlobalFileHandle());
+    const [filePermissionGranted, setFilePermissionGranted] = React.useState(false);
     const [isFileSyncing, setIsFileSyncing] = React.useState(false);
 
     React.useEffect(() => {
         checkStoragePersistence().then(persisted => {
             setIsPersisted(persisted);
         });
-    }, []);
+
+        // Check if there is an active file handle in memory or IndexedDB and query permissions
+        const checkFilePermission = async () => {
+            const { handle, permissionGranted } = await restoreGlobalFileHandle();
+            if (handle) {
+                setLinkedFile(handle);
+                setFilePermissionGranted(permissionGranted);
+            } else {
+                const current = getGlobalFileHandle();
+                setLinkedFile(current);
+                if (current && current.queryPermission) {
+                    const status = await current.queryPermission({ mode: 'readwrite' });
+                    setFilePermissionGranted(status === 'granted');
+                }
+            }
+        };
+        checkFilePermission();
+    }, [settings.storageMode]);
 
     const handleRequestPersistence = async () => {
         const granted = await requestStoragePersistence();
@@ -1967,15 +1995,25 @@ export const SettingsPage = ({
 
     const handleSwitchStorageMode = async (targetMode) => {
         if (targetMode === "project_file") {
-            if (!linkedFile && !settings.linkedFileName) {
+            let handle = linkedFile || getGlobalFileHandle();
+            if (!handle) {
+                handle = await getHandleFromIndexedDB();
+            }
+
+            if (!handle && !settings.linkedFileName) {
                 await handleLinkProjectFile();
             } else {
                 await updateSetting("storageMode", "project_file");
                 showToast("Active Storage Engine: Local Project Folder File (.json)", "success");
-                if (linkedFile) {
+                if (handle) {
+                    setLinkedFile(handle);
+                    setGlobalFileHandle(handle);
                     setIsFileSyncing(true);
-                    await writeStateToLocalFile(linkedFile, { transactions, tags, rules, settings, documents });
+                    const success = await writeStateToLocalFile(handle, { transactions, tags, rules, settings, documents });
                     setIsFileSyncing(false);
+                    if (success) {
+                        setFilePermissionGranted(true);
+                    }
                 }
             }
         } else {
@@ -1986,22 +2024,48 @@ export const SettingsPage = ({
 
     const handleLinkProjectFile = async () => {
         try {
-            const handle = await pickLocalProjectFile("financials-data.json");
+            // Open native file picker to select an existing .json file
+            const handle = await openLocalProjectFile();
             if (handle) {
+                const hasPerm = await verifyFileHandlePermission(handle, true);
                 setLinkedFile(handle);
                 setGlobalFileHandle(handle);
+                setFilePermissionGranted(hasPerm);
+                const tz = settings?.timezone || "Asia/Calcutta";
                 await updateSetting("storageMode", "project_file");
                 await updateSetting("linkedFileName", handle.name || "financials-data.json");
-                await updateSetting("lastFileSyncedAt", new Date().toISOString());
+                await updateSetting("lastFileSyncedAt", getISOStringInTimezone(new Date(), tz));
 
                 setIsFileSyncing(true);
+                // If browser has transactions, sync current state (with deletions) to file
+                // If browser has 0 transactions but file has data, restore from file
+                if ((!transactions || transactions.length === 0) && hasPerm) {
+                    const fileData = await readStateFromLocalFile(handle);
+                    if (fileData && fileData.transactions && fileData.transactions.length > 0) {
+                        const stats = await restoreBackup(fileData, {
+                            initDB,
+                            saveSettingInDB,
+                            saveTagInDB,
+                            saveRuleInDB,
+                            saveDocumentInDB,
+                            wipeDatabase
+                        });
+                        if (typeof loadState === "function") {
+                            await loadState();
+                        }
+                        showToast(`Linked "${handle.name}" and loaded ${stats.transactions} transactions from file!`, "success");
+                        setIsFileSyncing(false);
+                        return;
+                    }
+                }
+
                 const success = await writeStateToLocalFile(handle, { transactions, tags, rules, settings, documents });
                 setIsFileSyncing(false);
 
                 if (success) {
-                    showToast(`Linked and synced data to project file "${handle.name}"`, "success");
+                    showToast(`Linked existing file "${handle.name}" and synced ${transactions.length} transactions!`, "success");
                 } else {
-                    showToast(`Linked "${handle.name}". Ready for sync.`, "warning");
+                    showToast(`Linked "${handle.name}". Please grant write permission to enable auto-sync.`, "warning");
                 }
             }
         } catch (err) {
@@ -2009,26 +2073,88 @@ export const SettingsPage = ({
         }
     };
 
+    const handleCreateNewProjectFile = async () => {
+        try {
+            const handle = await pickLocalProjectFile("financials-data.json");
+            if (handle) {
+                setLinkedFile(handle);
+                setGlobalFileHandle(handle);
+                setFilePermissionGranted(true);
+                const tz = settings?.timezone || "Asia/Calcutta";
+                await updateSetting("storageMode", "project_file");
+                await updateSetting("linkedFileName", handle.name || "financials-data.json");
+                await updateSetting("lastFileSyncedAt", getISOStringInTimezone(new Date(), tz));
+
+                setIsFileSyncing(true);
+                const success = await writeStateToLocalFile(handle, { transactions, tags, rules, settings, documents });
+                setIsFileSyncing(false);
+
+                if (success) {
+                    showToast(`Created new project file "${handle.name}" and synced data!`, "success");
+                } else {
+                    showToast(`Created "${handle.name}". Ready for sync.`, "warning");
+                }
+            }
+        } catch (err) {
+            showToast(`Failed to create file: ${err.message}`, "error");
+        }
+    };
+
+    const handleReAuthorizeFile = async () => {
+        let handle = linkedFile || getGlobalFileHandle();
+        if (!handle) {
+            handle = await getHandleFromIndexedDB();
+        }
+        if (handle) {
+            const granted = await verifyFileHandlePermission(handle, true);
+            if (granted) {
+                setLinkedFile(handle);
+                setGlobalFileHandle(handle);
+                setFilePermissionGranted(true);
+                showToast(`Permission granted for "${handle.name}". Syncing...`, "success");
+                setIsFileSyncing(true);
+                await writeStateToLocalFile(handle, { transactions, tags, rules, settings, documents });
+                setIsFileSyncing(false);
+                const tz = settings?.timezone || "Asia/Calcutta";
+                const nowIso = getISOStringInTimezone(new Date(), tz);
+                await updateSetting("lastFileSyncedAt", nowIso);
+                return;
+            }
+        }
+        // If handle is invalid or user wants to re-pick, open native open picker
+        await handleLinkProjectFile();
+    };
+
     const handleManualFileSync = async () => {
-        if (!linkedFile) {
+        let handle = linkedFile || getGlobalFileHandle();
+        if (!handle) {
+            handle = await getHandleFromIndexedDB();
+        }
+        if (!handle) {
             await handleLinkProjectFile();
             return;
         }
         setIsFileSyncing(true);
-        const success = await writeStateToLocalFile(linkedFile, { transactions, tags, rules, settings, documents });
+        const success = await writeStateToLocalFile(handle, { transactions, tags, rules, settings, documents });
         setIsFileSyncing(false);
         if (success) {
-            const nowIso = new Date().toISOString();
+            setLinkedFile(handle);
+            setGlobalFileHandle(handle);
+            setFilePermissionGranted(true);
+            const tz = settings?.timezone || "Asia/Calcutta";
+            const nowIso = getISOStringInTimezone(new Date(), tz);
             await updateSetting("lastFileSyncedAt", nowIso);
-            showToast(`Synced latest data to "${linkedFile.name || settings.linkedFileName || 'financials-data.json'}"`, "success");
+            showToast(`Synced ${transactions.length} transactions to "${handle.name || settings.linkedFileName || 'financials-data.json'}"`, "success");
         } else {
-            showToast(`Could not write to local file. Please re-grant permission.`, "error");
+            setFilePermissionGranted(false);
+            showToast(`Could not write to local file. Please click 'Re-connect File' to grant permission.`, "error");
         }
     };
 
     const handleUnlinkProjectFile = async () => {
         setLinkedFile(null);
         setGlobalFileHandle(null);
+        setFilePermissionGranted(false);
         await updateSetting("storageMode", "browser");
         await updateSetting("linkedFileName", null);
         showToast("Unlinked local file. Reverted to Web Browser storage mode.", "info");
@@ -3364,10 +3490,17 @@ export const SettingsPage = ({
                                         File Sync Status:
                                     </span>
                                     {settings.linkedFileName ? (
-                                        <span className="status-pill status-pill-success">
-                                            <span className="pulse-dot pulse-dot-success"></span>
-                                            🟢 Auto-Synced to Disk
-                                        </span>
+                                        linkedFile && filePermissionGranted ? (
+                                            <span className="status-pill status-pill-success">
+                                                <span className="pulse-dot pulse-dot-success"></span>
+                                                🟢 Auto-Synced to Disk
+                                            </span>
+                                        ) : (
+                                            <span className="status-pill" style={{ background: '#FFFBEB', color: '#B45309', border: '1px solid #FDE68A' }}>
+                                                <span className="pulse-dot pulse-dot-warning"></span>
+                                                ⚠️ Re-authorization Needed
+                                            </span>
+                                        )
                                     ) : (
                                         <span style={{ fontSize: '0.74rem', color: 'var(--text-muted)', fontStyle: 'italic' }}>
                                             Unlinked
@@ -3379,13 +3512,15 @@ export const SettingsPage = ({
                                         <div style={{ fontSize: '0.82rem', color: 'var(--primary)', fontWeight: 600, wordBreak: 'break-all', display: 'flex', alignItems: 'center', gap: '6px' }}>
                                             📄 <code>{settings.linkedFileName}</code>
                                         </div>
-                                        <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '2px' }}>
-                                            All edits auto-save directly to disk in real-time.
+                                        <div style={{ fontSize: '0.72rem', color: (linkedFile && filePermissionGranted) ? 'var(--text-muted)' : '#B45309', marginTop: '2px' }}>
+                                            {linkedFile && filePermissionGranted
+                                                ? "All edits auto-save directly to disk in real-time."
+                                                : "Browser file permission paused after reload. Click 'Re-connect File' below to enable auto-sync."}
                                         </div>
                                     </div>
                                 ) : (
-                                    <div style={{ marginTop: '4px', fontSize: '0.78rem', color: 'var(--text-muted)' }}>
-                                        No project file linked yet. Link a file to write directly to disk.
+                                    <div style={{ marginTop: '6px', fontSize: '0.76rem', color: 'var(--text-muted)', lineHeight: '1.45' }}>
+                                        💡 <strong>First time setting this up?</strong> Click <strong>"➕ Create First-Time File"</strong> to initialize a new <code>financials-data.json</code> in your project folder, or click <strong>"📂 Link Existing File"</strong> if you already have one.
                                     </div>
                                 )}
                             </div>
@@ -3393,70 +3528,53 @@ export const SettingsPage = ({
 
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                             {settings.storageMode === 'project_file' ? (
-                                linkedFile || settings.linkedFileName ? (
-                                    <div style={{ display: 'flex', gap: '8px' }}>
+                                settings.linkedFileName ? (
+                                    <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                                        {linkedFile && filePermissionGranted ? (
+                                            <button
+                                                type="button"
+                                                className="btn btn-primary"
+                                                onClick={handleManualFileSync}
+                                                disabled={isFileSyncing}
+                                                style={{
+                                                    flex: 1,
+                                                    fontSize: '0.82rem',
+                                                    fontWeight: 600,
+                                                    borderRadius: '8px',
+                                                    background: 'linear-gradient(135deg, var(--primary) 0%, #4F46B5 100%)',
+                                                    boxShadow: '0 2px 6px rgba(101, 88, 211, 0.25)'
+                                                }}
+                                            >
+                                                {isFileSyncing ? "Syncing to Disk..." : "⚡ Sync to Disk Now"}
+                                            </button>
+                                        ) : (
+                                            <button
+                                                type="button"
+                                                className="btn btn-primary"
+                                                onClick={handleLinkProjectFile}
+                                                style={{
+                                                    flex: 1,
+                                                    fontSize: '0.82rem',
+                                                    fontWeight: 600,
+                                                    borderRadius: '8px',
+                                                    background: 'linear-gradient(135deg, #F59E0B 0%, #D97706 100%)',
+                                                    border: 'none',
+                                                    color: '#fff',
+                                                    boxShadow: '0 2px 6px rgba(245, 158, 11, 0.25)'
+                                                }}
+                                            >
+                                                📂 Select Existing File (.json)
+                                            </button>
+                                        )}
                                         <button
                                             type="button"
                                             className="btn btn-secondary"
-                                            disabled
-                                            style={{ flex: 1, fontSize: '0.82rem', fontWeight: 600, borderRadius: '8px' }}
-                                        >
-                                            ✓ Active & Auto-Syncing
-                                        </button>
-                                        <button
-                                            type="button"
-                                            className="btn btn-secondary"
-                                            onClick={handleUnlinkProjectFile}
+                                            onClick={handleLinkProjectFile}
                                             style={{ fontSize: '0.82rem', borderRadius: '8px' }}
+                                            title="Choose an existing financials-data.json file"
                                         >
-                                            Unlink File
+                                            📂 Choose File
                                         </button>
-                                    </div>
-                                ) : (
-                                    <button
-                                        type="button"
-                                        className="btn btn-primary"
-                                        onClick={handleLinkProjectFile}
-                                        style={{
-                                            width: '100%',
-                                            fontSize: '0.84rem',
-                                            fontWeight: 600,
-                                            display: 'flex',
-                                            alignItems: 'center',
-                                            justifyContent: 'center',
-                                            gap: '8px',
-                                            padding: '9px 16px',
-                                            borderRadius: '8px',
-                                            background: 'linear-gradient(135deg, var(--primary) 0%, #4F46B5 100%)',
-                                            boxShadow: '0 2px 6px rgba(101, 88, 211, 0.25)'
-                                        }}
-                                    >
-                                        🔗 Link Local File (.json)
-                                    </button>
-                                )
-                            ) : (
-                                <div style={{ display: 'flex', gap: '8px' }}>
-                                    <button
-                                        type="button"
-                                        className="btn btn-primary"
-                                        onClick={() => handleSwitchStorageMode("project_file")}
-                                        style={{
-                                            flex: 1,
-                                            fontSize: '0.84rem',
-                                            fontWeight: 600,
-                                            display: 'flex',
-                                            alignItems: 'center',
-                                            justifyContent: 'center',
-                                            gap: '8px',
-                                            padding: '9px 16px',
-                                            borderRadius: '8px',
-                                            background: 'linear-gradient(135deg, var(--primary) 0%, #4F46B5 100%)',
-                                            boxShadow: '0 2px 6px rgba(101, 88, 211, 0.25)'
-                                        }}
-                                    >
-                                        {settings.linkedFileName ? "Use Project File Mode" : "🔗 Link & Activate Local File"}
-                                    </button>
-                                    {settings.linkedFileName && (
                                         <button
                                             type="button"
                                             className="btn btn-secondary"
@@ -3465,8 +3583,127 @@ export const SettingsPage = ({
                                         >
                                             Unlink
                                         </button>
-                                    )}
-                                </div>
+                                    </div>
+                                ) : (
+                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+                                        <button
+                                            type="button"
+                                            className="btn btn-primary"
+                                            onClick={handleCreateNewProjectFile}
+                                            style={{
+                                                fontSize: '0.82rem',
+                                                fontWeight: 600,
+                                                display: 'flex',
+                                                alignItems: 'center',
+                                                justifyContent: 'center',
+                                                gap: '6px',
+                                                padding: '9px 12px',
+                                                borderRadius: '8px',
+                                                background: 'linear-gradient(135deg, var(--primary) 0%, #4F46B5 100%)',
+                                                boxShadow: '0 2px 6px rgba(101, 88, 211, 0.25)',
+                                                whiteSpace: 'nowrap'
+                                            }}
+                                        >
+                                            ➕ Create First-Time File
+                                        </button>
+                                        <button
+                                            type="button"
+                                            className="btn btn-secondary"
+                                            onClick={handleLinkProjectFile}
+                                            style={{
+                                                fontSize: '0.82rem',
+                                                fontWeight: 600,
+                                                display: 'flex',
+                                                alignItems: 'center',
+                                                justifyContent: 'center',
+                                                gap: '6px',
+                                                padding: '9px 12px',
+                                                borderRadius: '8px',
+                                                border: '1px solid var(--border-color)',
+                                                background: 'var(--card-bg, #fff)',
+                                                whiteSpace: 'nowrap'
+                                            }}
+                                        >
+                                            📂 Link Existing File
+                                        </button>
+                                    </div>
+                                )
+                            ) : (
+                                settings.linkedFileName ? (
+                                    <div style={{ display: 'flex', gap: '8px' }}>
+                                        <button
+                                            type="button"
+                                            className="btn btn-primary"
+                                            onClick={() => handleSwitchStorageMode("project_file")}
+                                            style={{
+                                                flex: 1,
+                                                fontSize: '0.84rem',
+                                                fontWeight: 600,
+                                                display: 'flex',
+                                                alignItems: 'center',
+                                                justifyContent: 'center',
+                                                gap: '8px',
+                                                padding: '9px 16px',
+                                                borderRadius: '8px',
+                                                background: 'linear-gradient(135deg, var(--primary) 0%, #4F46B5 100%)',
+                                                boxShadow: '0 2px 6px rgba(101, 88, 211, 0.25)'
+                                            }}
+                                        >
+                                            Use Project File Mode
+                                        </button>
+                                        <button
+                                            type="button"
+                                            className="btn btn-secondary"
+                                            onClick={handleUnlinkProjectFile}
+                                            style={{ fontSize: '0.82rem', borderRadius: '8px' }}
+                                        >
+                                            Unlink
+                                        </button>
+                                    </div>
+                                ) : (
+                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+                                        <button
+                                            type="button"
+                                            className="btn btn-primary"
+                                            onClick={handleCreateNewProjectFile}
+                                            style={{
+                                                fontSize: '0.82rem',
+                                                fontWeight: 600,
+                                                display: 'flex',
+                                                alignItems: 'center',
+                                                justifyContent: 'center',
+                                                gap: '6px',
+                                                padding: '9px 12px',
+                                                borderRadius: '8px',
+                                                background: 'linear-gradient(135deg, var(--primary) 0%, #4F46B5 100%)',
+                                                boxShadow: '0 2px 6px rgba(101, 88, 211, 0.25)',
+                                                whiteSpace: 'nowrap'
+                                            }}
+                                        >
+                                            ➕ Create First-Time File
+                                        </button>
+                                        <button
+                                            type="button"
+                                            className="btn btn-secondary"
+                                            onClick={handleLinkProjectFile}
+                                            style={{
+                                                fontSize: '0.82rem',
+                                                fontWeight: 600,
+                                                display: 'flex',
+                                                alignItems: 'center',
+                                                justifyContent: 'center',
+                                                gap: '6px',
+                                                padding: '9px 12px',
+                                                borderRadius: '8px',
+                                                border: '1px solid var(--border-color)',
+                                                background: 'var(--card-bg, #fff)',
+                                                whiteSpace: 'nowrap'
+                                            }}
+                                        >
+                                            📂 Link Existing File
+                                        </button>
+                                    </div>
+                                )
                             )}
                         </div>
                     </div>
