@@ -1,5 +1,5 @@
 import React from 'react';
-import { Icon, DEFAULT_CATEGORIES, processImportedTransaction, useEscapeKey, formatCurrencyVal, renderCategoryOptions, maskNumbersInText, formatDate, localizeDatesInText, DatePickerField, generateFingerprint, filterCategoriesByType, calculateNextExpectedDate, toLocalDateStr } from '../../utils.jsx';
+import { Icon, DEFAULT_CATEGORIES, processImportedTransaction, useEscapeKey, formatCurrencyVal, renderCategoryOptions, maskNumbersInText, formatDate, localizeDatesInText, DatePickerField, generateFingerprint, filterCategoriesByType, calculateNextExpectedDate, toLocalDateStr, formatCategorySubIconFirst } from '../../utils.jsx';
 import { planImport, withFingerprints, appendRecurringName } from '../../services/importDedupe.js';
 import { ruleTextFor } from '../../services/review.js';
 import { planRecurringMatches, isAutoApplied } from '../../services/recurringMatch.js';
@@ -591,6 +591,8 @@ import { CategoryPickerModal } from './TransactionModals.jsx';
                 if (fieldKey === "type") {
                     if (mapping.type === "expense") return "Outflow";
                     if (mapping.type === "income") return "Inflow";
+                    if (mapping.type === "neutral") return "Neutral";
+                    if (t.type === "neutral") return "Neutral (Transfer)";
                     if (t.type === "income") return "Inflow (Credit)";
                     return "Outflow (Debit)";
                 }
@@ -656,6 +658,7 @@ import { CategoryPickerModal } from './TransactionModals.jsx';
 
                         if (mapping.type === "expense") typeVal = "expense";
                         else if (mapping.type === "income") typeVal = "income";
+                        else if (mapping.type === "neutral") typeVal = "neutral";
 
                         if (mapping.amount && mapping.amount.length > 0) {
                             let foundAmt = null;
@@ -692,6 +695,7 @@ import { CategoryPickerModal } from './TransactionModals.jsx';
                             merchant: narrationVal,
                             amount: amountVal,
                             type: typeVal,
+                            neutralSign: typeVal === "neutral" ? (t.neutralSign || (t.type === "income" ? "+" : "-")) : undefined,
                             refId: refIdVal,
                             account: selectedAccount || t.account || "Main Checking",
                             category: t.category || "Needs review",
@@ -799,6 +803,7 @@ import { CategoryPickerModal } from './TransactionModals.jsx';
                                                     <option value="__auto__">⚡ Auto-detect from Withdrawal/Deposit columns</option>
                                                     <option value="expense">🔴 Always Outflow (Debit)</option>
                                                     <option value="income">🟢 Always Inflow (Credit)</option>
+                                                    <option value="neutral">🔵 Always Neutral (Transfer)</option>
                                                 </select>
                                             ) : field.key === "account" ? (
                                                 <span style={{ fontSize: '0.82rem', color: 'var(--primary)', fontWeight: 600, background: 'var(--primary-light)', padding: '4px 10px', borderRadius: '6px' }}>
@@ -972,6 +977,8 @@ import { CategoryPickerModal } from './TransactionModals.jsx';
                     notes: t.notes || "",
                     refId: t.refId || "",
                     account: t.account || "",
+                    type: t.type || "expense",
+                    neutralSign: t.type === "neutral" ? (t.neutralSign || (t.direction === "credit" ? "+" : "-")) : undefined,
                     linkTo: "",
                     tempId: idx,
                     selected: true
@@ -1017,6 +1024,39 @@ import { CategoryPickerModal } from './TransactionModals.jsx';
             }, []);
             const [items, setItems] = React.useState(initial.rows);
             const missedRecurring = initial.missed;
+
+            const handleCategoryPick = (cat) => {
+                if (!categoryPickerItem) return;
+                const catParts = cat && cat.includes(" - ") ? cat.split(" - ") : [cat, ""];
+                const catParent = catParts[0];
+                const customType = (settings?.categoryTypes || {})[cat] || (settings?.categoryTypes || {})[catParent];
+                let newType = categoryPickerItem.type;
+                let newSign = categoryPickerItem.neutralSign;
+                if (customType) {
+                    newType = customType;
+                } else if (["Transfer", "Misc", "Others"].includes(catParent)) {
+                    newType = "neutral";
+                    if (!newSign) newSign = categoryPickerItem.type === "income" ? "+" : "-";
+                } else if (catParent === "Income") {
+                    newType = "income";
+                } else {
+                    newType = "expense";
+                }
+                setItems(prev => prev.map(item =>
+                    item.tempId === categoryPickerItem.tempId
+                        ? {
+                            ...item,
+                            category: cat,
+                            categorySource: "manual",
+                            categoryConfidence: "high",
+                            type: newType,
+                            neutralSign: newType === "neutral" ? (newSign || "-") : undefined
+                        }
+                        : item
+                ));
+                setCategoryPickerItem(null);
+            };
+
             const unlinkAuto = (tempId) => setItems(prev => prev.map(it => {
                 if (it.tempId !== tempId) return it;
                 const next = { ...it, linkTo: "" };
@@ -1077,6 +1117,8 @@ import { CategoryPickerModal } from './TransactionModals.jsx';
                             // a row the importer would skip but you ticked anyway → add it
                             forceInsert: ["duplicate", "maybe-duplicate"].includes(planByTemp[tempId]?.action) && planByTemp[tempId]?.reason !== "exact",
                             skipPlaceholderMatch: !!rest.skipPlaceholderMatch,
+                            type: rest.type || "expense",
+                            neutralSign: rest.type === "neutral" ? (rest.neutralSign || "-") : undefined,
                             ...(() => {
                                 // linked to a recurring payment → its name in brackets after the bank's text
                                 const recId = String(rest.linkTo || "").startsWith("recurring:") ? rest.linkTo.split(":")[1] : null;
@@ -1152,15 +1194,26 @@ import { CategoryPickerModal } from './TransactionModals.jsx';
 
             const formatCurr = (val) => formatCurrencyVal(val, settings.currency || "INR");
 
-            const totalSelectedDebits = items.filter(i => i.selected && i.type === "expense").reduce((s, i) => s + i.amount, 0);
-            const totalSelectedCredits = items.filter(i => i.selected && i.type === "income").reduce((s, i) => s + i.amount, 0);
+            const totalSelectedDebits = items.filter(i => i.selected && (i.type === "expense" || (i.type === "neutral" && i.neutralSign === "-"))).reduce((s, i) => s + (Number(i.amount) || 0), 0);
+            const totalSelectedCredits = items.filter(i => i.selected && (i.type === "income" || (i.type === "neutral" && i.neutralSign === "+"))).reduce((s, i) => s + (Number(i.amount) || 0), 0);
+            const totalSelectedNeutrals = items.filter(i => i.selected && i.type === "neutral").reduce((s, i) => s + (Number(i.amount) || 0), 0);
 
-            const cellInput = { height: '32px', fontSize: '0.82rem', width: '100%', padding: '4px 6px' };
-            const refIdStyle = { ...cellInput, color: 'var(--text-muted)', fontStyle: 'italic' };
+            const naturalFieldStyle = {
+                background: 'var(--card-bg, #FFFFFF)',
+                border: '1px solid var(--border-color, #E2E8F0)',
+                borderRadius: '6px',
+                padding: '6px 8px',
+                fontSize: '0.82rem',
+                color: 'var(--text-main, #1E293B)',
+                width: '100%',
+                transition: 'border-color 0.15s ease, box-shadow 0.15s ease',
+                outline: 'none',
+                boxSizing: 'border-box'
+            };
 
             return (
                 <div className="modal-overlay">
-                    <div className="modal-container modal-lg" style={{ maxWidth: '1120px', width: 'min(1120px, 96vw)', maxHeight: '92vh' }}>
+                    <div className="modal-container modal-lg" style={{ maxWidth: '1440px', width: 'min(1440px, 98vw)', maxHeight: '92vh' }}>
                         <div className="modal-header" style={{ borderBottom: '1px solid var(--border-color)', paddingBottom: '14px' }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                                 <span style={{ fontSize: '1.4rem' }}>{bankProfile.icon}</span>
@@ -1202,9 +1255,12 @@ import { CategoryPickerModal } from './TransactionModals.jsx';
 
                                 <div>
                                     <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Total Debits / Credits</div>
-                                    <div style={{ fontSize: '0.88rem', fontWeight: 600, marginTop: '2px', display: 'flex', gap: '10px' }}>
+                                    <div style={{ fontSize: '0.88rem', fontWeight: 600, marginTop: '2px', display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
                                         <span style={{ color: 'var(--danger)' }}>🔴 Dr: {formatCurr(reconciliation.totalDebits || totalSelectedDebits)}</span>
                                         <span style={{ color: 'var(--success)' }}>🟢 Cr: {formatCurr(reconciliation.totalCredits || totalSelectedCredits)}</span>
+                                        {totalSelectedNeutrals > 0 && (
+                                            <span style={{ color: 'var(--info, #2563EB)' }}>🔵 Neutral: {formatCurr(totalSelectedNeutrals)}</span>
+                                        )}
                                     </div>
                                 </div>
 
@@ -1360,7 +1416,7 @@ import { CategoryPickerModal } from './TransactionModals.jsx';
                                         ))}
                                     </div>
                                     <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontWeight: 500 }}>
-                                        Selected to import: <strong style={{ color: 'var(--primary)' }}>{selectedCount} of {items.length}</strong> ({formatCurr(totalSelectedDebits)} debits, {formatCurr(totalSelectedCredits)} credits)
+                                        Selected to import: <strong style={{ color: 'var(--primary)' }}>{selectedCount} of {items.length}</strong> ({formatCurr(totalSelectedDebits)} debits, {formatCurr(totalSelectedCredits)} credits{totalSelectedNeutrals > 0 ? `, ${formatCurr(totalSelectedNeutrals)} neutral` : ""})
                                     </div>
                                 </div>
                             </div>
@@ -1388,191 +1444,333 @@ import { CategoryPickerModal } from './TransactionModals.jsx';
                                     </div>
                                 </div>
                             ) : (
-                                <div className="table-responsive" style={{ flex: '1 0 auto', minHeight: '360px', maxHeight: '70vh', overflow: 'auto' }}>
-                                    <table className="table" style={{ minWidth: '1050px', fontSize: '0.82rem' }}>
-                                        <thead>
-                                            <tr>
-                                                <th style={{ width: '36px' }}>
+                                <div className="table-responsive" style={{ flex: '1 0 auto', minHeight: '380px', maxHeight: '68vh', overflow: 'auto', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
+                                    <table className="table" style={{ minWidth: '1380px', fontSize: '0.82rem', borderCollapse: 'separate', borderSpacing: 0 }}>
+                                        <thead style={{ position: 'sticky', top: 0, background: 'var(--card-bg, #FFFFFF)', zIndex: 2, boxShadow: '0 1px 3px rgba(0,0,0,0.05)' }}>
+                                            <tr style={{ background: 'var(--bg-subtle, #F8FAFC)' }}>
+                                                <th style={{ width: '40px', textAlign: 'center', padding: '10px 6px' }}>
                                                     <input
                                                         type="checkbox"
                                                         checked={allSelected}
                                                         onChange={handleToggleSelectAll}
-                                                        style={{ transform: 'scale(1.2)' }}
+                                                        style={{ transform: 'scale(1.15)', cursor: 'pointer' }}
                                                     />
                                                 </th>
-                                                <th style={{ width: '130px' }}>Date</th>
-                                                <th style={{ minWidth: '180px' }}>Narration / Merchant</th>
-                                                <th style={{ width: '150px' }}>Category</th>
-                                                <th style={{ width: '130px' }}>Account</th>
-                                                <th style={{ width: '100px' }}>Amount</th>
-                                                <th style={{ width: '90px' }}>Type</th>
-                                                <th style={{ width: '110px' }}>Tags</th>
-                                                <th style={{ width: '120px' }}>Notes</th>
-                                                <th style={{ width: '110px', color: 'var(--text-muted)' }}>Ref ID</th>
-                                                {hasLinkOptions && <th style={{ width: '170px' }}>Link to Ledger</th>}
+                                                <th style={{ width: '130px', padding: '10px 8px', fontWeight: 600 }}>Date</th>
+                                                <th style={{ minWidth: '260px', padding: '10px 8px', fontWeight: 600 }}>Narration / Merchant</th>
+                                                <th style={{ width: '160px', padding: '10px 8px', fontWeight: 600, textAlign: 'center' }}>Category</th>
+                                                <th style={{ width: '130px', padding: '10px 8px', fontWeight: 600 }}>Account</th>
+                                                <th style={{ width: '130px', padding: '10px 8px', fontWeight: 600, textAlign: 'right' }}>Amount</th>
+                                                <th style={{ width: '135px', padding: '10px 8px', fontWeight: 600 }}>Type</th>
+                                                <th style={{ width: '110px', padding: '10px 8px', fontWeight: 600 }}>Tags</th>
+                                                <th style={{ width: '120px', padding: '10px 8px', fontWeight: 600 }}>Notes</th>
+                                                <th style={{ width: '110px', padding: '10px 8px', fontWeight: 600, color: 'var(--text-muted)' }}>Ref ID</th>
+                                                {hasLinkOptions && <th style={{ width: '180px', padding: '10px 8px', fontWeight: 600 }}>Link to Ledger</th>}
                                             </tr>
                                         </thead>
                                         <tbody>
-                                            {filteredItems.map((item) => (
-                                                <tr key={item.tempId} style={{
-                                                    opacity: item.selected ? 1 : 0.4,
-                                                    transition: 'all 0.15s ease',
-                                                    background: isNeedsAttention(item) ? 'rgba(245, 158, 11, 0.08)' : undefined
-                                                }}>
-                                                    <td>
-                                                        <input
-                                                            type="checkbox"
-                                                            checked={item.selected}
-                                                            disabled={planByTemp[item.tempId]?.reason === "exact"}
-                                                            onChange={() => handleToggleItem(item.tempId)}
-                                                            style={{ transform: 'scale(1.2)' }}
-                                                        />
-                                                    </td>
-                                                    <td>
-                                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                                            {filteredItems.map((item) => {
+                                                const isNeutral = item.type === "neutral";
+                                                const isIncome = !isNeutral && item.type === "income";
+                                                const signChar = isNeutral ? (item.neutralSign === '+' ? '+' : '-') : (isIncome ? '+' : '-');
+                                                const amountColor = isNeutral ? "var(--info, #2563EB)" : (isIncome ? "var(--success, #10B981)" : "var(--danger, #EF4444)");
+
+                                                return (
+                                                    <tr key={item.tempId} style={{
+                                                        opacity: item.selected ? 1 : 0.45,
+                                                        transition: 'background-color 0.15s ease, opacity 0.15s ease',
+                                                        background: isNeedsAttention(item) ? 'rgba(245, 158, 11, 0.08)' : undefined,
+                                                        borderBottom: '1px solid var(--border-color)'
+                                                    }}>
+                                                        <td style={{ textAlign: 'center', verticalAlign: 'middle', padding: '8px 6px' }}>
+                                                            <input
+                                                                type="checkbox"
+                                                                checked={item.selected}
+                                                                onChange={() => handleToggleItem(item.tempId)}
+                                                                style={{ transform: 'scale(1.15)', cursor: 'pointer' }}
+                                                            />
+                                                        </td>
+                                                        <td style={{ verticalAlign: 'middle', padding: '8px' }}>
                                                             <DatePickerField
                                                                 value={item.date}
-                                                                onChange={(v) => handleFieldChange(item.tempId, "date", v)}
+                                                                onChange={(val) => handleFieldChange(item.tempId, "date", val)}
                                                                 dateFormat={settings?.dateFormat}
-                                                                style={{ ...cellInput, minHeight: '30px' }}
+                                                                style={{
+                                                                    ...naturalFieldStyle,
+                                                                    fontWeight: 500,
+                                                                    fontSize: '0.82rem',
+                                                                    padding: '6px 8px'
+                                                                }}
                                                             />
-                                                            {isNeedsAttention(item) && (
-                                                                <span style={{ fontSize: '0.65rem', fontWeight: 700, color: '#B45309', textTransform: 'uppercase', letterSpacing: '0.03em' }}>
-                                                                    {(item._importConfidence === "low" ? "Low confidence" : item._importConfidence === "medium" ? "Check this row" : "Needs review")}
-                                                                </span>
-                                                            )}
-                                                        </div>
-                                                    </td>
-                                                    <td>
-                                                        <input type="text" className="form-control" style={cellInput}
-                                                            value={item.narration}
-                                                            onChange={(e) => handleFieldChange(item.tempId, "narration", e.target.value)}
-                                                        />
-                                                        {item._autoLink && planByTemp[item.tempId]?.action === "insert" && (() => {
-                                                            const m = item._autoLink;
-                                                            const linked = item.linkTo === `recurring:${m.recurringId}`;
-                                                            const base = { fontSize: '0.68rem', fontWeight: 600, marginTop: '3px', display: 'block' };
-                                                            const btn = { background: 'none', border: 'none', color: '#1D4ED8', cursor: 'pointer', textDecoration: 'underline', fontSize: '0.68rem', padding: 0 };
-                                                            if (linked) {
-                                                                return <span style={{ ...base, color: '#047857' }}>↻ Recurring: {m.name} · due {formatDate(m.occurrence, settings?.dateFormat)}{m.confidence === "medium" ? " (check)" : ""} <button type="button" style={btn} onClick={() => unlinkAuto(item.tempId)}>Unlink</button></span>;
-                                                            }
-                                                            if (item.linkTo) return null;
-                                                            const options = m.alternatives && m.alternatives.length ? m.alternatives : [{ recurringId: m.recurringId, name: m.name }];
-                                                            return <span style={{ ...base, color: '#B45309' }}>↻ Maybe {options.map((o, k) => (<span key={o.recurringId}>{k ? " or " : ""}{o.name} <button type="button" style={btn} onClick={() => linkAuto(item.tempId, o.recurringId)}>Link</button></span>))}</span>;
-                                                        })()}
-                                                        {(() => {
-                                                            const st = planByTemp[item.tempId];
-                                                            if (!st || st.action === "insert") return null;
-                                                            const base = { fontSize: '0.68rem', fontWeight: 600, marginTop: '3px', display: 'block' };
-                                                            if (st.action === "duplicate") {
-                                                                return <span style={{ ...base, color: '#1D4ED8' }}>♻️ {st.reason === "exact" ? "Already imported — can't be added twice" : "Already imported (same date, amount and reference) — skipped; tick to add anyway"}</span>;
-                                                            }
-                                                            if (st.action === "maybe-duplicate") {
-                                                                return <span style={{ ...base, color: '#B45309' }}>❓ Possible duplicate of “{String(st.matchLabel || "").slice(0, 40)}” — left out; tick to add</span>;
-                                                            }
-                                                            return (
-                                                                <span style={{ ...base, color: '#047857' }}>
-                                                                    🔁 Replaces your Dashboard payment “{String(st.matchLabel || "").slice(0, 32)}”{" "}
-                                                                    <button type="button" onClick={() => handleFieldChange(item.tempId, "skipPlaceholderMatch", !item.skipPlaceholderMatch)}
-                                                                        style={{ background: 'none', border: 'none', color: '#1D4ED8', cursor: 'pointer', textDecoration: 'underline', fontSize: '0.68rem', padding: 0 }}>
-                                                                        {item.skipPlaceholderMatch ? "Replace it instead" : "Keep both"}
-                                                                    </button>
-                                                                </span>
-                                                            );
-                                                        })()}
-                                                    </td>
-                                                    <td>
-                                                        <button
-                                                            type="button"
-                                                            className="form-control"
-                                                            style={{
-                                                                ...cellInput,
-                                                                textAlign: 'left',
-                                                                cursor: 'pointer',
-                                                                display: 'flex',
-                                                                alignItems: 'center',
-                                                                justifyContent: 'space-between',
-                                                                background: item.category && !item.category.includes('Needs Review') ? 'var(--card-bg)' : '#FEF3C7',
-                                                                borderColor: item.category && !item.category.includes('Needs Review') ? 'var(--border-color)' : '#F59E0B',
-                                                                color: item.category && !item.category.includes('Needs Review') ? 'inherit' : '#92400E'
-                                                            }}
-                                                            onClick={() => setCategoryPickerItem(item)}
-                                                            title="Click to choose category in popup picker"
-                                                        >
-                                                            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: '0.78rem' }}>
-                                                                {item.category || "Others - Needs Review 🔍"}
-                                                            </span>
-                                                            <span style={{ fontSize: '0.65rem', opacity: 0.6, marginLeft: '4px' }}>🔍</span>
-                                                        </button>
-                                                    </td>
-                                                    <td>
-                                                        {accounts.length > 0 ? (
-                                                            <select className="form-control" style={cellInput}
-                                                                value={item.account}
-                                                                onChange={(e) => handleFieldChange(item.tempId, "account", e.target.value)}
-                                                            >
-                                                                {accounts.map(a => <option key={a} value={a}>{a}</option>)}
-                                                            </select>
-                                                        ) : (
-                                                            <input type="text" className="form-control" style={cellInput}
-                                                                value={item.account}
-                                                                onChange={(e) => handleFieldChange(item.tempId, "account", e.target.value)}
-                                                            />
-                                                        )}
-                                                    </td>
-                                                    <td>
-                                                        <input type="number" step="0.01" className="form-control" style={cellInput}
-                                                            value={item.amount}
-                                                            onChange={(e) => handleFieldChange(item.tempId, "amount", parseFloat(e.target.value) || 0)}
-                                                        />
-                                                    </td>
-                                                    <td>
-                                                        <select className="form-control" style={{
-                                                            ...cellInput,
-                                                            fontWeight: 600,
-                                                            color: item.type === "income" ? "var(--success)" : "var(--danger)",
-                                                            background: item.type === "income" ? "rgba(16, 185, 129, 0.08)" : "rgba(239, 68, 68, 0.08)"
-                                                        }}
-                                                            value={item.type}
-                                                            onChange={(e) => handleFieldChange(item.tempId, "type", e.target.value)}
-                                                        >
-                                                            <option value="expense">🔴 Outflow</option>
-                                                            <option value="income">🟢 Inflow</option>
-                                                        </select>
-                                                    </td>
-                                                    <td>
-                                                        <input type="text" className="form-control" style={cellInput}
-                                                            placeholder="tag1, tag2"
-                                                            value={item.tags}
-                                                            onChange={(e) => handleFieldChange(item.tempId, "tags", e.target.value)}
-                                                        />
-                                                    </td>
-                                                    <td>
-                                                        <input type="text" className="form-control" style={cellInput}
-                                                            placeholder="Optional note…"
-                                                            value={item.notes}
-                                                            onChange={(e) => handleFieldChange(item.tempId, "notes", e.target.value)}
-                                                        />
-                                                    </td>
-                                                    <td>
-                                                        <input type="text" className="form-control" style={refIdStyle}
-                                                            placeholder="Auto-detected…"
-                                                            value={item.refId}
-                                                            onChange={(e) => handleFieldChange(item.tempId, "refId", e.target.value)}
-                                                        />
-                                                    </td>
-                                                    {hasLinkOptions && (
-                                                        <td>
-                                                            <select className="form-control" style={cellInput}
-                                                                value={item.linkTo}
-                                                                onChange={(e) => handleFieldChange(item.tempId, "linkTo", e.target.value)}
-                                                            >
-                                                                {renderLinkOptions()}
-                                                            </select>
                                                         </td>
-                                                    )}
-                                                </tr>
-                                            ))}
+                                                        <td style={{ verticalAlign: 'middle', padding: '8px' }}>
+                                                            <input
+                                                                type="text"
+                                                                className="form-control"
+                                                                style={{
+                                                                    ...naturalFieldStyle,
+                                                                    fontWeight: 500,
+                                                                    fontSize: '0.84rem',
+                                                                    padding: '6px 10px'
+                                                                }}
+                                                                value={item.narration}
+                                                                onChange={(e) => handleFieldChange(item.tempId, "narration", e.target.value)}
+                                                                title={item.narration}
+                                                            />
+                                                            {/* Recurring match indicator */}
+                                                            {item._autoLink && (
+                                                                <div style={{ marginTop: '4px', fontSize: '0.72rem', display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                                                                    {item.linkTo === `recurring:${item._autoLink.recurringId}` ? (
+                                                                        <span style={{ color: '#047857', background: '#D1FAE5', padding: '1px 6px', borderRadius: '4px', fontWeight: 600 }}>
+                                                                            ↻ Recurring: {item._autoLink.name} · due {formatDate(item._autoLink.occurrence, settings?.dateFormat)}
+                                                                            <button type="button" onClick={() => unlinkAuto(item.tempId)} style={{ marginLeft: '6px', background: 'none', border: 'none', color: '#1D4ED8', cursor: 'pointer', textDecoration: 'underline', padding: 0 }}>Unlink</button>
+                                                                        </span>
+                                                                    ) : (
+                                                                        <span style={{ color: '#78350F', background: '#FEF3C7', padding: '1px 6px', borderRadius: '4px' }}>
+                                                                            ↻ Similar to {item._autoLink.name}?
+                                                                            <button type="button" onClick={() => linkAuto(item.tempId, item._autoLink.recurringId)} style={{ marginLeft: '6px', background: 'none', border: 'none', color: '#1D4ED8', cursor: 'pointer', textDecoration: 'underline', padding: 0 }}>Link</button>
+                                                                        </span>
+                                                                    )}
+                                                                </div>
+                                                            )}
+                                                            {/* Duplicate or replace status indicator */}
+                                                            {(() => {
+                                                                const st = planByTemp[item.tempId];
+                                                                if (!st || st.action === "insert") return null;
+                                                                const base = { display: 'inline-block', marginTop: '3px', fontSize: '0.72rem', borderRadius: '4px', padding: '1px 6px' };
+                                                                if (st.action === "duplicate") {
+                                                                    return <span style={{ ...base, background: '#F1F5F9', color: '#64748B' }}>♻️ Duplicate of “{String(st.matchLabel || "").slice(0, 40)}” (already imported)</span>;
+                                                                }
+                                                                if (st.action === "maybe-duplicate") {
+                                                                    return <span style={{ ...base, background: '#FEF3C7', color: '#B45309' }}>❓ Possible duplicate of “{String(st.matchLabel || "").slice(0, 40)}” — left out; tick to add</span>;
+                                                                }
+                                                                return (
+                                                                    <span style={{ ...base, color: '#047857', background: '#ECFDF5' }}>
+                                                                        🔁 Replaces your Dashboard payment “{String(st.matchLabel || "").slice(0, 32)}”{" "}
+                                                                        <button type="button" onClick={() => handleFieldChange(item.tempId, "skipPlaceholderMatch", !item.skipPlaceholderMatch)}
+                                                                            style={{ background: 'none', border: 'none', color: '#1D4ED8', cursor: 'pointer', textDecoration: 'underline', fontSize: '0.68rem', padding: 0 }}>
+                                                                            {item.skipPlaceholderMatch ? "Replace it instead" : "Keep both"}
+                                                                        </button>
+                                                                    </span>
+                                                                );
+                                                            })()}
+                                                        </td>
+                                                        <td style={{ verticalAlign: 'middle', padding: '8px', textAlign: 'center' }}>
+                                                            {(() => {
+                                                                const catParts = item.category && item.category.includes(" - ") ? item.category.split(" - ") : [item.category, ""];
+                                                                const catParent = catParts[0] || "Others";
+                                                                const catSubRaw = catParts.slice(1).join(" - ");
+                                                                const catSub = formatCategorySubIconFirst(catSubRaw);
+                                                                const isNeedsRev = !item.category || item.category.includes("Needs Review") || item.category === "Needs review";
+
+                                                                return (
+                                                                    <div
+                                                                        className="category-cell-clickable"
+                                                                        onClick={() => setCategoryPickerItem(item)}
+                                                                        title="Click to choose category in popup picker"
+                                                                        style={{
+                                                                            display: 'inline-flex',
+                                                                            flexDirection: 'column',
+                                                                            alignItems: 'center',
+                                                                            justifyContent: 'center',
+                                                                            padding: '4px 8px',
+                                                                            borderRadius: '8px',
+                                                                            background: isNeedsRev ? '#FEF3C7' : 'var(--bg-subtle, #F8FAFC)',
+                                                                            border: `1px solid ${isNeedsRev ? '#F59E0B' : 'var(--border-color, #E2E8F0)'}`,
+                                                                            cursor: 'pointer',
+                                                                            width: '100%',
+                                                                            boxSizing: 'border-box',
+                                                                            textAlign: 'center',
+                                                                            minHeight: '38px',
+                                                                            boxShadow: '0 1px 2px rgba(0,0,0,0.03)',
+                                                                            transition: 'all 0.15s ease'
+                                                                        }}
+                                                                    >
+                                                                        <div style={{
+                                                                            fontWeight: 600,
+                                                                            fontSize: '0.8rem',
+                                                                            color: isNeedsRev ? '#92400E' : 'var(--text-main, #334155)',
+                                                                            overflow: 'hidden',
+                                                                            textOverflow: 'ellipsis',
+                                                                            whiteSpace: 'nowrap',
+                                                                            width: '100%'
+                                                                        }}>
+                                                                            {catParent}
+                                                                        </div>
+                                                                        {catSub ? (
+                                                                            <div style={{
+                                                                                fontSize: '0.72rem',
+                                                                                color: isNeedsRev ? '#B45309' : 'var(--text-muted, #64748B)',
+                                                                                marginTop: '1px',
+                                                                                overflow: 'hidden',
+                                                                                textOverflow: 'ellipsis',
+                                                                                whiteSpace: 'nowrap',
+                                                                                width: '100%'
+                                                                            }}>
+                                                                                {catSub}
+                                                                            </div>
+                                                                        ) : (
+                                                                            <div style={{ fontSize: '0.68rem', color: isNeedsRev ? '#B45309' : 'var(--text-muted)', opacity: 0.7 }}>
+                                                                                Select ▾
+                                                                            </div>
+                                                                        )}
+                                                                    </div>
+                                                                );
+                                                            })()}
+                                                        </td>
+                                                        <td style={{ verticalAlign: 'middle', padding: '8px' }}>
+                                                            {accounts.length > 0 ? (
+                                                                <select
+                                                                    className="form-control"
+                                                                    style={naturalFieldStyle}
+                                                                    value={item.account}
+                                                                    onChange={(e) => handleFieldChange(item.tempId, "account", e.target.value)}
+                                                                >
+                                                                    {accounts.map(a => <option key={a} value={a}>{a}</option>)}
+                                                                </select>
+                                                            ) : (
+                                                                <input
+                                                                    type="text"
+                                                                    className="form-control"
+                                                                    style={naturalFieldStyle}
+                                                                    value={item.account}
+                                                                    onChange={(e) => handleFieldChange(item.tempId, "account", e.target.value)}
+                                                                />
+                                                            )}
+                                                        </td>
+                                                        <td style={{ verticalAlign: 'middle', padding: '8px' }}>
+                                                            <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+                                                                <span style={{
+                                                                    position: 'absolute',
+                                                                    left: '8px',
+                                                                    fontWeight: 700,
+                                                                    fontSize: '0.9rem',
+                                                                    color: amountColor,
+                                                                    pointerEvents: 'none'
+                                                                }}>
+                                                                    {signChar}
+                                                                </span>
+                                                                <input
+                                                                    type="number"
+                                                                    step="0.01"
+                                                                    className="form-control"
+                                                                    style={{
+                                                                        ...naturalFieldStyle,
+                                                                        fontWeight: 700,
+                                                                        fontSize: '0.88rem',
+                                                                        paddingLeft: '22px',
+                                                                        paddingRight: '6px',
+                                                                        color: amountColor,
+                                                                        textAlign: 'right'
+                                                                    }}
+                                                                    value={item.amount}
+                                                                    onChange={(e) => handleFieldChange(item.tempId, "amount", parseFloat(e.target.value) || 0)}
+                                                                />
+                                                            </div>
+                                                        </td>
+                                                        <td style={{ verticalAlign: 'middle', padding: '8px' }}>
+                                                            <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                                                <select
+                                                                    className="form-control"
+                                                                    style={{
+                                                                        ...naturalFieldStyle,
+                                                                        fontWeight: 600,
+                                                                        fontSize: '0.78rem',
+                                                                        padding: '6px 6px',
+                                                                        color: isNeutral ? "var(--info, #2563EB)" : (isIncome ? "var(--success, #10B981)" : "var(--danger, #EF4444)"),
+                                                                        background: isNeutral ? "rgba(37, 99, 235, 0.08)" : (isIncome ? "rgba(16, 185, 129, 0.08)" : "rgba(239, 68, 68, 0.08)"),
+                                                                        borderColor: isNeutral ? "rgba(37, 99, 235, 0.25)" : (isIncome ? "rgba(16, 185, 129, 0.25)" : "rgba(239, 68, 68, 0.25)"),
+                                                                        flex: 1
+                                                                    }}
+                                                                    value={item.type || "expense"}
+                                                                    onChange={(e) => {
+                                                                        const val = e.target.value;
+                                                                        setItems(prev => prev.map(it => it.tempId === item.tempId ? {
+                                                                            ...it,
+                                                                            type: val,
+                                                                            neutralSign: val === "neutral" ? (it.neutralSign || (it.type === "income" ? "+" : "-")) : undefined
+                                                                        } : it));
+                                                                    }}
+                                                                >
+                                                                    <option value="expense">🔴 Outflow</option>
+                                                                    <option value="income">🟢 Inflow</option>
+                                                                    <option value="neutral">🔵 Neutral</option>
+                                                                </select>
+                                                                {isNeutral && (
+                                                                    <button
+                                                                        type="button"
+                                                                        className="btn btn-sm"
+                                                                        style={{
+                                                                            padding: '0 6px',
+                                                                            height: '32px',
+                                                                            minWidth: '28px',
+                                                                            fontSize: '0.85rem',
+                                                                            fontWeight: 700,
+                                                                            borderRadius: '6px',
+                                                                            border: `1.5px solid ${item.neutralSign === '+' ? 'var(--success, #10B981)' : 'var(--danger, #EF4444)'}`,
+                                                                            backgroundColor: item.neutralSign === '+' ? 'rgba(16, 185, 129, 0.12)' : 'rgba(239, 68, 68, 0.12)',
+                                                                            color: item.neutralSign === '+' ? 'var(--success, #10B981)' : 'var(--danger, #EF4444)',
+                                                                            cursor: 'pointer',
+                                                                            lineHeight: 1
+                                                                        }}
+                                                                        onClick={() => handleFieldChange(item.tempId, "neutralSign", item.neutralSign === '+' ? '-' : '+')}
+                                                                        title={`Click to toggle sign: currently ${item.neutralSign === '+' ? 'Inflow (+)' : 'Outflow (-)'}`}
+                                                                    >
+                                                                        {item.neutralSign || '-'}
+                                                                    </button>
+                                                                )}
+                                                            </div>
+                                                        </td>
+                                                        <td style={{ verticalAlign: 'middle', padding: '8px' }}>
+                                                            <input
+                                                                type="text"
+                                                                className="form-control"
+                                                                style={naturalFieldStyle}
+                                                                placeholder="tag1, tag2"
+                                                                value={item.tags}
+                                                                onChange={(e) => handleFieldChange(item.tempId, "tags", e.target.value)}
+                                                            />
+                                                        </td>
+                                                        <td style={{ verticalAlign: 'middle', padding: '8px' }}>
+                                                            <input
+                                                                type="text"
+                                                                className="form-control"
+                                                                style={naturalFieldStyle}
+                                                                placeholder="Optional note…"
+                                                                value={item.notes}
+                                                                onChange={(e) => handleFieldChange(item.tempId, "notes", e.target.value)}
+                                                            />
+                                                        </td>
+                                                        <td style={{ verticalAlign: 'middle', padding: '8px' }}>
+                                                            <input
+                                                                type="text"
+                                                                className="form-control"
+                                                                style={{
+                                                                    ...naturalFieldStyle,
+                                                                    color: 'var(--text-muted)',
+                                                                    fontStyle: 'italic',
+                                                                    fontSize: '0.78rem'
+                                                                }}
+                                                                placeholder="Auto-detected…"
+                                                                value={item.refId}
+                                                                onChange={(e) => handleFieldChange(item.tempId, "refId", e.target.value)}
+                                                            />
+                                                        </td>
+                                                        {hasLinkOptions && (
+                                                            <td style={{ verticalAlign: 'middle', padding: '8px' }}>
+                                                                <select
+                                                                    className="form-control"
+                                                                    style={naturalFieldStyle}
+                                                                    value={item.linkTo}
+                                                                    onChange={(e) => handleFieldChange(item.tempId, "linkTo", e.target.value)}
+                                                                >
+                                                                    {renderLinkOptions()}
+                                                                </select>
+                                                            </td>
+                                                        )}
+                                                    </tr>
+                                                );
+                                            })}
                                         </tbody>
                                     </table>
                                 </div>
@@ -1591,12 +1789,9 @@ import { CategoryPickerModal } from './TransactionModals.jsx';
                     </div>
                     {categoryPickerItem && (
                         <CategoryPickerModal
-                            categories={filterCategoriesByType(rawCategories, categoryPickerItem.type, settings?.categoryTypes)}
+                            categories={rawCategories}
                             selected={categoryPickerItem.category}
-                            onSelect={(cat) => {
-                                handleFieldChange(categoryPickerItem.tempId, "category", cat);
-                                setCategoryPickerItem(null);
-                            }}
+                            onSelect={handleCategoryPick}
                             onClose={() => setCategoryPickerItem(null)}
                         />
                     )}

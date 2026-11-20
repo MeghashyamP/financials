@@ -66,6 +66,16 @@ export const FeaturesGuidePage = () => {
             proTip: 'The modal shows helpful bank password hints (e.g., HDFC: First 4 letters UPPERCASE + DOB DDMM; SBI Bank: DOB DDMMYY + mobile last 5; SBI Card: DOB DDMMYYYY + card last 4; ICICI: First 4 letters lowercase + DOB DDMM).'
         },
         {
+            id: 'statement-review-experience',
+            icon: '📄',
+            title: 'Visual Statement Audit & Review with Neutral Transfers',
+            category: 'Statement Ingestion',
+            oneLiner: 'Review extracted bank and credit card statement transactions in a clean, natural table view with 2-tier categories and neutral transfer support.',
+            howToUse: 'Upload any statement $\\to$ the review screen opens with spacious columns matching your main Transactions page.',
+            whatHappensNext: 'Click on any category to change it via the visual picker, adjust amounts or narrations, and set transactions to Neutral (transfers/investments) with a quick [+] / [-] sign toggle before importing.',
+            proTip: 'Selecting a Transfer category automatically switches the row to Neutral with the correct sign, while audit totals recalculate live in the top summary banner.'
+        },
+        {
             id: 'privacy-mode-hide',
             icon: '🙈',
             title: 'Instant Privacy Mode (Hide Numbers from Peeking Eyes)',
