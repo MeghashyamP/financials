@@ -9,3 +9,11 @@ financials-data*.json
 *.json.bak
 .claude
 
+
+# Never commit statements or exports — this repo may be public (GitHub Pages)
+*.pdf
+*.PDF
+*.csv
+*.xlsx
+*.xls
+statements/

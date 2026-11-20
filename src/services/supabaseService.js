@@ -1,7 +1,7 @@
 import { createClient } from '@supabase/supabase-js';
 import { fetchStateFromDB, initDB, saveSettingInDB, saveTagInDB, saveRuleInDB, saveDocumentInDB, wipeDatabase } from '../store.js';
 import { restoreBackup } from './backup.js';
-import { encryptPayload, decryptPayload } from './crypto.js';
+import { encryptPayload, decryptPayload, recoverSecret } from './crypto.js';
 import { DEFAULT_CATEGORIES, stripLocalOnlySettings } from '../utils.jsx';
 
 const SUPABASE_URL = "https://gsdddichdmfpmdbufmad.supabase.co";
@@ -213,7 +213,8 @@ export const saveUserDataToCloud = async (state, customKey = null) => {
     };
 
     // Encrypt the payload (runs CompressionStream gzip + AES-GCM 256)
-    const encryptedPayload = await encryptPayload(plainPayload, encKey);
+    // If a recovery kit exists, its public key (kept in settings) seals the current password into the envelope.
+    const encryptedPayload = await encryptPayload(plainPayload, encKey, { recoveryPublicKey: (state.settings || {}).recoveryPublicKey || null });
 
     const { error } = await supabase
         .from('user_financials')
@@ -231,7 +232,7 @@ export const saveUserDataToCloud = async (state, customKey = null) => {
 };
 
 // Fetch state down from Supabase and decrypt on the client
-export const fetchUserDataFromCloud = async (customKey = null) => {
+export const fetchUserDataFromCloud = async (customKey = null, { recoveryKit = null } = {}) => {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return null;
 
@@ -252,11 +253,20 @@ export const fetchUserDataFromCloud = async (customKey = null) => {
 
     // Check if payload is encrypted
     let payload = data.data;
+    let recoveredViaKit = false;
     if (data.data.isEncrypted) {
         if (!encKey) {
             return { needsPassword: true, raw: data.data };
         }
-        payload = await decryptPayload(data.data, encKey);
+        try {
+            payload = await decryptPayload(data.data, encKey);
+        } catch (decryptErr) {
+            // Wrong / changed password. A recovery kit can open the envelope's sealed copy of the password it was saved with.
+            if (!recoveryKit || !recoveryKit.privateKey) throw decryptErr;
+            const oldPassword = await recoverSecret(data.data.recovery, recoveryKit.privateKey);
+            payload = await decryptPayload(data.data, oldPassword);
+            recoveredViaKit = true;
+        }
     }
 
     // Rehydrate settings (re-attach default categories if pruned)
@@ -264,7 +274,23 @@ export const fetchUserDataFromCloud = async (customKey = null) => {
         payload.settings = rehydrateSettingsFromSync(payload.settings);
     }
 
+    if (recoveredViaKit && payload && typeof payload === 'object') payload.recoveredViaKit = true;
     return payload;
+};
+
+/**
+ * Check a kit file against the cloud copy WITHOUT changing anything: does it open the sealed password, and does that
+ * password really decrypt the cloud data?
+ */
+export const testRecoveryKit = async (recoveryKit) => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) throw new Error('Sign in first.');
+    const { data, error } = await supabase.from('user_financials').select('data').eq('user_id', user.id).maybeSingle();
+    if (error) throw error;
+    if (!data || !data.data || !data.data.isEncrypted) throw new Error('There is no encrypted cloud copy to test against yet.');
+    const password = await recoverSecret(data.data.recovery, recoveryKit.privateKey);
+    await decryptPayload(data.data, password);
+    return true;
 };
 
 // Restore cloud state into local IndexedDB

@@ -1,4 +1,10 @@
 import React from 'react';
+import { AccountsSetup } from '../components/AccountsSetup.jsx';
+import { StatementHealth } from '../components/StatementHealth.jsx';
+import { LearnedMerchants } from '../components/MerchantReview.jsx';
+import { RulesManager } from '../components/RulesManager.jsx';
+import { PrivacySettings } from '../components/PrivacySettings.jsx';
+import { RecoveryKitCard } from '../components/RecoveryKitCard.jsx';
 import {
     Icon, formatCurrencyVal, formatDate, formatDateTime, DatePickerField, DEFAULT_CATEGORIES,
     filterCategoriesByType, getContrastTextColor, formatCategorySubIconFirst,
@@ -1617,7 +1623,7 @@ export const RecurringPage = ({
 // --- SUB-COMPONENT: Create / Edit Recurring Transaction Modal ---
 
 
-export const DocumentsPage = ({ documents, transactions, settings, onSyncFolder, showToast, loadState, onDeleteDocument }) => {
+export const DocumentsPage = ({ documents, transactions, settings, onSyncFolder, showToast, loadState, onDeleteDocument, updateSetting }) => {
     const [docToDelete, setDocToDelete] = React.useState(null);
     const [deleteStep, setDeleteStep] = React.useState(1);
 
@@ -1667,6 +1673,8 @@ export const DocumentsPage = ({ documents, transactions, settings, onSyncFolder,
 
     return (
         <div>
+            <StatementHealth settings={settings} transactions={transactions} updateSetting={updateSetting} showToast={showToast} />
+
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px', marginBottom: '28px' }}>
 
                 {/* Box 1: File Uploader dropzone */}
@@ -1834,87 +1842,23 @@ export const DocumentsPage = ({ documents, transactions, settings, onSyncFolder,
 // --- SUB-PAGE: Rules (Section 15) ---
 
 
-export const RulesPage = ({ rules, tags, settings, onSaveRule, onDeleteRule, subpageActionSignal }) => {
-    const [showCreateModal, setShowCreateModal] = React.useState(false);
-
-    const prevSubpageActionSignal = React.useRef(subpageActionSignal);
-    React.useEffect(() => {
-        if (subpageActionSignal > prevSubpageActionSignal.current) {
-            setShowCreateModal(true);
-        }
-        prevSubpageActionSignal.current = subpageActionSignal;
-    }, [subpageActionSignal]);
-    const categories = settings.categories || [];
-
-    const handleToggleRule = async (rule) => {
-        const updated = { ...rule, enabled: isRuleEnabled(rule) ? 0 : 1 };
-        await onSaveRule(updated);
-    };
-
+export const RulesPage = ({ rules, tags = [], settings, transactions = [], onBulkCategorize, showToast, onSaveRule, onDeleteRule, onRunRule, subpageActionSignal }) => {
     return (
         <div>
-            {rules.length === 0 ? (
-                <div className="empty-state">
-                    <Icon name="rules" />
-                    <div className="empty-state-text">
-                        <h3>No Mapping Rules Found</h3>
-                        <p>Construct "When... then..." parameters to trigger categorization mappings.</p>
-                        <button className="btn btn-primary" onClick={() => setShowCreateModal(true)}>Create rule</button>
-                    </div>
-                </div>
-            ) : (
-                <div className="section-card">
-                    <div className="section-card-title">Active Rules Engine</div>
-                    <div className="table-responsive">
-                        <table className="table">
-                            <thead>
-                                <tr>
-                                    <th>Condition</th>
-                                    <th>Outcome Category</th>
-                                    <th style={{ width: '100px' }}>Active</th>
-                                    <th style={{ width: '60px' }}></th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {rules.map(r => (
-                                    <tr key={r.id}>
-                                        <td style={{ fontWeight: 600 }}>When merchant contains <code>"{r.whenText}"</code></td>
-                                        <td>
-                                            <span className="badge" style={{ backgroundColor: 'var(--primary-light)', color: 'var(--primary)' }}>
-                                                {r.thenText}
-                                            </span>
-                                        </td>
-                                        <td>
-                                            <input
-                                                type="checkbox"
-                                                checked={isRuleEnabled(r)}
-                                                onChange={() => handleToggleRule(r)}
-                                                style={{ transform: 'scale(1.2)', cursor: 'pointer' }}
-                                            />
-                                        </td>
-                                        <td>
-                                            <button
-                                                className="btn btn-secondary btn-sm"
-                                                style={{ border: 'none', color: 'var(--danger)' }}
-                                                onClick={() => onDeleteRule(r.id)}
-                                            >
-                                                <Icon name="trash" />
-                                            </button>
-                                        </td>
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
-                    </div>
-                </div>
-            )}
+            <RulesManager
+                rules={rules}
+                transactions={transactions}
+                settings={settings}
+                tags={tags}
+                openCreateSignal={subpageActionSignal}
+                onSaveRule={onSaveRule}
+                onDeleteRule={onDeleteRule}
+                onRunRule={onRunRule}
+                showToast={showToast}
+            />
 
-            {showCreateModal && (
-                <CreateRuleModal
-                    onClose={() => setShowCreateModal(false)}
-                    onSave={onSaveRule}
-                    categories={categories}
-                />
+            {onBulkCategorize && (
+                <LearnedMerchants transactions={transactions} settings={settings} onBulkCategorize={onBulkCategorize} showToast={showToast} />
             )}
         </div>
     );
@@ -1925,6 +1869,7 @@ export const RulesPage = ({ rules, tags, settings, onSaveRule, onDeleteRule, sub
 
 
 export const SettingsPage = ({
+    privacy,
     settings,
     updateSetting,
     onWipe,
@@ -2173,7 +2118,6 @@ export const SettingsPage = ({
     const [categoryTab, setCategoryTab] = React.useState("all");
     const [showCategoryModal, setShowCategoryModal] = React.useState(false);
     useEscapeKey(() => setShowCategoryModal(false));
-    const [newAccount, setNewAccount] = React.useState("");
 
     // Tag management state
     const [newTagName, setNewTagName] = React.useState("");
@@ -2360,30 +2304,6 @@ export const SettingsPage = ({
         }
 
         showToast(`Category "${cat}" removed${count > 0 ? ` and unlinked from ${count} transaction(s)` : ''}`);
-    };
-
-    const handleAddAccount = async () => {
-        const name = newAccount.trim();
-        if (!name) return;
-
-        if (accounts.some(a => a.toLowerCase() === name.toLowerCase())) {
-            showToast("Account name already exists", "error");
-            return;
-        }
-
-        await updateSetting("accounts", [...accounts, name]);
-        setNewAccount("");
-        showToast(`Account "${name}" added`);
-    };
-
-    const handleRemoveAccount = async (acc) => {
-        if (accounts.length <= 1) {
-            showToast("Must have at least one account", "error");
-            return;
-        }
-        const updated = accounts.filter(a => a !== acc);
-        await updateSetting("accounts", updated);
-        showToast(`Account "${acc}" removed`);
     };
 
     const handleRestoreSuggestions = async () => {
@@ -3059,35 +2979,12 @@ export const SettingsPage = ({
                     </div>
                 )}
 
+                {privacy && <PrivacySettings privacy={privacy} showToast={showToast} />}
+
+                {currentUser && <RecoveryKitCard settings={settings} updateSetting={updateSetting} currentUser={currentUser} showToast={showToast} />}
+
                 {/* Manage Accounts */}
-                <div className="section-card">
-                    <div className="section-card-title">Accounts Setup</div>
-                    <div className="flex-row-gap" style={{ marginBottom: '16px' }}>
-                        <input
-                            type="text"
-                            className="form-control"
-                            placeholder="Add new account"
-                            value={newAccount}
-                            onChange={(e) => setNewAccount(e.target.value)}
-                            style={{ flex: 1 }}
-                        />
-                        <button className="btn btn-primary" onClick={handleAddAccount}>Add</button>
-                    </div>
-                    <div style={{ maxHeight: '240px', overflowY: 'auto' }}>
-                        {accounts.map(a => (
-                            <div key={a} className="settings-list-item">
-                                <span style={{ fontWeight: 500 }}>{a}</span>
-                                <button
-                                    className="btn btn-secondary btn-sm"
-                                    style={{ border: 'none', color: 'var(--danger)', padding: 0 }}
-                                    onClick={() => handleRemoveAccount(a)}
-                                >
-                                    <Icon name="trash" />
-                                </button>
-                            </div>
-                        ))}
-                    </div>
-                </div>
+                <AccountsSetup settings={settings} transactions={transactions} updateSetting={updateSetting} showToast={showToast} />
 
                 {/* Manage Tags */}
                 <div className="section-card">

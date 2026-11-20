@@ -1,4 +1,5 @@
 import { DEFAULT_CATEGORIES } from "./utils.jsx";
+import { seedDefaultAccounts } from "./services/accounts.js";
 
 export const DB_NAME = "FinancialsDB";
 export const DB_VERSION = 1;
@@ -133,10 +134,21 @@ export const fetchStateFromDB = async () => {
         deleteSettingFromDB("geminiApiKey").catch(() => { });
     }
 
-    // Ensure accounts default
-    if (!settings.accounts || settings.accounts.length === 0 || JSON.stringify(settings.accounts) === JSON.stringify(["Main Checking", "Everyday Visa", "Rewards Card", "Cash"])) {
-        settings.accounts = ["Bank 1", "Bank 2", "Credit Card 1"];
-        saveSettingInDB("accounts", ["Bank 1", "Bank 2", "Credit Card 1"]);
+    // Default accounts: HDFC / SBI / ICICI credit cards and debit-card (savings) accounts, added once.
+    // Existing accounts are never removed; old placeholder lists are replaced (keeping any a transaction uses).
+    try {
+        const usedAccounts = [...new Set(transactions.map(t => t.account).filter(Boolean))];
+        const seeded = seedDefaultAccounts(settings, usedAccounts);
+        if (seeded.changed) {
+            settings.accounts = seeded.accounts;
+            settings.accountProfiles = seeded.accountProfiles;
+            settings.accountsSeededV1 = true;
+            await saveSettingInDB("accounts", seeded.accounts);
+            await saveSettingInDB("accountProfiles", seeded.accountProfiles);
+            await saveSettingInDB("accountsSeededV1", true);
+        }
+    } catch (e) {
+        console.warn("Default account seeding notice:", e);
     }
 
     // If selectedPeriod is the old default "all-time", update to "this_month"
@@ -305,19 +317,26 @@ export const saveTransactionsInDB = async (newTransactions) => {
                 inserted++;
             };
             req.onerror = (e) => {
-                // Check if it's a constraint error (duplicate fingerprint)
-                if (e.target.error.name === "ConstraintError") {
+                // Duplicate fingerprint: count it and keep going. preventDefault stops the abort and
+                // stopPropagation stops the error reaching tx.onerror (which used to reject with `null`
+                // after the other rows were already saved → a false "Import failed").
+                if (e.target.error && e.target.error.name === "ConstraintError") {
                     duplicates++;
+                    e.preventDefault();
+                    e.stopPropagation();
                 }
-                e.preventDefault(); // prevent transaction abort
             };
         });
 
         tx.oncomplete = () => {
             resolve({ inserted, duplicates });
         };
+        tx.onabort = () => {
+            reject(tx.error || new Error("Saving transactions was aborted by the browser database"));
+        };
         tx.onerror = () => {
-            reject(tx.error);
+            // Only unexpected (non-duplicate) request errors reach here
+            reject(tx.error || new Error("Saving transactions failed"));
         };
     });
 };

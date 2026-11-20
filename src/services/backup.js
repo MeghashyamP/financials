@@ -6,6 +6,7 @@
  */
 
 import { getISOStringInTimezone, stripLocalOnlySettings, LOCAL_ONLY_SETTING_KEYS } from '../utils.jsx';
+import { markBackup } from './backupStatus.js';
 
 export const BACKUP_VERSION = 1;
 
@@ -44,6 +45,7 @@ export const exportBackup = async (state) => {
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
+    markBackup('file');
 
     return {
         transactions: transactions.length,

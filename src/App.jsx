@@ -5,7 +5,7 @@ import {
     formatDate, getContrastTextColor, formatCategorySubIconFirst, filterTransactionsByPeriod,
     ModernDateFilterPicker, NET_WORTH_GROUPS, PeriodSelectOptions, generateFingerprint,
     getOccurrencesInPeriod, getEffectiveNetWorthItemValue, getISOStringInTimezone,
-    shiftDateByCadence, getAnchorDayForRecurring, netWorthMonthsPerCycle
+    shiftDateByCadence, getAnchorDayForRecurring, netWorthMonthsPerCycle, toLocalDateStr, setPrivacyMasked
 } from './utils.jsx';
 import {
     fetchStateFromDB, saveSettingInDB, saveTransactionsInDB, saveTagInDB,
@@ -24,6 +24,18 @@ import { AddEntryModal } from './components/modals/TransactionModals.jsx';
 import { ImportFileModal, CsvMappingDialog, PdfColumnMappingDialog, PdfImportConfirmDialog } from './components/modals/ImportModals.jsx';
 import { AuthModal } from './components/modals/AuthModal.jsx';
 import { extractTextFromPDF, parseTransactionsFromPDFText, parseCSVText } from './services/importers.js';
+import { setCategoryMemory } from './categorizer.js';
+import { applyStatementImport } from './services/statementImport.js';
+import { planImport, mergeIntoPlaceholder, withFingerprints } from './services/importDedupe.js';
+import { applyRules, revertRuleOnTx, isEnabled as isRuleOn } from './services/rulesEngine.js';
+import { resolveStatementAccount } from './services/accounts.js';
+import { applyCategory, isNeedsReview } from './services/review.js';
+import { ReviewInbox } from './components/MerchantReview.jsx';
+import { ReportsPage } from './pages/ReportsPage.jsx';
+import { LockScreen } from './components/LockScreen.jsx';
+import { isLockEnabled, getIdleMinutes, readPrivacyDefault } from './services/appLock.js';
+import { markBackup, backupHealth, snoozeBackupBanner } from './services/backupStatus.js';
+import { exportBackup } from './services/backup.js';
 import { getGlobalFileHandle, writeStateToLocalFile, restoreGlobalFileHandle } from './services/localFileSync.js';
 import {
     supabase, getCurrentUser, signOutUser, saveUserDataToCloud,
@@ -99,7 +111,9 @@ class PageErrorBoundary extends React.Component {
     }
 }
 
-export const App = () => {
+const AppInner = ({ privacy }) => {
+    // "Hide amounts": set before any child renders so every formatted amount in this pass is masked
+    setPrivacyMasked(privacy.privacyMode);
     // Main unified states
     const [activePage, setActivePage] = React.useState("dashboard");
 
@@ -111,9 +125,18 @@ export const App = () => {
         window.scrollTo(0, 0);
     };
     const [transactions, setTransactions] = React.useState([]);
+    // Teach the categoriser from what you've already categorised (your own choices beat built-in guesses)
+    React.useEffect(() => { setCategoryMemory(transactions); }, [transactions]);
+    const needsReviewCount = React.useMemo(() => transactions.filter(isNeedsReview).length, [transactions]);
+    // "Your data only lives in this browser" reminder (re-evaluated after a backup / snooze / sync)
+    const [backupTick, setBackupTick] = React.useState(0);
     const [tags, setTags] = React.useState([]);
     const [rules, setRules] = React.useState([]);
     const [settings, setSettings] = React.useState({});
+    // Always-current copy of settings for async flows that write several keys in a row (e.g. a statement import):
+    // reading `settings` from the render closure there would silently overwrite an earlier write.
+    const settingsRef = React.useRef({});
+    settingsRef.current = settings;
     const [documents, setDocuments] = React.useState([]);
     const [loading, setLoading] = React.useState(true);
     const [toasts, setToasts] = React.useState([]);
@@ -291,6 +314,8 @@ export const App = () => {
             case "transactions": return "";
             case "networth": return "Net Worth";
             case "recurring": return "Recurring";
+            case "review": return "Needs Review";
+            case "reports": return "Reports";
             case "budgets": return "Monthly Budgets";
             case "goals": return "Savings Goals";
             case "documents": return "Document Vault";
@@ -306,6 +331,8 @@ export const App = () => {
             case "transactions": return "";
             case "networth": return "Capital assets, investment portfolios, real estate & debt principal owed";
             case "recurring": return "Periodic bills, EMIs, SIPs, regular income and scheduled commitments";
+            case "review": return "Transactions the app wouldn't categorise on its own — decide once, remembered forever";
+            case "reports": return "Financial year summary, what your cards cost, alerts, cash-flow forecast and CSV export";
             case "budgets": return "Configure envelopes and track your current spending limits";
             case "goals": return "Establish and trace your long term capital targets";
             case "documents": return "Upload and store your bank statements, receipts, and invoices";
@@ -324,6 +351,16 @@ export const App = () => {
     const [authModalView, setAuthModalView] = React.useState("signIn");
     const [currentUser, setCurrentUser] = React.useState(null);
     const [cloudSyncStatus, setCloudSyncStatus] = React.useState("idle"); // "idle" | "syncing" | "synced" | "error"
+    const backupInfo = React.useMemo(() => backupHealth({ transactionCount: transactions.length }), [transactions.length, backupTick, cloudSyncStatus]);
+    const handleBackupNow = async () => {
+        try {
+            await exportBackup({ transactions, tags, rules, settings, documents });
+            setBackupTick(t => t + 1);
+            showToast("Backup downloaded. Keep the file somewhere safe (it is not encrypted).", "success");
+        } catch (e) {
+            showToast("Backup failed: " + (e?.message || "unknown error"), "error");
+        }
+    };
     const [subpageActionSignal, setSubpageActionSignal] = React.useState(0);
 
     // Transactions search and filter states in topbar
@@ -478,7 +515,7 @@ export const App = () => {
         }
 
         // Listen for auth state changes. Pulling cloud data on sign-in is handled by
-        // AuthModal, which asks before replacing anything.
+        // AuthModal, which restores the cloud copy and overwrites local data.
         const { data: authListener } = supabase.auth.onAuthStateChange((event, session) => {
             setCurrentUser(session?.user || null);
             if (event === 'PASSWORD_RECOVERY') {
@@ -513,6 +550,7 @@ export const App = () => {
             try {
                 await saveUserDataToCloud(snapshot);
                 lastSyncedHashRef.current = currentHash;
+                markBackup('cloud');
                 setCloudSyncStatus("synced");
                 setTimeout(() => setCloudSyncStatus(s => (s === "synced" ? "idle" : s)), 2500);
             } catch (err) {
@@ -659,6 +697,7 @@ export const App = () => {
     // Updates settings store (Section 4.5 Preferences API)
     const updateSetting = async (key, value) => {
         try {
+            settingsRef.current = { ...settingsRef.current, [key]: value };
             await saveSettingInDB(key, value);
             setSettings(prev => ({ ...prev, [key]: value }));
         } catch (e) {
@@ -667,7 +706,19 @@ export const App = () => {
     };
 
     // Insert new transaction manually / batch CSV imports
-    const handleAddTransactions = async (newItems) => {
+    const importSummaryText = (res, linkedCount) => {
+        const parts = [`${res.inserted} added`];
+        if (res.replaced) parts.push(`${res.replaced} replaced your Dashboard payment${res.replaced === 1 ? "" : "s"}`);
+        if (res.duplicates) parts.push(`${res.duplicates} already imported (skipped)`);
+        if (res.possibleDuplicates) parts.push(`${res.possibleDuplicates} possible duplicate${res.possibleDuplicates === 1 ? "" : "s"} left out`);
+        if (linkedCount) parts.push(`${linkedCount} linked to your ledger`);
+        return `Import summary: ${parts.join(", ")}.`;
+    };
+
+    // opts.mode === "import": statement / CSV / folder imports. They also skip rows that overlap what is already saved
+    // and let a real statement row replace a payment you ticked off on the Dashboard (see services/importDedupe.js).
+    const handleAddTransactions = async (newItems, opts = {}) => {
+        const isImport = opts.mode === "import";
         const availableCats = settings?.categories || DEFAULT_CATEGORIES;
         const processed = newItems.map(t => {
             const now = new Date().toISOString();
@@ -680,8 +731,13 @@ export const App = () => {
                 merchant: narrationVal,
                 refId: t.refId || "",
                 category: t.category || "",
+                categorySource: t.categorySource,
+                categoryConfidence: t.categoryConfidence,
+                ruleChanges: t.ruleChanges,
                 amount: Math.abs(Number(t.amount || 0)),
-                type: t.type === "income" ? "income" : "expense",
+                // keep "neutral" (card-bill payments, own-account transfers, reversals) — it is excluded from income & spending
+                type: (t.type === "income" || t.type === "neutral") ? t.type : "expense",
+                neutralSign: t.type === "neutral" ? (t.neutralSign === "-" ? "-" : "+") : undefined,
                 account: t.account || "Bank 1",
                 tags: Array.isArray(t.tags) ? t.tags : (typeof t.tags === "string" ? t.tags.split(",").map(x => x.trim()).filter(Boolean) : []),
                 notes: t.notes || "",
@@ -694,45 +750,55 @@ export const App = () => {
             };
 
             const finalized = processImportedTransaction(item, rules, availableCats);
-            finalized.fingerprint = generateFingerprint(finalized);
-            if (t.replaceTargetId) finalized.replaceTargetId = t.replaceTargetId;
+            if (finalized.neutralSign === undefined) delete finalized.neutralSign;
+            if (finalized.categorySource === undefined) delete finalized.categorySource;
+            if (finalized.categoryConfidence === undefined) delete finalized.categoryConfidence;
+            if (finalized.ruleChanges === undefined) delete finalized.ruleChanges;
             return finalized;
+        });
+
+        const withFp = withFingerprints(processed, generateFingerprint);
+        const plan = planImport(withFp, transactions || [], { recurring: settingsRef.current.recurring || [], exactOnly: !isImport });
+        // choices made in the review dialog
+        newItems.forEach((orig, i) => {
+            if (orig.forceInsert && plan[i].action !== "insert" && plan[i].reason !== "exact") plan[i] = { action: "insert" };
+            if (orig.skipPlaceholderMatch && plan[i].action === "replace") plan[i] = { action: "insert" };
+            if (orig.replaceTargetId) plan[i] = { action: "replace", matchId: orig.replaceTargetId };
         });
 
         try {
             const itemsToInsert = [];
-            for (const t of processed) {
-                if (t.replaceTargetId) {
-                    const existingTx = (transactions || []).find(x => x.id === t.replaceTargetId);
-                    if (existingTx) {
-                        const mergedTx = {
-                            ...existingTx,
-                            date: t.date,
-                            narration: t.narration,
-                            merchant: t.merchant,
-                            refId: t.refId || existingTx.refId,
-                            amount: t.amount,
-                            type: t.type,
-                            account: t.account || existingTx.account,
-                            fingerprint: t.fingerprint,
-                            notes: existingTx.notes ? `${existingTx.notes} (Replaced by statement import)` : "Replaced synthetic payment with statement transaction"
-                        };
-                        await updateTransactionInDB(mergedTx);
+            let replaced = 0, duplicates = 0, possibleDuplicates = 0;
+            for (let i = 0; i < withFp.length; i++) {
+                const row = withFp[i];
+                const step = plan[i];
+                if (step.action === "duplicate") { duplicates++; continue; }
+                if (step.action === "maybe-duplicate") { possibleDuplicates++; continue; }
+                if (step.action === "replace") {
+                    const target = (transactions || []).find(x => x.id === step.matchId);
+                    if (target) {
+                        try {
+                            await updateTransactionInDB(mergeIntoPlaceholder(target, row, { fmtDate: (d) => formatDate(d, settingsRef.current.dateFormat) }));
+                            replaced++;
+                        } catch (mergeErr) {
+                            duplicates++;   // the statement row already exists under another transaction
+                        }
                         continue;
                     }
                 }
-                itemsToInsert.push(t);
+                delete row.replaceTargetId;
+                itemsToInsert.push(row);
             }
             let result = { inserted: 0, duplicates: 0 };
             if (itemsToInsert.length > 0) {
                 result = await saveTransactionsInDB(itemsToInsert);
             }
             await loadState();
-            return result;
+            return { ...result, duplicates: result.duplicates + duplicates, replaced, possibleDuplicates };
         } catch (e) {
             console.error("Error saving transactions in DB:", e);
-            showToast("Error inserting transactions in database: " + e.message, "error");
-            return { inserted: 0, duplicates: newItems.length };
+            showToast("Error inserting transactions in database: " + (e?.message || "unknown error"), "error");
+            return { inserted: 0, duplicates: newItems.length, replaced: 0, possibleDuplicates: 0 };
         }
     };
 
@@ -764,9 +830,16 @@ export const App = () => {
         if (!tx) return;
 
         const updated = { ...tx, ...patch };
-        // Generate a new fingerprint since category/tag changes doesn't impact fingerprint,
-        // but if we patch date/merchant/amount/account, it changes the fingerprint.
-        updated.fingerprint = generateFingerprint(updated);
+        if (patch && Object.prototype.hasOwnProperty.call(patch, "category") && !Object.prototype.hasOwnProperty.call(patch, "categorySource")) {
+            updated.categorySource = "manual";
+        }
+        // Category / tag changes don't affect the fingerprint; date / merchant / amount / account / type do.
+        // Keep the "#2" suffix that tells apart identical rows from the same import.
+        const fpFields = ["date", "merchant", "narration", "amount", "account", "type"];
+        if (fpFields.some(k => patch && Object.prototype.hasOwnProperty.call(patch, k))) {
+            const suffix = (String(tx.fingerprint || "").match(/#\d+$/) || [""])[0];
+            updated.fingerprint = generateFingerprint(updated) + suffix;
+        }
 
         try {
             await updateTransactionInDB(updated);
@@ -777,6 +850,127 @@ export const App = () => {
         }
     };
 
+    // ───── Rules (Gmail-style) ─────
+    // Save many changed transactions (a type flip also changes the fingerprint; the "#2" suffix is kept).
+    const persistTxUpdates = async (pairs) => {
+        const updatedById = new Map();
+        let failed = 0;
+        for (const { before, after } of pairs) {
+            let next = after;
+            if (next.type !== before.type) {
+                const suffix = (String(before.fingerprint || "").match(/#\d+$/) || [""])[0];
+                next = { ...after, fingerprint: generateFingerprint(after) + suffix };
+            }
+            try {
+                await updateTransactionInDB(next);
+                updatedById.set(next.id, next);
+            } catch (e) {
+                failed++;
+            }
+        }
+        if (updatedById.size > 0) setTransactions(prev => prev.map(t => updatedById.get(t.id) || t));
+        return { updated: updatedById.size, failed };
+    };
+
+    const txChanged = (a, b) =>
+        a.category !== b.category || a.type !== b.type || a.neutralSign !== b.neutralSign || a.categorySource !== b.categorySource
+        || (Array.isArray(a.tags) ? a.tags : []).join("\u0001") !== (Array.isArray(b.tags) ? b.tags : []).join("\u0001")
+        || JSON.stringify(a.ruleChanges || null) !== JSON.stringify(b.ruleChanges || null);
+
+    // Apply one rule to the transactions already saved (optionally taking back its earlier changes first).
+    const applyRuleToExisting = async (rule, { overwriteManual = false, revertFirst = false } = {}) => {
+        const pool = settingsRef.current.categories || DEFAULT_CATEGORIES;
+        const on = isRuleOn(rule);
+        const pairs = [];
+        for (const t of transactions) {
+            let base = t;
+            if (revertFirst) base = revertRuleOnTx(t, rule.id).tx;
+            const next = on ? applyRules(base, [rule], { overwriteManual, pool }).tx : base;
+            if (txChanged(t, next)) pairs.push({ before: t, after: next });
+        }
+        return persistTxUpdates(pairs);
+    };
+
+    const handleSaveRule = async (rule, opts = {}) => {
+        const now = new Date().toISOString();
+        const saved = { ...rule, id: rule.id || crypto.randomUUID(), version: 2, createdAt: rule.createdAt || now, updatedAt: now };
+        delete saved.legacy;
+        saved.enabled = (rule.enabled === 0 || rule.enabled === false) ? 0 : 1;
+        // tags a rule adds are created if they don't exist yet
+        for (const a of saved.actions || []) {
+            if (a.type === "addTags") {
+                const names = Array.isArray(a.value) ? a.value : String(a.value || "").split(",");
+                for (const name of names.map(x => String(x).trim()).filter(Boolean)) await handleSaveTag(name);
+            }
+        }
+        await saveRuleInDB(saved);
+        let result = { updated: 0, failed: 0 };
+        if (opts.applyExisting || opts.revertFirst) {
+            result = await applyRuleToExisting(saved, { overwriteManual: !!opts.overwriteManual, revertFirst: !!opts.revertFirst });
+        }
+        await loadState();
+        if (!opts.quiet) {
+            showToast(result.updated
+                ? `Rule saved and applied to ${result.updated} existing transaction${result.updated === 1 ? "" : "s"}`
+                : "Rule saved — it will apply to everything you import from now on");
+        }
+        return result;
+    };
+
+    const handleRunRule = async (rule, opts = {}) => {
+        const result = await applyRuleToExisting(rule, { overwriteManual: !!opts.overwriteManual });
+        await loadState();
+        return result;
+    };
+
+    const handleDeleteRule = async (rule, { revert = false } = {}) => {
+        let reverted = 0;
+        // Either way the rule's change records leave the transactions: undone (revert) or simply forgotten (keep).
+        const pairs = [];
+        for (const t of transactions) {
+            if (t.ruleChanges && t.ruleChanges[rule.id]) {
+                if (revert) {
+                    pairs.push({ before: t, after: revertRuleOnTx(t, rule.id).tx });
+                } else {
+                    const rest = { ...t.ruleChanges };
+                    delete rest[rule.id];
+                    const kept = { ...t };
+                    if (Object.keys(rest).length) kept.ruleChanges = rest; else delete kept.ruleChanges;
+                    pairs.push({ before: t, after: kept });
+                }
+            }
+        }
+        const saved = await persistTxUpdates(pairs);
+        if (revert) reverted = saved.updated;
+        await deleteRuleFromDB(rule.id);
+        await loadState();
+        return { reverted };
+    };
+
+    // Set one category on many transactions (Needs Review inbox, learned-merchants manager).
+    // Rows flip between neutral / income / expense when the category moves money between your own accounts.
+    const handleBulkCategorize = async (ids, category) => {
+        const wanted = new Set(ids);
+        const updatedById = new Map();
+        let failed = 0;
+        for (const t of transactions) {
+            if (!wanted.has(t.id)) continue;
+            const next = applyCategory(t, category);
+            if (next.type !== t.type) {
+                const suffix = (String(t.fingerprint || "").match(/#\d+$/) || [""])[0];
+                next.fingerprint = generateFingerprint(next) + suffix;
+            }
+            try {
+                await updateTransactionInDB(next);
+                updatedById.set(t.id, next);
+            } catch (e) {
+                failed++;
+            }
+        }
+        if (updatedById.size > 0) setTransactions(prev => prev.map(t => updatedById.get(t.id) || t));
+        return { updated: updatedById.size, failed };
+    };
+
     // PDF Bank Statement / Receipt Import handler
     // Step 1: pdfMappingData → shows PdfColumnMappingDialog (how tokens map to fields)
     // Step 2: pdfImportData → shows PdfImportConfirmDialog (review all transactions)
@@ -784,6 +978,21 @@ export const App = () => {
     const [pdfImportData, setPdfImportData] = React.useState(null);
 
     const handlePdfParsed = (parsedTransactions, filename, file, selectedAccount) => {
+        // Recognised bank/card layouts are already fully structured → straight to review (no column mapping needed)
+        if (parsedTransactions?.[0]?._templateParsed) {
+            let account = selectedAccount || parsedTransactions[0].account || "";
+            // Use the statement's own card/account number (and bank) to put it in the right account.
+            const stmt = parsedTransactions[0]._statement;
+            if (stmt) {
+                const pick = resolveStatementAccount(settingsRef.current, stmt, account);
+                if (pick.switched) showToast(`Imported into "${pick.account}" — ${pick.reason}.`, "info");
+                if (pick.warning) showToast(pick.warning, "warning");
+                account = pick.account;
+            }
+            setShowImportModal(false);
+            confirmPdfMapping(parsedTransactions.map(t => ({ ...t, account })), filename, file);
+            return;
+        }
         // Go to mapping dialog first
         setPdfMappingData({ parsedTransactions, filename, file, selectedAccount });
         setShowImportModal(false); // close the upload modal
@@ -799,7 +1008,7 @@ export const App = () => {
                     ...t,
                     narration: merch,
                     merchant: merch,
-                    type: t?.type === "income" ? "income" : "expense",
+                    type: (t?.type === "income" || t?.type === "neutral") ? t.type : "expense",
                     category: t?.category || ""
                 };
                 return processImportedTransaction(rawItem, rules, availableCats);
@@ -901,7 +1110,7 @@ export const App = () => {
         if (networthChanged) await updateSetting("networthItems", networthList);
     };
 
-    const triggerPdfImport = async (selectedTransactions) => {
+    const triggerPdfImport = async (selectedTransactions, statementCtx = null) => {
         if (!selectedTransactions || selectedTransactions.length === 0) {
             showToast("No transactions selected for import", "warning");
             setPdfImportData(null);
@@ -920,7 +1129,7 @@ export const App = () => {
                 documentId: docId
             }));
 
-            const res = await handleAddTransactions(itemsToInsert);
+            const res = await handleAddTransactions(itemsToInsert, { mode: "import" });
 
             try {
                 await applyLedgerLinks(selectedTransactions);
@@ -929,7 +1138,7 @@ export const App = () => {
             }
 
             const linkedCount = selectedTransactions.filter(t => t.linkTo).length;
-            showToast(`Import summary: ${res.inserted} transactions added, ${res.duplicates} duplicates skipped.${linkedCount ? ` ${linkedCount} linked to your ledger.` : ""}`);
+            showToast(importSummaryText(res, linkedCount));
 
             // Auto-register any new account names used in this import into Settings > Accounts
             const existingAccounts = settings?.accounts || [];
@@ -940,6 +1149,34 @@ export const App = () => {
                     await updateSetting("accounts", [...existingAccounts, ...newAccounts]);
                 } catch (accErr) {
                     console.warn("Account update notice:", accErr);
+                }
+            }
+
+            // Statement history, account profile, Net Worth line and card due-date bill
+            if (statementCtx?.summary) {
+                try {
+                    const nwKind = (cat) => (NET_WORTH_GROUPS.find(g => g.key === cat) || {}).kind;
+                    const outcome = await applyStatementImport(
+                        settingsRef.current,
+                        { summary: statementCtx.summary, account: statementCtx.account || selectedTransactions[0]?.account, fileName: statementCtx.fileName, documentId: docId },
+                        {
+                            todayIso: toLocalDateStr(new Date()),
+                            nowIso: new Date().toISOString(),
+                            newId: () => ((typeof crypto !== "undefined" && crypto.randomUUID) ? crypto.randomUUID() : `id_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`),
+                            saveSetting: updateSetting,
+                            groupKind: nwKind,
+                            effectiveValue: (it) => getEffectiveNetWorthItemValue(it, settingsRef.current.recurring || [], settingsRef.current.billInstances || []),
+                            cardBillCategory: (settingsRef.current.categories || DEFAULT_CATEGORIES).find(c => String(c).startsWith("Credit - Card")) || "Credit - Card 💳"
+                        }
+                    );
+                    if (outcome.skippedReason) {
+                        showToast(`Statement history not updated: ${outcome.skippedReason}.`, "warning");
+                    } else {
+                        const extras = [outcome.networthUpdated && "Net Worth updated", outcome.billPlanned && "card due date added to Recurring"].filter(Boolean);
+                        if (extras.length) showToast(`Statement saved — ${extras.join(", ")}.`);
+                    }
+                } catch (stmtErr) {
+                    console.warn("Statement history notice:", stmtErr);
                 }
             }
 
@@ -1056,8 +1293,8 @@ export const App = () => {
             return;
         }
 
-        const res = await handleAddTransactions(itemsToInsert);
-        showToast(`Import summary: ${res.inserted} transactions added, ${res.duplicates} duplicates skipped.`);
+        const res = await handleAddTransactions(itemsToInsert, { mode: "import" });
+        showToast(importSummaryText(res, 0));
 
         // Auto-register any new account names used in this import into Settings > Accounts
         const existingAccounts = settings?.accounts || [];
@@ -1130,7 +1367,7 @@ export const App = () => {
                             }));
 
                             if (syncItems.length > 0) {
-                                const res = await handleAddTransactions(syncItems);
+                                const res = await handleAddTransactions(syncItems, { mode: "import" });
                                 newTxCount += res.inserted;
                                 duplicateCount += res.duplicates;
                             }
@@ -1172,7 +1409,7 @@ export const App = () => {
                                 }
 
                                 if (syncItems.length > 0) {
-                                    const res = await handleAddTransactions(syncItems);
+                                    const res = await handleAddTransactions(syncItems, { mode: "import" });
                                     newTxCount += res.inserted;
                                     duplicateCount += res.duplicates;
                                 }
@@ -1254,9 +1491,11 @@ export const App = () => {
                         { id: "dashboard", label: "Dashboard", icon: "home" },
                         { id: "recurring", label: "Recurring", icon: "recurring" },
                         { id: "transactions", label: "Transactions", icon: "transactions" },
+                        { id: "review", label: "Review", icon: "alert", badge: needsReviewCount },
                         { id: "networth", label: "Net Worth", icon: "networth" },
                         { id: "budgets", label: "Budgets", icon: "budgets" },
                         { id: "goals", label: "Goals", icon: "goals" },
+                        { id: "reports", label: "Reports", icon: "subscriptions" },
                         { id: "documents", label: "Documents", icon: "documents" },
                         { id: "rules", label: "Rules", icon: "rules" },
                         { id: "settings", label: "Settings", icon: "settings" }
@@ -1269,6 +1508,7 @@ export const App = () => {
                         >
                             <Icon name={item.icon} currency={settings.currency} />
                             <span className="sidebar-label">{item.label}</span>
+                            {item.badge > 0 && <span className="nav-badge">{item.badge > 99 ? "99+" : item.badge}</span>}
                         </li>
                     ))}
                 </ul>
@@ -1281,6 +1521,31 @@ export const App = () => {
                     gap: '8px',
                     alignItems: isSidebarCollapsed ? 'center' : 'stretch'
                 }}>
+                    <div style={{ display: 'flex', gap: '6px', flexDirection: isSidebarCollapsed ? 'column' : 'row' }}>
+                        <button
+                            type="button"
+                            className="btn btn-secondary btn-sm"
+                            onClick={privacy.togglePrivacy}
+                            title={privacy.privacyMode ? "Show amounts" : "Hide amounts (for shared screens)"}
+                            aria-pressed={privacy.privacyMode}
+                            style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}
+                        >
+                            <span>{privacy.privacyMode ? "👁️" : "🙈"}</span>
+                            {!isSidebarCollapsed && <span>{privacy.privacyMode ? "Show" : "Hide"}</span>}
+                        </button>
+                        {privacy.lockEnabled && (
+                            <button
+                                type="button"
+                                className="btn btn-secondary btn-sm"
+                                onClick={privacy.lockNow}
+                                title="Lock the app now"
+                                style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}
+                            >
+                                <span>🔒</span>
+                                {!isSidebarCollapsed && <span>Lock</span>}
+                            </button>
+                        )}
+                    </div>
                     {currentUser ? (
                         <div style={{
                             background: 'var(--bg-color, #F8FAFC)',
@@ -1418,9 +1683,11 @@ export const App = () => {
                         { id: "dashboard", label: "Dashboard", icon: "home" },
                         { id: "recurring", label: "Recurring", icon: "recurring" },
                         { id: "transactions", label: "Txns", icon: "transactions" },
+                        { id: "review", label: "Review", icon: "alert", badge: needsReviewCount },
                         { id: "networth", label: "Net Worth", icon: "networth" },
                         { id: "budgets", label: "Budgets", icon: "budgets" },
                         { id: "goals", label: "Goals", icon: "goals" },
+                        { id: "reports", label: "Reports", icon: "subscriptions" },
                         { id: "documents", label: "Docs", icon: "documents" },
                         { id: "rules", label: "Rules", icon: "rules" },
                         { id: "settings", label: "Settings", icon: "settings" }
@@ -1432,8 +1699,19 @@ export const App = () => {
                         >
                             <Icon name={item.icon} currency={settings.currency} />
                             <span>{item.label}</span>
+                            {item.badge > 0 && <span className="nav-badge nav-badge-mobile">{item.badge > 99 ? "99+" : item.badge}</span>}
                         </div>
                     ))}
+                    <div className="mobile-nav-item" onClick={privacy.togglePrivacy} role="button" aria-pressed={privacy.privacyMode}>
+                        <span style={{ fontSize: '1.1rem', lineHeight: 1 }}>{privacy.privacyMode ? "👁️" : "🙈"}</span>
+                        <span>{privacy.privacyMode ? "Show" : "Hide"}</span>
+                    </div>
+                    {privacy.lockEnabled && (
+                        <div className="mobile-nav-item" onClick={privacy.lockNow} role="button">
+                            <span style={{ fontSize: '1.1rem', lineHeight: 1 }}>🔒</span>
+                            <span>Lock</span>
+                        </div>
+                    )}
                 </div>
             </nav>
 
@@ -2136,7 +2414,18 @@ export const App = () => {
 
                 {/* Page Content viewport container */}
                 <main className="content-body" style={activePage === 'transactions' ? { paddingTop: '12px', maxWidth: 'none' } : {}}>
-                    <PageErrorBoundary key={activePage}>
+
+                    {activePage === "dashboard" && backupInfo.show && (
+                        <div role="status" style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap', background: '#FFFBEB', border: '1px solid #FDE68A', color: '#92400E', borderRadius: '12px', padding: '10px 16px', marginBottom: '16px', fontSize: '0.85rem' }}>
+                            <span style={{ fontSize: '1.2rem' }}>💾</span>
+                            <span style={{ flex: '1 1 260px' }}>
+                                <strong>Back up your data.</strong> {backupInfo.message} Browsers can clear site data without warning.
+                            </span>
+                            <button className="btn btn-primary btn-sm" onClick={handleBackupNow}>Download backup</button>
+                            <button className="btn btn-secondary btn-sm" onClick={() => handleNavigatePage("settings")}>Cloud / file sync</button>
+                            <button className="btn btn-secondary btn-sm" onClick={() => { snoozeBackupBanner(7); setBackupTick(t => t + 1); }}>Remind me in a week</button>
+                        </div>
+                    )}                    <PageErrorBoundary key={activePage}>
                     {activePage === "dashboard" && (
                         <DashboardPage
                             transactions={filteredTx}
@@ -2242,6 +2531,24 @@ export const App = () => {
                             showToast={showToast}
                             loadState={loadState}
                             onDeleteDocument={handleDeleteDocument}
+                            updateSetting={updateSetting}
+                        />
+                    )}
+                    {activePage === "reports" && (
+                        <ReportsPage
+                            transactions={transactions}
+                            settings={settings}
+                            updateSetting={updateSetting}
+                            showToast={showToast}
+                        />
+                    )}
+                    {activePage === "review" && (
+                        <ReviewInbox
+                            transactions={transactions}
+                            settings={settings}
+                            onBulkCategorize={handleBulkCategorize}
+                            onSaveRule={handleSaveRule}
+                            showToast={showToast}
                         />
                     )}
                     {activePage === "rules" && (
@@ -2249,21 +2556,18 @@ export const App = () => {
                             rules={rules}
                             tags={tags}
                             settings={settings}
+                            transactions={transactions}
+                            onBulkCategorize={handleBulkCategorize}
+                            showToast={showToast}
                             subpageActionSignal={subpageActionSignal}
-                            onSaveRule={async (r) => {
-                                await saveRuleInDB(r);
-                                loadState();
-                                showToast("Rule saved successfully");
-                            }}
-                            onDeleteRule={async (id) => {
-                                await deleteRuleFromDB(id);
-                                loadState();
-                                showToast("Rule deleted");
-                            }}
+                            onSaveRule={handleSaveRule}
+                            onRunRule={handleRunRule}
+                            onDeleteRule={handleDeleteRule}
                         />
                     )}
                     {activePage === "settings" && (
                         <SettingsPage
+                            privacy={privacy}
                             settings={settings}
                             updateSetting={updateSetting}
                             tags={tags}
@@ -2380,10 +2684,60 @@ export const App = () => {
                         onClose={() => setPdfImportData(null)}
                         onConfirm={triggerPdfImport}
                         settings={settings}
+                        existingTransactions={transactions}
                     />
                 </ModalErrorBoundary>
             )}
 
         </div>
+    );
+};
+
+// App shell: the lock screen and "hide amounts" live out here, around the app, so locking never loses what
+// the app is doing (it stays mounted, just hidden) and the lock check happens before anything is shown.
+export const App = () => {
+    const [lockEnabled, setLockEnabled] = React.useState(() => isLockEnabled());
+    const [locked, setLocked] = React.useState(() => isLockEnabled());
+    const [privacyMode, setPrivacyMode] = React.useState(() => readPrivacyDefault());
+    const lastActivity = React.useRef(Date.now());
+    const lockedRef = React.useRef(locked);
+    lockedRef.current = locked;
+
+    React.useEffect(() => {
+        if (!lockEnabled) return undefined;
+        const bump = () => { lastActivity.current = Date.now(); };
+        const idleLimit = () => getIdleMinutes() * 60000;
+        const check = () => {
+            const limit = idleLimit();
+            if (limit > 0 && !lockedRef.current && Date.now() - lastActivity.current > limit) setLocked(true);
+        };
+        const events = ["pointerdown", "keydown", "wheel", "touchstart"];
+        events.forEach((e) => window.addEventListener(e, bump, { passive: true }));
+        const timer = setInterval(check, 10000);
+        const onVisible = () => { if (document.visibilityState === "visible") check(); };
+        document.addEventListener("visibilitychange", onVisible);
+        return () => {
+            events.forEach((e) => window.removeEventListener(e, bump));
+            clearInterval(timer);
+            document.removeEventListener("visibilitychange", onVisible);
+        };
+    }, [lockEnabled]);
+
+    const privacy = {
+        privacyMode,
+        setPrivacyMode,
+        togglePrivacy: () => setPrivacyMode((p) => !p),
+        lockEnabled,
+        lockNow: () => { if (isLockEnabled()) setLocked(true); },
+        onLockChanged: () => { const on = isLockEnabled(); setLockEnabled(on); if (!on) setLocked(false); }
+    };
+
+    return (
+        <>
+            <div style={{ display: locked ? "none" : "contents" }} aria-hidden={locked}>
+                <AppInner privacy={privacy} />
+            </div>
+            {locked && <LockScreen onUnlock={() => { lastActivity.current = Date.now(); setLocked(false); }} />}
+        </>
     );
 };

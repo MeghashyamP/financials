@@ -1381,6 +1381,11 @@
                 display: none !important;
             }
 
+            /* Stack the sticky mobile top bar above the page (in a row they sat side by side and squeezed the content) */
+            .app-container {
+                flex-direction: column;
+            }
+
             /* Responsive Topbar on Mobile */
             .topbar {
                 display: flex !important;
@@ -2210,3 +2215,26 @@
         .payments-item-card:hover .upcoming-days-hover {
             display: inline-block;
         }
+
+/* Nav badge (Needs Review count) */
+.nav-badge {
+    margin-left: auto;
+    background: var(--danger, #DC2626);
+    color: #fff;
+    font-size: 0.68rem;
+    font-weight: 700;
+    min-width: 18px;
+    height: 18px;
+    line-height: 18px;
+    padding: 0 5px;
+    border-radius: 9px;
+    text-align: center;
+}
+.nav-badge-mobile {
+    position: absolute;
+    top: 2px;
+    right: 8px;
+    margin-left: 0;
+}
+.mobile-nav-item { position: relative; }
+.sidebar-collapsed .nav-badge, .sidebar.collapsed .nav-badge { position: absolute; top: 2px; right: 4px; margin-left: 0; }

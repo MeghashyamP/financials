@@ -85,7 +85,7 @@ const deriveKey = async (password, saltBuffer) => {
  * Encrypt any JSON-serializable object with a passphrase.
  * Pipeline: JSON String -> Gzip Compression -> AES-GCM 256-bit Encryption -> Base64 Envelope
  */
-export const encryptPayload = async (dataObj, passphrase) => {
+export const encryptPayload = async (dataObj, passphrase, { recoveryPublicKey = null } = {}) => {
     if (!passphrase) {
         throw new Error("Encryption passphrase is required.");
     }
@@ -110,7 +110,7 @@ export const encryptPayload = async (dataObj, passphrase) => {
         compressedBytes
     );
 
-    return {
+    const envelope = {
         isEncrypted: true,
         isCompressed: typeof CompressionStream === 'function',
         version: 2,
@@ -119,6 +119,11 @@ export const encryptPayload = async (dataObj, passphrase) => {
         ciphertext: bufferToBase64(ciphertextBuffer),
         timestamp: new Date().toISOString()
     };
+    // Optional recovery blob (see "recovery kit" below). It sits beside the ciphertext and is ignored by decryptPayload.
+    if (recoveryPublicKey) {
+        envelope.recovery = await wrapForRecovery(passphrase, recoveryPublicKey);
+    }
+    return envelope;
 };
 
 /**
@@ -165,3 +170,71 @@ export const decryptPayload = async (envelope, passphrase) => {
         throw new Error("Invalid password or corrupted data. Decryption failed.");
     }
 };
+
+// ───────────────────────── Recovery kit ─────────────────────────
+// The cloud copy is encrypted with the account password. If that password is forgotten (or changed through the
+// e-mail reset, which cannot know the old one), the data is unreadable. A recovery kit is an RSA key pair made once:
+//   • the PUBLIC key is kept in your settings and used on every save to seal the current password into
+//     `envelope.recovery` (only the private key can open it);
+//   • the PRIVATE key is downloaded as a file you keep offline.
+// With the kit, the old password can be recovered and the data decrypted; the next save re-seals the new password.
+
+const RSA_PARAMS = { name: 'RSA-OAEP', hash: 'SHA-256' };
+
+const keyId = async (publicJwk) => {
+    const digest = await window.crypto.subtle.digest('SHA-256', new TextEncoder().encode(String(publicJwk.n || '')));
+    return Array.from(new Uint8Array(digest)).slice(0, 6).map((b) => b.toString(16).padStart(2, '0')).join('');
+};
+
+export const generateRecoveryKit = async () => {
+    const pair = await window.crypto.subtle.generateKey(
+        { ...RSA_PARAMS, modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]) }, true, ['encrypt', 'decrypt']
+    );
+    const publicKey = await window.crypto.subtle.exportKey('jwk', pair.publicKey);
+    const privateKey = await window.crypto.subtle.exportKey('jwk', pair.privateKey);
+    return { publicKey, privateKey, kid: await keyId(publicKey) };
+};
+
+export const wrapForRecovery = async (secret, publicJwk) => {
+    const key = await window.crypto.subtle.importKey('jwk', publicJwk, RSA_PARAMS, false, ['encrypt']);
+    const ct = await window.crypto.subtle.encrypt({ name: 'RSA-OAEP' }, key, new TextEncoder().encode(String(secret)));
+    return { v: 1, alg: 'RSA-OAEP-256', kid: await keyId(publicJwk), ct: bufferToBase64(ct) };
+};
+
+/** Open an envelope's recovery blob with the private key from the kit file; returns the sealed password. */
+export const recoverSecret = async (recoveryBlob, privateJwk) => {
+    if (!recoveryBlob || !recoveryBlob.ct) throw new Error('This cloud copy has no recovery data. It was saved before a recovery kit was created.');
+    let key;
+    try {
+        key = await window.crypto.subtle.importKey('jwk', privateJwk, RSA_PARAMS, false, ['decrypt']);
+    } catch (e) {
+        throw new Error('The recovery kit file is not valid.');
+    }
+    if (recoveryBlob.kid && privateJwk && privateJwk.n && (await keyId(privateJwk)) !== recoveryBlob.kid) {
+        throw new Error('This recovery kit does not match the cloud copy (a newer kit was created, or it belongs to another account).');
+    }
+    try {
+        const plain = await window.crypto.subtle.decrypt({ name: 'RSA-OAEP' }, key, base64ToBuffer(recoveryBlob.ct));
+        return new TextDecoder().decode(plain);
+    } catch (e) {
+        throw new Error('The recovery kit could not open the cloud copy.');
+    }
+};
+
+/** Parse the text of a kit file (as downloaded) into its private key. */
+export const parseRecoveryKit = (text) => {
+    let kit;
+    try { kit = JSON.parse(text); } catch (e) { throw new Error('That is not a recovery kit file.'); }
+    if (!kit || kit.type !== 'financials-recovery-kit' || !kit.privateKey) throw new Error('That is not a recovery kit file.');
+    return kit;
+};
+
+export const buildRecoveryKitFile = ({ privateKey, kid, email = '' }) => JSON.stringify({
+    type: 'financials-recovery-kit',
+    version: 1,
+    kid,
+    email,
+    createdAt: new Date().toISOString(),
+    warning: 'Keep this file offline and private. With it, anyone who can also read your cloud copy can unlock your financial data. It cannot be re-downloaded; create a new kit if you lose it.',
+    privateKey
+}, null, 2);

@@ -303,7 +303,7 @@ export const TransactionsPage = ({
                                             </td>
 
                                             <td style={{ fontWeight: 600, color: isNeutralTx ? "var(--info)" : (isIncomeTx ? "var(--success)" : "var(--danger)"), whiteSpace: 'nowrap', textAlign: 'center' }}>
-                                                {`${isNeutralTx ? (t.neutralSign === "-" ? "-" : "+") : (isIncomeTx ? "+" : "-")}${formatCurrency(t.amount)}`}
+                                                {`${isNeutralTx ? ((t.neutralSign || (t.type === "expense" ? "-" : "+")) === "-" ? "-" : "+") : (isIncomeTx ? "+" : "-")}${formatCurrency(t.amount)}`}
                                             </td>
 
                                             <td style={{ fontSize: '0.78rem', color: 'var(--text-muted)', maxWidth: '110px', textAlign: 'center' }}>

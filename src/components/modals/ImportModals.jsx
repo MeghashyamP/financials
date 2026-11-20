@@ -1,10 +1,13 @@
 import React from 'react';
-import { Icon, DEFAULT_CATEGORIES, processImportedTransaction, useEscapeKey, formatCurrencyVal, renderCategoryOptions } from '../../utils.jsx';
+import { Icon, DEFAULT_CATEGORIES, processImportedTransaction, useEscapeKey, formatCurrencyVal, renderCategoryOptions, maskNumbersInText, formatDate, localizeDatesInText, DatePickerField, generateFingerprint } from '../../utils.jsx';
+import { planImport, withFingerprints } from '../../services/importDedupe.js';
 import { 
   loadImportLibraries, parseCSVText, preprocessPDFWithPDFLib, splitPdfIntoPages, 
   parseBankStatementWithGeminiAI, performCanvasOCRForPage, parseFallbackPDFText,
-  parseHeuristicDate, extractTextFromPDF, parseTransactionsFromPDFText
+  parseHeuristicDate, extractTextFromPDF, parseTransactionsFromPDFText, hasStatementTemplate,
+  isPdfEncrypted, verifyAndUnlockPdf
 } from '../../services/importers.js';
+import { checkAgainstHistory } from '../../services/statementLedger.js';
 
         export const ImportFileModal = ({ onClose, onCsvParsed, onPdfParsed, showToast, settings, rules = [] }) => {
             useEscapeKey(onClose);
@@ -13,6 +16,20 @@ import {
             const [apiKey, setApiKey] = React.useState(() => localStorage.getItem("gemini_api_key") || "");
             const [processing, setProcessing] = React.useState(false);
             const [statusMsg, setStatusMsg] = React.useState("Extracting text and identifying transactions…");
+
+            // Password handling state for encrypted PDFs
+            const [passwordRequiredFile, setPasswordRequiredFile] = React.useState(null); // { file, arrayBuffer }
+            const [pdfPassword, setPdfPassword] = React.useState("");
+            const [passwordError, setPasswordError] = React.useState("");
+            const [showPassword, setShowPassword] = React.useState(false);
+            const fileInputRef = React.useRef(null);
+
+            // Gemini consent: statement pages leave the browser, so ask before the first upload.
+            const [aiConsentPending, setAiConsentPending] = React.useState(null); // { file, arrayBuffer, unlockedPdf }
+            const [rememberAiConsent, setRememberAiConsent] = React.useState(false);
+            const hasAiConsent = () => {
+                try { return localStorage.getItem("gemini_consent_v1") === "1"; } catch (e) { return false; }
+            };
 
             const accounts = settings?.accounts || ["Bank 1", "Bank 2", "Credit Card 1"];
             const [selectedAccount, setSelectedAccount] = React.useState(accounts[0] || "");
@@ -25,51 +42,204 @@ import {
                 localStorage.setItem("gemini_api_key", val.trim());
             };
 
+            const runPdfExtraction = async (file, arrayBuffer, unlockedPdf, aiApproved = false) => {
+                setProcessing(true);
+                try {
+                    let parsedTx = [];
+                    const effectiveApiKey = (apiKey.trim() || localStorage.getItem("gemini_api_key") || "").trim();
+
+                    // 1) Local, deterministic issuer template first (exact + audited, nothing leaves the browser).
+                    let localText = null;
+                    try {
+                        setStatusMsg("🔍 Reading statement locally…");
+                        localText = await extractTextFromPDF(file, pdfPassword.trim(), unlockedPdf);
+                    } catch (e) {
+                        console.warn("Local text extraction failed, continuing with selected engine:", e);
+                    }
+
+                    if (localText && hasStatementTemplate(localText)) {
+                        setStatusMsg("✅ Known statement layout detected — parsing locally…");
+                        parsedTx = parseTransactionsFromPDFText(localText, file.name);
+                    } else if (pdfEngine === "ai" && effectiveApiKey) {
+                        if (!aiApproved && !hasAiConsent()) {
+                            // Not a layout we can read locally: stop and ask before anything is uploaded.
+                            setAiConsentPending({ file, arrayBuffer, unlockedPdf });
+                            setPasswordRequiredFile(null); // show the consent panel instead of the password form
+                            setProcessing(false);
+                            return;
+                        }
+                        setStatusMsg("⚡ Preparing document for Gemini AI extraction…");
+                        const availableCats = settings?.categories || DEFAULT_CATEGORIES;
+                        parsedTx = await parseBankStatementWithGeminiAI(
+                            file,
+                            effectiveApiKey,
+                            (msg) => setStatusMsg(msg),
+                            availableCats,
+                            rules,
+                            unlockedPdf
+                        );
+                    } else {
+                        setStatusMsg("🔒 Running open-source spatial table extractor…");
+                        const text = localText || await extractTextFromPDF(file, pdfPassword.trim(), unlockedPdf);
+                        parsedTx = parseTransactionsFromPDFText(text, file.name);
+                    }
+
+                    if (!parsedTx || parsedTx.length === 0) {
+                        showToast("No structured transactions detected in PDF.", "warning");
+                        setProcessing(false);
+                        return; // Do NOT proceed to column mapping if 0 transactions were found
+                    }
+
+                    // Reset password state on success
+                    setPasswordRequiredFile(null);
+                    setPdfPassword("");
+                    setPasswordError("");
+                    setProcessing(false);
+
+                    onPdfParsed(parsedTx, file.name, file, effectiveAccount);
+                } catch (err) {
+                    console.error("Manual upload parse error:", err);
+                    showToast(`Error parsing file: ${err.message}`, "error");
+                    setProcessing(false);
+                } finally {
+                    if (fileInputRef.current) fileInputRef.current.value = "";
+                }
+            };
+
+            const approveAiUpload = async () => {
+                const pending = aiConsentPending;
+                if (!pending) return;
+                if (rememberAiConsent) {
+                    try { localStorage.setItem("gemini_consent_v1", "1"); } catch (e) { }
+                }
+                setAiConsentPending(null);
+                await runPdfExtraction(pending.file, pending.arrayBuffer, pending.unlockedPdf, true);
+            };
+
+            const useLocalInstead = async () => {
+                const pending = aiConsentPending;
+                setAiConsentPending(null);
+                setPdfEngine("local");
+                if (!pending) return;
+                setProcessing(true);
+                try {
+                    setStatusMsg("🔒 Running open-source spatial table extractor…");
+                    const text = await extractTextFromPDF(pending.file, pdfPassword.trim(), pending.unlockedPdf);
+                    const parsed = parseTransactionsFromPDFText(text, pending.file.name);
+                    if (!parsed || parsed.length === 0) {
+                        showToast("No structured transactions detected in PDF.", "warning");
+                        setProcessing(false);
+                        return;
+                    }
+                    setPasswordRequiredFile(null);
+                    setPdfPassword("");
+                    setProcessing(false);
+                    onPdfParsed(parsed, pending.file.name, pending.file, effectiveAccount);
+                } catch (err) {
+                    showToast(`Error parsing file: ${err.message}`, "error");
+                    setProcessing(false);
+                } finally {
+                    if (fileInputRef.current) fileInputRef.current.value = "";
+                }
+            };
+
+            const cancelAiConsent = () => {
+                setAiConsentPending(null);
+                setPasswordRequiredFile(null);
+                setPdfPassword("");
+                if (fileInputRef.current) fileInputRef.current.value = "";
+            };
+
             const handleFileChange = async (e) => {
                 const file = e.target.files?.[0];
                 if (!file) return;
                 if (!effectiveAccount) {
                     showToast("Please select or enter an account before uploading.", "warning");
+                    if (fileInputRef.current) fileInputRef.current.value = "";
                     return;
                 }
 
-                setProcessing(true);
-                try {
-                    if (importType === "pdf" || file.name.toLowerCase().endsWith(".pdf")) {
-                        let parsedTx = [];
+                if (importType === "pdf" || file.name.toLowerCase().endsWith(".pdf")) {
+                    setProcessing(true);
+                    setStatusMsg("Checking document encryption…");
+                    try {
                         await loadImportLibraries();
-
-                        if (pdfEngine === "ai" && (apiKey.trim() || localStorage.getItem("gemini_api_key"))) {
-                            setStatusMsg("⚡ Preparing document for Gemini AI extraction…");
-                            const availableCats = settings?.categories || DEFAULT_CATEGORIES;
-                            parsedTx = await parseBankStatementWithGeminiAI(file, apiKey.trim(), (msg) => setStatusMsg(msg), availableCats, rules);
-                        } else {
-                            setStatusMsg("🔒 Running open-source spatial table extractor…");
-                            const text = await extractTextFromPDF(file);
-                            parsedTx = parseTransactionsFromPDFText(text, file.name);
+                        const arrayBuffer = await file.arrayBuffer();
+                        const encrypted = await isPdfEncrypted(arrayBuffer);
+                        if (encrypted) {
+                            // PDF is password-protected! Ask to enter password.
+                            // DO NOT EXTRACT YET!
+                            setProcessing(false);
+                            setPasswordRequiredFile({ file, arrayBuffer });
+                            setPdfPassword("");
+                            setPasswordError("");
+                            return;
                         }
 
-                        if (!parsedTx || parsedTx.length === 0) {
-                            showToast("No structured transactions detected in PDF.", "warning");
-                        }
-
-                        onPdfParsed(parsedTx, file.name, file, effectiveAccount);
-                    } else {
-                        // CSV parsing
+                        // Not encrypted, proceed directly to extract
+                        await runPdfExtraction(file, arrayBuffer, null);
+                    } catch (err) {
+                        console.error("PDF inspect error:", err);
+                        setProcessing(false);
+                        showToast(`Error reading PDF: ${err.message}`, "error");
+                        if (fileInputRef.current) fileInputRef.current.value = "";
+                    }
+                } else {
+                    // CSV parsing
+                    setProcessing(true);
+                    try {
                         const reader = new FileReader();
                         reader.onload = (event) => {
                             const text = event.target.result;
                             const rows = parseCSVText(text);
+                            setProcessing(false);
                             onCsvParsed(rows, file.name);
                         };
                         reader.readAsText(file);
+                    } catch (err) {
+                        setProcessing(false);
+                        showToast(`Error reading CSV: ${err.message}`, "error");
                     }
-                } catch (err) {
-                    console.error("Manual upload parse error:", err);
-                    showToast(`Error parsing file: ${err.message}`, "error");
-                } finally {
-                    setProcessing(false);
                 }
+            };
+
+            const handlePasswordSubmit = async (e) => {
+                e.preventDefault();
+                if (!pdfPassword.trim()) {
+                    setPasswordError("Please enter the statement password.");
+                    return;
+                }
+
+                setPasswordError("");
+                setProcessing(true);
+                setStatusMsg("Verifying statement password…");
+
+                try {
+                    const unlockedPdf = await verifyAndUnlockPdf(passwordRequiredFile.arrayBuffer, pdfPassword.trim());
+                    if (!unlockedPdf) {
+                        // INCORRECT PASSWORD:
+                        // "if password wrong don't even extract;"
+                        setProcessing(false);
+                        setPasswordError("Incorrect password. Statement could not be unlocked. Extraction stopped.");
+                        return; // STOP! DO NOT EXTRACT!
+                    }
+
+                    // Password is correct! Now extract
+                    setStatusMsg("Password verified! Extracting transactions…");
+                    await runPdfExtraction(passwordRequiredFile.file, passwordRequiredFile.arrayBuffer, unlockedPdf);
+                } catch (err) {
+                    console.error("Password verification error:", err);
+                    setProcessing(false);
+                    setPasswordError(`Error unlocking PDF: ${err.message}`);
+                }
+            };
+
+            const handleCancelPassword = () => {
+                setPasswordRequiredFile(null);
+                setPdfPassword("");
+                setPasswordError("");
+                setProcessing(false);
+                if (fileInputRef.current) fileInputRef.current.value = "";
             };
 
             return (
@@ -179,7 +349,112 @@ import {
                                 </div>
                             )}
 
-                            {processing ? (
+                            {passwordRequiredFile ? (
+                                <div style={{ background: '#FFFBEB', border: '1px solid #FDE68A', borderRadius: '12px', padding: '18px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                        <span style={{ fontSize: '1.5rem' }}>🔒</span>
+                                        <div>
+                                            <h4 style={{ margin: 0, fontSize: '0.95rem', fontWeight: 700, color: '#92400E' }}>
+                                                Password-Protected Statement
+                                            </h4>
+                                            <p style={{ margin: '2px 0 0', fontSize: '0.8rem', color: '#B45309' }}>
+                                                <strong>{passwordRequiredFile.file.name}</strong> is password protected. Enter password to unlock:
+                                            </p>
+                                        </div>
+                                    </div>
+
+                                    <form onSubmit={handlePasswordSubmit}>
+                                        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                                            <div style={{ position: 'relative', flex: 1 }}>
+                                                <input
+                                                    type={showPassword ? "text" : "password"}
+                                                    className="form-control"
+                                                    placeholder="Enter statement password…"
+                                                    value={pdfPassword}
+                                                    onChange={(e) => {
+                                                        setPdfPassword(e.target.value);
+                                                        setPasswordError("");
+                                                    }}
+                                                    disabled={processing}
+                                                    autoFocus
+                                                    style={{ paddingRight: '38px', fontSize: '0.9rem' }}
+                                                />
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setShowPassword(p => !p)}
+                                                    style={{ position: 'absolute', right: '8px', top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', fontSize: '1rem', padding: 0 }}
+                                                    title={showPassword ? "Hide password" : "Show password"}
+                                                >
+                                                    {showPassword ? "🙈" : "👁️"}
+                                                </button>
+                                            </div>
+                                            <button
+                                                type="submit"
+                                                className="btn btn-primary"
+                                                disabled={!pdfPassword.trim() || processing}
+                                                style={{ whiteSpace: 'nowrap' }}
+                                            >
+                                                {processing ? "Verifying…" : "Unlock & Extract"}
+                                            </button>
+                                            <button
+                                                type="button"
+                                                className="btn btn-secondary"
+                                                onClick={handleCancelPassword}
+                                                disabled={processing}
+                                            >
+                                                Cancel
+                                            </button>
+                                        </div>
+                                        {passwordError && (
+                                            <div style={{ color: 'var(--danger, #DC2626)', fontSize: '0.82rem', fontWeight: 600, marginTop: '8px' }}>
+                                                ⚠️ {passwordError}
+                                            </div>
+                                        )}
+                                    </form>
+
+                                    <div style={{ background: '#FFFFFF', border: '1px solid #FEF3C7', borderRadius: '8px', padding: '10px 12px', fontSize: '0.78rem', color: '#78350F' }}>
+                                        <span style={{ fontWeight: 700, display: 'block', marginBottom: '4px' }}>Common Bank Password Formats:</span>
+                                        <ul style={{ margin: 0, paddingLeft: '18px', display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                                            <li><strong>HDFC:</strong> Customer ID or Date of Birth (DDMMYYYY)</li>
+                                            <li><strong>SBI:</strong> Last 5 digits of registered mobile + DOB (DDMMYY)</li>
+                                            <li><strong>ICICI:</strong> First 4 letters of name + DOB (DDMM)</li>
+                                            <li><strong>Axis:</strong> First 4 letters of name (UPPERCASE) + DOB (DDMMYY)</li>
+                                            <li><strong>Kotak:</strong> CRN number or Name + DOB</li>
+                                        </ul>
+                                    </div>
+                                </div>
+                            ) : aiConsentPending ? (
+                                <div style={{ background: '#FFF7ED', border: '1px solid #FDBA74', borderRadius: '12px', padding: '18px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                        <span style={{ fontSize: '1.5rem' }}>☁️</span>
+                                        <h4 style={{ margin: 0, fontSize: '0.95rem', fontWeight: 700, color: '#9A3412' }}>
+                                            This statement layout isn't recognised — send it to Google Gemini?
+                                        </h4>
+                                    </div>
+                                    <div style={{ fontSize: '0.8rem', color: '#7C2D12', lineHeight: 1.55 }}>
+                                        <p style={{ margin: '0 0 6px' }}>
+                                            <strong>{aiConsentPending.file.name}</strong> is not one of the layouts this app reads on your device
+                                            (HDFC, SBI and ICICI cards and savings accounts are). To read it, each page would be turned into an
+                                            image and uploaded to Google.
+                                        </p>
+                                        <ul style={{ margin: '0 0 6px', paddingLeft: '18px' }}>
+                                            <li><strong>Blacked out before upload:</strong> card / account / reference numbers, phone numbers, e-mail addresses and PAN.</li>
+                                            <li><strong>Not removed:</strong> your name, address, merchant names, amounts and dates.</li>
+                                            <li>On the free tier, Google's terms allow submitted content to be used to improve its products. Check the current terms before relying on this.</li>
+                                        </ul>
+                                        <p style={{ margin: 0 }}>The offline extractor never uploads anything but may need a manual review of the rows.</p>
+                                    </div>
+                                    <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.8rem', color: '#7C2D12', cursor: 'pointer' }}>
+                                        <input type="checkbox" checked={rememberAiConsent} onChange={(e) => setRememberAiConsent(e.target.checked)} />
+                                        Don't ask again on this device
+                                    </label>
+                                    <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                                        <button type="button" className="btn btn-primary" onClick={approveAiUpload}>Send masked pages to Gemini</button>
+                                        <button type="button" className="btn btn-secondary" onClick={useLocalInstead}>Use offline extractor</button>
+                                        <button type="button" className="btn btn-secondary" onClick={cancelAiConsent}>Cancel</button>
+                                    </div>
+                                </div>
+                            ) : processing ? (
                                 <div style={{ textAlign: 'center', padding: '30px 0' }}>
                                     <div style={{ border: '3px solid #f3f3f3', borderTop: '3px solid var(--primary)', borderRadius: '50%', width: '32px', height: '32px', animation: 'spin 1s linear infinite', margin: '0 auto 12px auto' }}></div>
                                     <p style={{ color: 'var(--text-main)', fontWeight: 600, fontSize: '0.88rem' }}>{statusMsg}</p>
@@ -201,6 +476,7 @@ import {
                                         </p>
                                     </div>
                                     <input
+                                        ref={fileInputRef}
                                         type="file"
                                         style={{ display: 'none' }}
                                         accept={importType === "pdf" ? ".pdf" : ".csv"}
@@ -211,7 +487,7 @@ import {
                             )}
                         </div>
                         <div className="modal-footer">
-                            <button className="btn btn-secondary" onClick={onClose} disabled={processing}>Cancel</button>
+                            <button className="btn btn-secondary" onClick={aiConsentPending ? cancelAiConsent : (passwordRequiredFile ? handleCancelPassword : onClose)} disabled={processing}>Cancel</button>
                         </div>
                     </div>
                 </div>
@@ -625,13 +901,15 @@ import {
 
 
         // --- DIALOG COMPONENT: PDF Bank Statement Verification & Audit Dialog ---
-        export const PdfImportConfirmDialog = ({ pdfImportData, onClose, onConfirm, settings }) => {
+        const NO_ROWS = [];
+        export const PdfImportConfirmDialog = ({ pdfImportData, onClose, onConfirm, settings, existingTransactions = NO_ROWS }) => {
             const { transactions, filename } = pdfImportData;
 
             // Extract metadata from the first transaction object
             const sampleTx = transactions[0] || {};
             const bankProfile = sampleTx._bankProfile || { name: "Bank Statement", code: "GENERIC", icon: "📄", primaryColor: "#6558D3" };
-            const reconciliation = sampleTx._reconciliation || { passRate: 100, reconciled: true, totalDebits: 0, totalCredits: 0 };
+            const reconciliation = sampleTx._reconciliation || { status: 'unverifiable', passRate: 0, reconciled: false, totalDebits: 0, totalCredits: 0, checks: [], hints: [] };
+            const auditStatus = reconciliation.status || (reconciliation.reconciled ? 'verified' : 'mismatch');
 
             // Categories list
             const rawCategories = settings?.categories || DEFAULT_CATEGORIES;
@@ -643,7 +921,7 @@ import {
 
             // Link options
             const linkOptions = {
-                billInstances: (settings?.billInstances || []).filter(b => b.status === 'pending').map(b => ({ id: b.id, label: `${b.name} (Due ${b.dueDate}: ${formatCurrencyVal(b.amount, settings?.currency)})` })),
+                billInstances: (settings?.billInstances || []).filter(b => b.status === 'pending').map(b => ({ id: b.id, label: `${b.name} (Due ${formatDate(b.dueDate, settings?.dateFormat)}: ${formatCurrencyVal(b.amount, settings?.currency)})` })),
                 recurring: (settings?.recurring || []).map(r => ({ id: r.id, label: r.name })),
                 networth: (settings?.networthItems || []).filter(it => it.frequencyPerYear > 0).map(it => ({ id: it.id, label: `${it.name} (${it.category})` }))
             };
@@ -652,7 +930,10 @@ import {
             const [searchQuery, setSearchQuery] = React.useState("");
             const [rowFilter, setRowFilter] = React.useState("all"); // "all" | "attention"
 
+            // Rows the importer will not add (already in the app) don't need a second look.
+            const isSkippedByPlan = (item) => ["duplicate", "maybe-duplicate"].includes(planByTemp[item.tempId]?.action);
             const isNeedsAttention = (item) => {
+                if (isSkippedByPlan(item)) return false;
                 const conf = String(item._importConfidence || "").toLowerCase();
                 if (conf === "low" || conf === "medium") return true;
                 const cat = String(item.category || "");
@@ -660,8 +941,21 @@ import {
             };
 
             // Local state to keep track of edited fields and selection status
-            const [items, setItems] = React.useState(
-                transactions.map((t, idx) => ({
+            // What each row would do on import: skip (already imported / possible duplicate), replace a Dashboard payment, or add.
+            const toPlanRows = (rows) => withFingerprints(rows.map(r => ({
+                date: r.date,
+                amount: Math.abs(Number(r.amount) || 0),
+                type: r.type,
+                neutralSign: r.neutralSign,
+                account: r.account,
+                narration: r.narration,
+                merchant: r.narration,
+                refId: r.refId
+            })), generateFingerprint);
+            const planRecurring = settings?.recurring || NO_ROWS;
+
+            const [items, setItems] = React.useState(() => {
+                const base = transactions.map((t, idx) => ({
                     ...t,
                     narration: t.narration || t.merchant || "",
                     tags: Array.isArray(t.tags) ? t.tags.join(", ") : (t.tags || ""),
@@ -671,12 +965,26 @@ import {
                     linkTo: "",
                     tempId: idx,
                     selected: true
-                }))
+                }));
+                // Overlapping statements: rows that are already in the app start unticked
+                const firstPlan = planImport(toPlanRows(base), existingTransactions, { recurring: planRecurring });
+                return base.map((row, i) => ({ ...row, selected: firstPlan[i].action === "insert" || firstPlan[i].action === "replace" }));
+            });
+
+            const plan = React.useMemo(
+                () => planImport(toPlanRows(items), existingTransactions, { recurring: planRecurring }),
+                [items, existingTransactions, planRecurring]
             );
+            const planByTemp = React.useMemo(() => {
+                const m = {};
+                items.forEach((it, i) => { m[it.tempId] = plan[i]; });
+                return m;
+            }, [items, plan]);
+            const planCounts = plan.reduce((acc, p) => { acc[p.action] = (acc[p.action] || 0) + 1; return acc; }, { insert: 0, duplicate: 0, "maybe-duplicate": 0, replace: 0 });
 
             const handleToggleSelectAll = (e) => {
                 const checked = e.target.checked;
-                setItems(prev => prev.map(item => ({ ...item, selected: checked })));
+                setItems(prev => prev.map(item => (planByTemp[item.tempId]?.reason === "exact" ? { ...item, selected: false } : { ...item, selected: checked })));
             };
 
             const handleToggleItem = (tempId) => {
@@ -687,11 +995,22 @@ import {
 
             const handleFieldChange = (tempId, field, value) => {
                 setItems(prev => prev.map(item =>
-                    item.tempId === tempId ? { ...item, [field]: value } : item
+                    item.tempId === tempId
+                        ? { ...item, [field]: value, ...(field === "category" ? { categorySource: "manual", categoryConfidence: "high" } : {}) }
+                        : item
                 ));
             };
 
             const [saving, setSaving] = React.useState(false);
+            const [ackMismatch, setAckMismatch] = React.useState(false);
+
+            // What this statement says about the account's history (opening vs last closing, missed months).
+            const statementInfo = sampleTx._statement || null;
+            const statementAccount = (items[0] && items[0].account) || sampleTx.account || "";
+            const history = React.useMemo(
+                () => (statementInfo && statementAccount ? checkAgainstHistory(settings?.statements || [], statementAccount, statementInfo) : null),
+                [statementInfo, statementAccount, settings?.statements]
+            );
 
             const handleSave = async () => {
                 if (saving) return;
@@ -699,15 +1018,18 @@ import {
                 try {
                     const selectedItems = items
                         .filter(item => item.selected)
-                        .map(({ tempId, selected, ...rest }) => ({
+                        .map(({ tempId, selected, _reconciliation, _pdfMetadata, _statement, ...rest }) => ({
                             ...rest,
+                            // a row the importer would skip but you ticked anyway → add it
+                            forceInsert: ["duplicate", "maybe-duplicate"].includes(planByTemp[tempId]?.action) && planByTemp[tempId]?.reason !== "exact",
+                            skipPlaceholderMatch: !!rest.skipPlaceholderMatch,
                             narration: rest.narration,
                             merchant: rest.narration,
                             tags: Array.isArray(rest.tags)
                                 ? rest.tags
                                 : (typeof rest.tags === "string" ? rest.tags.split(",").map(t => t.trim()).filter(Boolean) : [])
                         }));
-                    await onConfirm(selectedItems);
+                    await onConfirm(selectedItems, statementInfo ? { summary: statementInfo, account: statementAccount, fileName: filename } : null);
                 } catch (err) {
                     console.error("Error in handleSave:", err);
                 } finally {
@@ -814,18 +1136,96 @@ import {
                                 <div>
                                     <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Math Reconciliation Audit</div>
                                     <div style={{ marginTop: '4px' }}>
-                                        {reconciliation.reconciled ? (
+                                        {auditStatus === 'verified' ? (
                                             <span style={{ background: '#D1FAE5', color: '#065F46', fontSize: '0.78rem', fontWeight: 700, padding: '4px 10px', borderRadius: '12px', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
-                                                <span>✅ 100% Math Reconciled</span>
+                                                <span>✅ Verified against statement totals</span>
+                                            </span>
+                                        ) : auditStatus === 'mismatch' ? (
+                                            <span style={{ background: '#FEE2E2', color: '#991B1B', fontSize: '0.78rem', fontWeight: 700, padding: '4px 10px', borderRadius: '12px', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                                                <span>❌ Mismatch — review before importing</span>
                                             </span>
                                         ) : (
                                             <span style={{ background: '#FEF3C7', color: '#92400E', fontSize: '0.78rem', fontWeight: 700, padding: '4px 10px', borderRadius: '12px', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
-                                                <span>⚠️ Check Notice ({reconciliation.passRate}% Math Match)</span>
+                                                <span>⚠️ Unverified — no statement totals to compare</span>
                                             </span>
                                         )}
                                     </div>
                                 </div>
                             </div>
+
+                            {/* Statement audit details: which checks ran and why a mismatch happened */}
+                            {Array.isArray(reconciliation.checks) && reconciliation.checks.length > 0 && (
+                                <div style={{
+                                    border: `1px solid ${auditStatus === 'mismatch' ? '#FCA5A5' : 'var(--border-color)'}`,
+                                    borderRadius: '10px', padding: '10px 14px', fontSize: '0.8rem',
+                                    background: auditStatus === 'mismatch' ? '#FEF2F2' : 'var(--bg-subtle, transparent)'
+                                }}>
+                                    <div style={{ fontWeight: 700, marginBottom: '6px' }}>Statement audit</div>
+                                    {reconciliation.checks.map((c) => (
+                                        <div key={c.id} style={{ display: 'flex', gap: '8px', alignItems: 'baseline', padding: '2px 0' }}>
+                                            <span>{c.status === 'pass' ? '✅' : '❌'}</span>
+                                            <span style={{ flex: 1 }}>{c.label}</span>
+                                            <span style={{ color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
+                                                {formatCurr(c.actual)} vs {formatCurr(c.expected)}
+                                                {c.status === 'fail' ? ` (off by ${formatCurr(Math.abs(c.diff))})` : ''}
+                                            </span>
+                                        </div>
+                                    ))}
+                                    {(reconciliation.hints || []).map((h, i) => (
+                                        <div key={i} style={{ marginTop: '4px', color: '#991B1B' }}>💡 {h}</div>
+                                    ))}
+                                    {auditStatus === 'mismatch' && (
+                                        <label style={{ display: 'flex', gap: '8px', alignItems: 'center', marginTop: '8px', fontWeight: 600, cursor: 'pointer' }}>
+                                            <input type="checkbox" checked={ackMismatch} onChange={(e) => setAckMismatch(e.target.checked)} />
+                                            I have reviewed the mismatch and want to import anyway
+                                        </label>
+                                    )}
+                                </div>
+                            )}
+
+                            {/* Statement history: does this statement continue the account's last one? */}
+                            {statementInfo && (
+                                <div style={{ border: '1px solid var(--border-color)', borderRadius: '10px', padding: '10px 14px', fontSize: '0.8rem' }}>
+                                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px 18px', alignItems: 'baseline' }}>
+                                        <span style={{ fontWeight: 700 }}>Statement</span>
+                                        <span>{statementAccount || 'No account selected'}{statementInfo.last4 ? ` • ${statementInfo.last4}` : ''}</span>
+                                        {(statementInfo.periodStart || statementInfo.periodEnd) && (
+                                            <span style={{ color: 'var(--text-muted)' }}>{statementInfo.periodStart ? `${formatDate(statementInfo.periodStart, settings?.dateFormat)} → ` : 'to '}{formatDate(statementInfo.periodEnd, settings?.dateFormat)}</span>
+                                        )}
+                                        {statementInfo.opening != null && statementInfo.closing != null && (
+                                            <span style={{ color: 'var(--text-muted)' }}>{formatCurr(statementInfo.opening)} → {formatCurr(statementInfo.closing)}</span>
+                                        )}
+                                        {statementInfo.dueDate && (
+                                            <span style={{ color: 'var(--text-muted)' }}>Due {formatDate(statementInfo.dueDate, settings?.dateFormat)}{statementInfo.minDue != null ? ` (min ${formatCurr(statementInfo.minDue)})` : ''}</span>
+                                        )}
+                                    </div>
+                                    {history && (
+                                        <div style={{ marginTop: '4px' }}>
+                                            {history.alreadyImported && <div>🔁 This statement period was imported before — rows already saved are skipped and its record is refreshed.</div>}
+                                            {history.status === 'first' && !history.alreadyImported && <div>🆕 First statement on record for this account.</div>}
+                                            {history.status === 'ok' && <div>✅ Continues the previous statement (opening balance matches its closing).</div>}
+                                            {history.notes.filter((n) => n.status === 'gap' || n.status === 'chain').map((n, i) => (
+                                                <div key={i} style={{ color: '#B45309' }}>⚠️ {n.with === 'next' ? 'Next statement on record: ' : ''}{maskNumbersInText(localizeDatesInText(n.message, settings?.dateFormat))}</div>
+                                            ))}
+                                            {history.notes.some((n) => n.status === 'overlap') && <div style={{ color: 'var(--text-muted)' }}>ℹ️ Overlaps a statement already on record; duplicate rows are skipped.</div>}
+                                        </div>
+                                    )}
+                                    <div style={{ marginTop: '4px', color: 'var(--text-muted)' }}>
+                                        On import: saved to Documents → Statement history{settings?.autoNetWorthFromStatements === false ? '' : ', Net Worth updated'}{statementInfo.kind === 'card' && statementInfo.dueDate ? ', due date added to Recurring & the calendar' : ''}.
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Overlap with what is already saved */}
+                            {(planCounts.duplicate + planCounts["maybe-duplicate"] + planCounts.replace) > 0 && (
+                                <div style={{ border: '1px solid #BFDBFE', background: '#EFF6FF', color: '#1E3A8A', borderRadius: '10px', padding: '8px 14px', fontSize: '0.8rem', display: 'flex', gap: '6px 16px', flexWrap: 'wrap' }}>
+                                    <strong>Checked against your saved transactions:</strong>
+                                    <span>{planCounts.insert + planCounts.replace} new</span>
+                                    {planCounts.duplicate > 0 && <span>♻️ {planCounts.duplicate} already imported — skipped</span>}
+                                    {planCounts["maybe-duplicate"] > 0 && <span>❓ {planCounts["maybe-duplicate"]} possible duplicate{planCounts["maybe-duplicate"] === 1 ? "" : "s"} — left out (tick to add)</span>}
+                                    {planCounts.replace > 0 && <span>🔁 {planCounts.replace} replace{planCounts.replace === 1 ? "s" : ""} a payment you ticked on the Dashboard</span>}
+                                </div>
+                            )}
 
                             {/* Search & Filter Tool Bar */}
                             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '10px' }}>
@@ -924,15 +1324,18 @@ import {
                                                         <input
                                                             type="checkbox"
                                                             checked={item.selected}
+                                                            disabled={planByTemp[item.tempId]?.reason === "exact"}
                                                             onChange={() => handleToggleItem(item.tempId)}
                                                             style={{ transform: 'scale(1.2)' }}
                                                         />
                                                     </td>
                                                     <td>
                                                         <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
-                                                            <input type="date" className="form-control" style={cellInput}
+                                                            <DatePickerField
                                                                 value={item.date}
-                                                                onChange={(e) => handleFieldChange(item.tempId, "date", e.target.value)}
+                                                                onChange={(v) => handleFieldChange(item.tempId, "date", v)}
+                                                                dateFormat={settings?.dateFormat}
+                                                                style={{ ...cellInput, minHeight: '30px' }}
                                                             />
                                                             {isNeedsAttention(item) && (
                                                                 <span style={{ fontSize: '0.65rem', fontWeight: 700, color: '#B45309', textTransform: 'uppercase', letterSpacing: '0.03em' }}>
@@ -946,6 +1349,26 @@ import {
                                                             value={item.narration}
                                                             onChange={(e) => handleFieldChange(item.tempId, "narration", e.target.value)}
                                                         />
+                                                        {(() => {
+                                                            const st = planByTemp[item.tempId];
+                                                            if (!st || st.action === "insert") return null;
+                                                            const base = { fontSize: '0.68rem', fontWeight: 600, marginTop: '3px', display: 'block' };
+                                                            if (st.action === "duplicate") {
+                                                                return <span style={{ ...base, color: '#1D4ED8' }}>♻️ {st.reason === "exact" ? "Already imported — can't be added twice" : "Already imported (same date, amount and reference) — skipped; tick to add anyway"}</span>;
+                                                            }
+                                                            if (st.action === "maybe-duplicate") {
+                                                                return <span style={{ ...base, color: '#B45309' }}>❓ Possible duplicate of “{String(st.matchLabel || "").slice(0, 40)}” — left out; tick to add</span>;
+                                                            }
+                                                            return (
+                                                                <span style={{ ...base, color: '#047857' }}>
+                                                                    🔁 Replaces your Dashboard payment “{String(st.matchLabel || "").slice(0, 32)}”{" "}
+                                                                    <button type="button" onClick={() => handleFieldChange(item.tempId, "skipPlaceholderMatch", !item.skipPlaceholderMatch)}
+                                                                        style={{ background: 'none', border: 'none', color: '#1D4ED8', cursor: 'pointer', textDecoration: 'underline', fontSize: '0.68rem', padding: 0 }}>
+                                                                        {item.skipPlaceholderMatch ? "Replace it instead" : "Keep both"}
+                                                                    </button>
+                                                                </span>
+                                                            );
+                                                        })()}
                                                     </td>
                                                     <td>
                                                         <select className="form-control" style={cellInput}
@@ -1034,7 +1457,7 @@ import {
                             <button
                                 className="btn btn-primary"
                                 onClick={handleSave}
-                                disabled={selectedCount === 0 || saving}
+                                disabled={selectedCount === 0 || saving || (auditStatus === 'mismatch' && !ackMismatch)}
                             >
                                 {saving ? "Importing…" : `Import ${selectedCount} Transaction${selectedCount !== 1 ? 's' : ''}`}
                             </button>

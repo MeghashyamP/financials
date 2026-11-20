@@ -6,6 +6,7 @@
  */
 
 import { getISOStringInTimezone, stripLocalOnlySettings } from '../utils.jsx';
+import { markBackup } from './backupStatus.js';
 
 // Check if File System Access API is supported in the browser
 export const isFileSystemAccessSupported = () => {
@@ -249,6 +250,7 @@ export const writeStateToLocalFile = async (handle, state) => {
         const writable = await targetHandle.createWritable();
         await writable.write(jsonString);
         await writable.close();
+        markBackup('linked');
 
         return true;
     } catch (err) {

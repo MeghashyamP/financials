@@ -1,4 +1,6 @@
 import React from "react";
+import { applyRules } from "./services/rulesEngine.js";
+import { categorize } from "./categorizer.js";
 
 export const DEFAULT_CATEGORIES = [
     // 1. Food & Drinks
@@ -337,136 +339,10 @@ export const DEFAULT_CATEGORIES = [
     "Others - Others ⚙️"
 ];
 
-// Smart merchant keyword & pattern heuristic classifier for auto-categorization into 30 main categories
-export const predictBestCategory = (narration = "", type = "expense", availableCategories = DEFAULT_CATEGORIES) => {
-    const text = String(narration).toLowerCase();
-    const categoriesPool = (availableCategories && availableCategories.length > 0) ? availableCategories : DEFAULT_CATEGORIES;
-
-    const findCategory = (substring) => {
-        return categoriesPool.find(c => c.toLowerCase().includes(substring.toLowerCase()));
-    };
-
-    // Specific heuristics for income
-    if (type === "income") {
-        if (/salary|payroll|stipend|wages|employer|direct dep/i.test(text)) return findCategory("Income - Salary") || findCategory("Income");
-        if (/bonus|incentive|reward/i.test(text)) return findCategory("Income - Bonus") || findCategory("Income");
-        if (/dividend|payout|yield/i.test(text)) return findCategory("Income - Dividend") || findCategory("Income");
-        if (/interest|int\.pd|int pd|int paid/i.test(text)) return findCategory("Income - Interest") || findCategory("Income");
-        if (/freelance|upwork|fiverr|consulting|stripe|paypal/i.test(text)) return findCategory("Income - Freelance") || findCategory("Income");
-        if (/rent|tenant|lease/i.test(text)) return findCategory("Income - Rental") || findCategory("Income");
-        if (/cashback|points/i.test(text)) return findCategory("Income - Cashback") || findCategory("Income");
-        if (/refund|reimbursement|return/i.test(text)) return findCategory("Income - Refund") || findCategory("Income");
-        if (/pension|epfo|provident/i.test(text)) return findCategory("Income - Pension") || findCategory("Income");
-    }
-
-    // Transfers & Inter-account
-    if (/\b(self|own account|transfer to self)\b/i.test(text)) return findCategory("Transfer - Self") || findCategory("Transfer");
-    if (/\b(imps|neft|rtgs|upi|transfer|fund transfer|bank transfer)\b/i.test(text) && !/zomato|swiggy|uber|amazon|flipkart|airtel|jio/i.test(text)) {
-        return findCategory("Transfer - Bank") || findCategory("Transfer");
-    }
-
-    // Food & Drinks
-    if (/zomato|swiggy|ubereats|blinkit|zepto|domino|pizza|mcdonald|kfc|burger|dunkin|starbucks|cafe|coffee|chai|tea|bakery|restaurant|dining|dinner|brunch|lunch|breakfast/i.test(text)) {
-        if (/swiggy|zomato|ubereats|domino/i.test(text)) return findCategory("Food & Drinks - Delivery") || findCategory("Food & Drinks");
-        if (/coffee|starbucks|chai|tea/i.test(text)) return findCategory("Food & Drinks - Coffee") || findCategory("Food & Drinks");
-        return findCategory("Food & Drinks - Dinner") || findCategory("Food & Drinks - Lunch") || findCategory("Food & Drinks");
-    }
-
-    // Groceries
-    if (/grocer|supermarket|bigbasket|blinkit|zepto|instamart|dmart|reliance fresh|nature basket|market|vegetable|fruit|meat|milk|dairy/i.test(text)) {
-        if (/veg/i.test(text)) return findCategory("Groceries - Veggies") || findCategory("Groceries");
-        if (/fruit/i.test(text)) return findCategory("Groceries - Fruits") || findCategory("Groceries");
-        return findCategory("Groceries - Staples") || findCategory("Groceries");
-    }
-
-    // Transport
-    if (/fuel|petrol|diesel|shell|hpcl|bpcl|iocl|cng|ev charge|uber|ola|rapido|namma yatri|cab|taxi|metro|irctc|railway|train|bus|redbus|toll|fastag|parking/i.test(text)) {
-        if (/petrol|fuel|diesel|shell|hpcl|bpcl|iocl/i.test(text)) return findCategory("Transport - Fuel") || findCategory("Transport");
-        if (/uber|ola|rapido|cab|taxi/i.test(text)) return findCategory("Transport - Cab") || findCategory("Transport");
-        if (/metro|train|irctc|bus|redbus/i.test(text)) return findCategory("Transport - Metro") || findCategory("Transport - Train") || findCategory("Transport");
-        if (/fastag|toll|parking/i.test(text)) return findCategory("Transport - Tolls") || findCategory("Transport");
-        return findCategory("Transport");
-    }
-
-    // Shopping
-    if (/amazon|flipkart|myntra|ajio|zara|h&m|uniqlo|shoppers stop|croma|reliance digital|apple|samsung|electronics|gadget|shoes|nike|adidas|puma|decathlon|clothes|shopping/i.test(text)) {
-        if (/clothes|myntra|zara|h&m|ajio|uniqlo/i.test(text)) return findCategory("Shopping - Clothes") || findCategory("Shopping");
-        if (/electronics|croma|apple|samsung|gadget/i.test(text)) return findCategory("Shopping - Electronics") || findCategory("Shopping");
-        return findCategory("Shopping - Gifts") || findCategory("Shopping");
-    }
-
-    // Utilities
-    if (/electricity|power|bescom|tata power|adani power|water|gas|indane|bharat gas|hp gas|broadband|wifi|airtel|jio|vi|vodafone|act fiber|rent|maintenance|garbage|bill/i.test(text)) {
-        if (/electricity|bescom|tata power/i.test(text)) return findCategory("Utilities - Electricity") || findCategory("Utilities");
-        if (/gas|indane|bharat gas/i.test(text)) return findCategory("Utilities - Gas") || findCategory("Utilities");
-        if (/airtel|jio|wifi|broadband|act/i.test(text)) return findCategory("Utilities - Internet") || findCategory("Utilities");
-        if (/rent/i.test(text)) return findCategory("Utilities - Rent") || findCategory("Utilities");
-        return findCategory("Utilities");
-    }
-
-    // Subscriptions
-    if (/netflix|spotify|youtube|prime|disney|hbo|apple music|chatgpt|openai|anthropic|github|google one|icloud|adobe|microsoft 365|zoom|notion/i.test(text)) {
-        if (/chatgpt|openai|anthropic|github/i.test(text)) return findCategory("Subscriptions - AI") || findCategory("Subscriptions");
-        if (/netflix|youtube|prime|disney/i.test(text)) return findCategory("Subscriptions - Video") || findCategory("Subscriptions");
-        if (/spotify|apple music/i.test(text)) return findCategory("Subscriptions - Audio") || findCategory("Subscriptions");
-        return findCategory("Subscriptions");
-    }
-
-    // Health
-    if (/doctor|hospital|clinic|pharmacy|apollo|medplus|pharmeasy|1mg|practo|dentist|lab|diagnostic|blood test|medicine|skincare|derma/i.test(text)) {
-        if (/pharmacy|apollo|medplus|pharmeasy|medicine/i.test(text)) return findCategory("Health - Medicines") || findCategory("Health");
-        if (/hospital|clinic/i.test(text)) return findCategory("Health - Hospital") || findCategory("Health");
-        return findCategory("Health - Doctor") || findCategory("Health");
-    }
-
-    // Fitness
-    if (/gym|cult\.fit|fitness|sports|yoga|badminton|swimming|marathon|trainer|decathlon/i.test(text)) {
-        return findCategory("Fitness - Gym") || findCategory("Fitness");
-    }
-
-    // Entertainment
-    if (/bookmyshow|pvr|inox|cinema|movie|concert|ticket|bowling|gaming|steam|playstation|xbox/i.test(text)) {
-        return findCategory("Entertainment - Movies") || findCategory("Entertainment");
-    }
-
-    // Travel
-    if (/flight|airline|indigo|air india|vistara|spicejet|hotel|makemytrip|goibibo|airbnb|booking\.com|agoda|resort|vacation|visa/i.test(text)) {
-        if (/flight|indigo|air india|vistara/i.test(text)) return findCategory("Travel - Flights") || findCategory("Travel");
-        if (/hotel|airbnb|booking|resort/i.test(text)) return findCategory("Travel - Hotels") || findCategory("Travel");
-        return findCategory("Travel");
-    }
-
-    // Investment
-    if (/mutual fund|groww|zerodha|upstox|kuvera|coin|indmoney|sip|ppf|nps|smallcase|crypto|binance|wazirx|gold|sgb|bond/i.test(text)) {
-        if (/mutual|sip|groww/i.test(text)) return findCategory("Investment - Mutual Funds") || findCategory("Investment");
-        if (/zerodha|upstox|stocks|equity/i.test(text)) return findCategory("Investment - Stocks") || findCategory("Investment");
-        if (/crypto|binance|wazirx/i.test(text)) return findCategory("Investment - Crypto") || findCategory("Investment");
-        if (/gold|sgb/i.test(text)) return findCategory("Investment - Gold") || findCategory("Investment");
-        return findCategory("Investment");
-    }
-
-    // Insurance
-    if (/insurance|lic|hdfc ergo|icici lombard|star health|max bupa|care insurance|policybazaar/i.test(text)) {
-        if (/health/i.test(text)) return findCategory("Insurance - Health") || findCategory("Insurance");
-        if (/vehicle|car|bike/i.test(text)) return findCategory("Insurance - Vehicle") || findCategory("Insurance");
-        return findCategory("Insurance - Life") || findCategory("Insurance");
-    }
-
-    // EMI & Credit
-    if (/emi|loan|mortgage|credit card|card payment|bnpl|cred|slice|onecard|uni/i.test(text)) {
-        if (/emi|loan/i.test(text)) return findCategory("EMI - Personal") || findCategory("EMI");
-        if (/credit card|cred|card payment/i.test(text)) return findCategory("Credit - Card") || findCategory("Credit");
-        return findCategory("Credit");
-    }
-
-    // Tax & Penalties
-    if (/income tax|gst|challan|fine|penalty|late fee/i.test(text)) {
-        if (/tax|gst/i.test(text)) return findCategory("Tax - Income") || findCategory("Tax");
-        return findCategory("Hidden Charges - Fine") || findCategory("Hidden Charges");
-    }
-
-    // Fallback for both Income and Expense when no specific keyword matches:
-    return findCategory("Others - Needs Review") || "Others - Needs Review 🔍";
+// Category prediction (see src/categorizer.js): learned history → structural rules → merchant dictionary → "Needs Review".
+export const predictBestCategory = (narration = "", type = "expense", availableCategories = DEFAULT_CATEGORIES, context = {}) => {
+    const pool = (availableCategories && availableCategories.length > 0) ? availableCategories : DEFAULT_CATEGORIES;
+    return categorize({ narration, type, pool, ...context }).category;
 };
 
 // Process imported transaction: predict category, apply user rules (rule overwrites), enforce category boundaries
@@ -482,19 +358,36 @@ export const processImportedTransaction = (tx, rules = [], availableCategories =
     // 1. Initial category prediction if missing, invalid, or generic
     let categoryVal = tx?.category || "";
     const isValidCategory = categoriesPool.includes(categoryVal);
+    let categorySource = tx?.categorySource || (categoryVal && isValidCategory ? "import" : "");
+    let categoryConfidence = tx?.categoryConfidence;
 
     if (!categoryVal || !isValidCategory || categoryVal === "Needs review" || categoryVal === "Uncategorized") {
-        categoryVal = predictBestCategory(merch, typeVal, categoriesPool);
+        const guess = categorize({
+            narration: merch, type: typeVal, pool: categoriesPool,
+            direction: tx?._direction, holder: tx?._holder, kind: tx?._statementKind
+        });
+        categoryVal = guess.category;
+        categorySource = guess.source;
+        categoryConfidence = guess.confidence;
     }
 
-    // 2. Evaluate user categorization rules (Rules OVERWRITE initial suggestions)
-    (rules || []).forEach(rule => {
-        if (rule && isRuleEnabled(rule) && rule.whenText && merch.toLowerCase().includes(String(rule.whenText).toLowerCase())) {
-            if (rule.thenText) {
-                categoryVal = rule.thenText;
-            }
-        }
-    });
+    // 2. Run the user's rules (Gmail-style: conditions → set category / add or remove tags). Rules beat the initial
+    //    guess; a category the user set by hand during review is left alone.
+    let working = {
+        ...tx,
+        narration: merch,
+        merchant: merch,
+        type: typeVal,
+        category: categoryVal,
+        categorySource,
+        categoryConfidence
+    };
+    if (working.neutralSign === undefined) delete working.neutralSign;
+    const ruled = applyRules(working, rules || [], { pool: categoriesPool });
+    working = ruled.tx;
+    categoryVal = working.category;
+    categorySource = working.categorySource;
+    categoryConfidence = working.categoryConfidence;
 
     // 3. Enforce category boundaries (cannot go beyond predefined + user custom categories)
     if (!categoriesPool.includes(categoryVal)) {
@@ -502,13 +395,22 @@ export const processImportedTransaction = (tx, rules = [], availableCategories =
         categoryVal = matched || categoriesPool.find(c => c.includes("Needs Review")) || "Others - Needs Review 🔍";
     }
 
-    return {
+    const result = {
         ...tx,
         narration: merch,
         merchant: merch,
-        type: typeVal,
-        category: categoryVal
+        type: working.type,
+        category: categoryVal,
+        categorySource: categorySource || undefined,
+        categoryConfidence: categoryConfidence || undefined
     };
+    if (working.type === "neutral") result.neutralSign = working.neutralSign;
+    else delete result.neutralSign;
+    if (ruled.changed || tx?.ruleChanges) {
+        result.tags = working.tags;
+        if (working.ruleChanges) result.ruleChanges = working.ruleChanges;
+    }
+    return result;
 };
 
 export const CATEGORY_DESCRIPTIONS = {
@@ -707,7 +609,24 @@ export const useEscapeKey = (onClose) => {
 };
 
 // --- global currency helper utilities ---
+// "Hide amounts" (privacy mode): every currency figure in the app goes through formatCurrencyVal, so masking here
+// covers every page. The flag is module-level and set by the App before it renders.
+let privacyMasked = false;
+export const setPrivacyMasked = (on) => { privacyMasked = !!on; };
+export const isPrivacyMasked = () => privacyMasked;
+// Mask money written inside plain sentences (statement checks, alert details); dates are left alone.
+export const maskNumbersInText = (text) => {
+    if (!privacyMasked) return text;
+    return String(text).replace(/\d[\d,]*(?:\.\d+)?/g, (m, off, str) => {
+        const prev = str[off - 1] || "";
+        const next = str[off + m.length] || "";
+        if (prev === "-" || next === "-" || /\d/.test(prev)) return m;
+        return "••";
+    });
+};
+
 export const formatCurrencyVal = (val, currencyCode = "INR") => {
+    if (privacyMasked) return `${getCurrencySymbol(currencyCode)} ••••`;
     const localeMap = {
         INR: "en-IN",
         USD: "en-US",
@@ -1062,6 +981,33 @@ export const formatDate = (dateInput, formatStyle = "24/Jun/2002 Sun") => {
     }
 };
 
+// "2026-08" → "Aug 2026" (or "08/2026", "2026-08", … following the chosen date format)
+export const formatMonthYear = (ym, formatStyle = "24/Jun/2002 Sun") => {
+    const m = String(ym || "").match(/^(\d{4})-(\d{2})$/);
+    if (!m) return String(ym || "");
+    const year = m[1];
+    const mm = m[2];
+    const names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    const mmm = names[Number(mm) - 1] || mm;
+    switch (formatStyle) {
+        case "MM/DD/YY": return `${mm}/${year.slice(-2)}`;
+        case "DD/MM/YYYY":
+        case "MM/DD/YYYY": return `${mm}/${year}`;
+        case "YYYY-MM-DD": return `${year}-${mm}`;
+        case "DD-MM-YYYY": return `${mm}-${year}`;
+        default: return `${mmm} ${year}`;
+    }
+};
+
+// Show every ISO date (2026-10-18) and month (2026-10) inside a sentence in the user's chosen date format.
+// Used for messages built in plain JS modules (statement checks, alerts) that only know ISO dates.
+export const localizeDatesInText = (text, formatStyle = "24/Jun/2002 Sun") => {
+    if (text === null || text === undefined) return text;
+    return String(text)
+        .replace(/\b(\d{4})-(\d{2})-(\d{2})\b/g, (m) => formatDate(m, formatStyle))
+        .replace(/\b(\d{4})-(\d{2})\b(?!-)/g, (m) => formatMonthYear(m, formatStyle));
+};
+
 export const formatDateTime = (dateInput, formatStyle = "24/Jun/2002 Sun") => {
     if (!dateInput) return "—";
     const date = new Date(dateInput);
@@ -1164,7 +1110,8 @@ export const generateFingerprint = (t) => {
     const merchantStr = String(t.merchant || "").trim().toLowerCase();
     const amountVal = Number(t.amount || 0).toFixed(2);
     const accountStr = String(t.account || "Imported account").trim().toLowerCase();
-    return `${dateStr}|${merchantStr}|${amountVal}|${accountStr}`;
+    // type is part of the key so a purchase and its same-day refund/reversal (same merchant + amount) are both kept
+    return `${dateStr}|${merchantStr}|${amountVal}|${accountStr}|${String(t.type || "expense").toLowerCase()}`;
 };
 
 // Lowercase and trim merchant, strip terminal # plus digits, reference numbers

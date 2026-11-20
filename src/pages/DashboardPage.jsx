@@ -1041,6 +1041,13 @@ const PaymentsSectionWidget = ({ settings, transactions, updateSetting, loadStat
                 }
             } else {
                 const noteMsg = `Created ${isIncome ? "Inflow" : "Outflow"} from Dashboard on ${dateFormatted}`;
+                // Temporary entry: when the real statement row arrives it replaces this one (services/importDedupe.js).
+                // `scheduledDate` is when the payment was due, so a late tick still matches the right statement row.
+                const accountList = settings.accounts || [];
+                const accountProfiles = settings.accountProfiles || {};
+                const payFrom = accountList.includes("Bank 1")
+                    ? "Bank 1"
+                    : (accountList.find(a => accountProfiles[a]?.type === "bank") || accountList[0] || "Bank 1");
                 const newTx = {
                     id: crypto.randomUUID(),
                     date: todayStr,
@@ -1049,8 +1056,10 @@ const PaymentsSectionWidget = ({ settings, transactions, updateSetting, loadStat
                     amount: item.amount,
                     type: item.type || "expense",
                     category: item.category || "Subscriptions",
-                    account: "Bank 1",
+                    account: payFrom,
                     linkedRecurringId: item.id,
+                    source: "dashboard",
+                    scheduledDate: item.date || todayStr,
                     tags: [],
                     notes: noteMsg
                 };

@@ -13,6 +13,7 @@ import {
     verifyRecoveryOtp,
     updateUserPassword
 } from '../../services/supabaseService.js';
+import { parseRecoveryKit } from '../../services/crypto.js';
 
 const hasMeaningfulData = (state) => {
     if (!state) return false;
@@ -22,35 +23,15 @@ const hasMeaningfulData = (state) => {
         ["recurring", "networthItems", "budgets", "goals", "billInstances"].some(k => Array.isArray(s[k]) && s[k].length > 0);
 };
 
-// Decide what happens on sign-in when the cloud and this device may both hold data.
+// Decide what happens on sign-in: online (cloud) data is always preferred over local device data.
 const chooseSyncDirection = (cloudData, localState) => {
-    const cloudHas = hasMeaningfulData(cloudData);
-    const localHas = hasMeaningfulData(localState);
+    // If the user has a cloud copy, always prefer it and overwrite the local browser info
+    if (cloudData) return "cloud";
 
-    if (cloudHas && !localHas) return "cloud";
-    if (!cloudHas && localHas) return "local";
-    if (!cloudHas && !localHas) return "none";
+    // If there is no cloud copy yet, but this device has local data, upload it to the cloud
+    if (hasMeaningfulData(localState)) return "local";
 
-    const cloudCount = cloudData.transactions?.length || 0;
-    const localCount = localState.transactions?.length || 0;
-    const syncedAt = cloudData.syncedAt ? new Date(cloudData.syncedAt).toLocaleString() : "an unknown time";
-
-    if (window.confirm(
-        `Both this device and your cloud account have data.\n\n` +
-        `Cloud copy: ${cloudCount} transactions (last synced ${syncedAt})\n` +
-        `This device: ${localCount} transactions\n\n` +
-        `OK: replace this device's data with the cloud copy.\n` +
-        `Cancel: see other options.`
-    )) return "cloud";
-
-    if (window.confirm(
-        `Upload this device's data to the cloud instead?\n\n` +
-        `This replaces the cloud copy (${cloudCount} transactions).\n\n` +
-        `OK: upload this device's data.\n` +
-        `Cancel: sign out and change nothing.`
-    )) return "local";
-
-    return "cancel";
+    return "none";
 };
 
 export const AuthModal = ({
@@ -73,6 +54,9 @@ export const AuthModal = ({
     const [notice, setNotice] = React.useState(initialNotice);
     const [resending, setResending] = React.useState(false);
     const [resendSuccess, setResendSuccess] = React.useState("");
+    // Optional recovery kit (file from Settings → Cloud recovery kit) for opening a cloud copy saved under an older password
+    const [recoveryKit, setRecoveryKit] = React.useState(null);
+    const [recoveryKitName, setRecoveryKitName] = React.useState("");
 
     React.useEffect(() => {
         if (initialNotice) {
@@ -124,11 +108,11 @@ export const AuthModal = ({
 
             let cloudData;
             try {
-                cloudData = await fetchUserDataFromCloud();
+                cloudData = await fetchUserDataFromCloud(null, { recoveryKit });
                 if (cloudData?.needsPassword) throw new Error("encryption key unavailable");
             } catch (fetchErr) {
                 await signOutUser().catch(() => {});
-                throw new Error(`Signed in, but the cloud data could not be decrypted (${fetchErr.message}). You have been signed out so nothing gets overwritten.`);
+                throw new Error(`Signed in, but the cloud data could not be decrypted (${fetchErr.message}). You have been signed out so nothing gets overwritten.${recoveryKit ? "" : " If you reset your password, attach your recovery kit below and sign in again."}`);
             }
 
             const choice = chooseSyncDirection(cloudData, localState);
@@ -140,7 +124,13 @@ export const AuthModal = ({
             }
             if (choice === "cloud") {
                 await syncCloudToLocal(cloudData);
-                showToast("Signed in and restored your data from the cloud.", "success");
+                if (cloudData?.recoveredViaKit) {
+                    // The cloud copy was still sealed under the old password: save it again under the one just used.
+                    try { await saveUserDataToCloud(cloudData, password); } catch (reErr) { console.warn("Re-saving recovered data:", reErr); }
+                    showToast("Recovered your data with the recovery kit and re-secured it under your current password.", "success");
+                } else {
+                    showToast("Signed in and restored your data from the cloud.", "success");
+                }
             } else if (choice === "local") {
                 await saveUserDataToCloud(localState);
                 showToast("Signed in and uploaded this device's data to the cloud.", "success");
@@ -283,8 +273,9 @@ export const AuthModal = ({
             // 2. Update user's password in Supabase Auth
             const updateRes = await updateUserPassword(password);
 
-            // 3. Re-encrypt & upload local data if available
-            if (localState) {
+            // 3. Re-encrypt & upload local data — but only if this device actually has data. An empty/new device must not
+            //    overwrite the cloud copy; that copy stays recoverable with the recovery kit (sign in → attach kit).
+            if (localState && hasMeaningfulData(localState)) {
                 try {
                     await saveUserDataToCloud(localState, password);
                 } catch (saveErr) {
@@ -322,7 +313,7 @@ export const AuthModal = ({
         setCloudSyncPaused(true);
         try {
             const res = await updateUserPassword(password);
-            if (localState) {
+            if (localState && hasMeaningfulData(localState)) {
                 try {
                     await saveUserDataToCloud(localState, password);
                 } catch (sErr) {
@@ -546,6 +537,30 @@ export const AuthModal = ({
                                 style={{ width: '100%', padding: '10px 12px', fontSize: '0.9rem', borderRadius: '8px', border: '1px solid var(--border-color)', boxSizing: 'border-box' }}
                             />
                         </div>
+
+                        <details style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+                            <summary style={{ cursor: 'pointer' }}>Reset your password or forgot the old one? Use a recovery kit</summary>
+                            <div style={{ marginTop: '8px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                <span>Your cloud data is encrypted with the password it was saved under. If you changed it, the recovery kit file you downloaded from Settings can still open it.</span>
+                                <input
+                                    type="file"
+                                    accept=".json,application/json"
+                                    onChange={async (e) => {
+                                        const f = e.target.files && e.target.files[0];
+                                        if (!f) { setRecoveryKit(null); setRecoveryKitName(""); return; }
+                                        try {
+                                            setRecoveryKit(parseRecoveryKit(await f.text()));
+                                            setRecoveryKitName(f.name);
+                                            setErrorMsg("");
+                                        } catch (kitErr) {
+                                            setRecoveryKit(null); setRecoveryKitName("");
+                                            setErrorMsg(kitErr.message);
+                                        }
+                                    }}
+                                />
+                                {recoveryKitName && <span style={{ color: 'var(--success, #059669)', fontWeight: 600 }}>✓ {recoveryKitName} attached</span>}
+                            </div>
+                        </details>
 
                         <button
                             type="submit"

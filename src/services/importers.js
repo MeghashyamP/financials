@@ -1,35 +1,47 @@
 import { processImportedTransaction, DEFAULT_CATEGORIES } from "../utils.jsx";
+import { parseStatementWithTemplate, detectStatementTemplate } from "./statementTemplates.js";
+import { maskSensitiveTextOnCanvas } from "./redaction.js";
 
-// Helper to dynamically load external heavy PDF & OCR libraries on-demand
-export const loadImportLibraries = async () => {
-    const scripts = [];
-    if (!window.pdfjsLib) {
-        scripts.push('https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js');
-    }
-    if (!window.PDFLib) {
-        scripts.push('https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js');
-    }
-    if (!window.Tesseract) {
-        scripts.push('https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js');
-    }
-
-    for (const src of scripts) {
-        await new Promise((resolve, reject) => {
-            const script = document.createElement('script');
-            script.src = src;
-            script.onload = resolve;
-            script.onerror = reject;
-            document.head.appendChild(script);
-        });
-    }
-
-    if (window.pdfjsLib && !window.pdfjsLib.GlobalWorkerOptions.workerSrc) {
-        window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
-    }
+// Heavy PDF / OCR libraries are bundled with the app and loaded lazily the first time an
+// import dialog needs them (no third-party CDN scripts, so nothing external can read the page,
+// and PDF text extraction works offline). The rest of this file reads them from `window`.
+//
+// Only the OCR *engine* for scanned/image PDFs (tesseract worker + language data) is still fetched
+// by tesseract.js from its default CDN on first use. Normal text statements never need it.
+let importLibsPromise = null;
+export const loadImportLibraries = () => {
+    if (importLibsPromise) return importLibsPromise;
+    importLibsPromise = (async () => {
+        if (!window.pdfjsLib) {
+            const [pdfjs, worker] = await Promise.all([
+                import('pdfjs-dist/build/pdf.js'),
+                import('pdfjs-dist/build/pdf.worker.min.js?url')
+            ]);
+            const lib = pdfjs.default && pdfjs.default.getDocument ? pdfjs.default : pdfjs;
+            lib.GlobalWorkerOptions.workerSrc = worker.default;
+            window.pdfjsLib = lib;
+        }
+        if (!window.PDFLib) {
+            const mod = await import('pdf-lib');
+            window.PDFLib = mod;
+        }
+        if (!window.Tesseract) {
+            // OCR is optional: never block normal imports if it fails to load.
+            try {
+                const mod = await import('tesseract.js');
+                window.Tesseract = mod.default || mod;
+            } catch (e) {
+                console.warn('OCR library unavailable:', e);
+            }
+        }
+    })().catch((e) => {
+        importLibsPromise = null;
+        throw e;
+    });
+    return importLibsPromise;
 };
 
-
-        // Client-side CSV Text Parser
+// Client-side CSV Text Parser
         export const parseCSVText = (text) => {
             const lines = [];
             let row = [""];
@@ -238,7 +250,7 @@ export const loadImportLibraries = async () => {
         };
 
         // Gemini Free Vision/PDF Bank Statement Parser API Client (Parallel Page-by-Page Extractor)
-        export const parseBankStatementWithGeminiAI = async (file, apiKey, onProgress, availableCategories = DEFAULT_CATEGORIES, rules = []) => {
+        export const parseBankStatementWithGeminiAI = async (file, apiKey, onProgress, availableCategories = DEFAULT_CATEGORIES, rules = [], unlockedPdf = null) => {
             const key = (apiKey || localStorage.getItem("gemini_api_key") || "").trim();
             if (!key) {
                 throw new Error("Gemini API Key is required for AI Bank Parsing. Get a free API key at https://aistudio.google.com/app/apikey");
@@ -276,18 +288,33 @@ export const loadImportLibraries = async () => {
                 console.warn("Model list discovery notice:", listErr);
             }
 
-            // 2. Split multi-page PDF into single page document chunks
+            // 2. Prepare pages. The raw PDF is never uploaded: every page is rendered locally to an image with
+            //    card/account/reference numbers, phone numbers, e-mails and PAN blacked out first.
+            if (!unlockedPdf && file.name.toLowerCase().endsWith('.pdf')) {
+                try {
+                    await loadImportLibraries();
+                    const rawBuffer = await file.arrayBuffer();
+                    unlockedPdf = await window.pdfjsLib.getDocument({ data: rawBuffer, isEvalSupported: false }).promise;
+                } catch (e) {
+                    throw new Error("Could not open the PDF locally to mask personal details, so nothing was sent to Gemini.");
+                }
+            }
             let pdfPages = [file];
-            if (file.name.toLowerCase().endsWith('.pdf')) {
+            let totalPages = 1;
+
+            if (unlockedPdf) {
+                totalPages = unlockedPdf.numPages;
+            } else if (file.name.toLowerCase().endsWith('.pdf')) {
                 try {
                     if (typeof onProgress === 'function') onProgress("📄 Inspecting PDF structure & splitting pages…");
                     pdfPages = await splitPdfIntoPages(file);
+                    totalPages = pdfPages.length;
                 } catch (e) {
                     console.warn("PDF page splitting notice, processing as single file:", e);
+                    totalPages = 1;
                 }
             }
 
-            const totalPages = pdfPages.length;
             const CONCURRENCY_LIMIT = 5; // Process 5 pages simultaneously in parallel batches
             const pageResults = new Array(totalPages);
             let completedCount = 0;
@@ -296,29 +323,48 @@ export const loadImportLibraries = async () => {
                 if (totalPages > 1) {
                     onProgress(`⚡ Gemini AI processing ${totalPages} pages in parallel (${CONCURRENCY_LIMIT} at once)…`);
                 } else {
-                    onProgress(`⚡ Gemini AI processing single page document…`);
+                    onProgress(`⚡ Gemini AI processing statement page…`);
                 }
             }
 
             // Helper function to process a single PDF page chunk via Gemini API
             const extractSinglePage = async (pageIdx, pageFile) => {
-                const base64Data = await new Promise((resolve, reject) => {
-                    const reader = new FileReader();
-                    reader.onload = () => {
-                        const res = reader.result;
-                        const b64 = typeof res === 'string' ? (res.split(',')[1] || res) : '';
-                        resolve(b64);
-                    };
-                    reader.onerror = (err) => reject(err);
-                    reader.readAsDataURL(pageFile);
-                });
+                let base64Data = "";
+                let mimeType = "application/pdf";
 
-                const mimeType = pageFile.type || 'application/pdf';
+                if (unlockedPdf) {
+                    const page = await unlockedPdf.getPage(pageIdx + 1);
+                    const viewport = page.getViewport({ scale: 2.0 });
+                    const canvas = document.createElement('canvas');
+                    canvas.width = viewport.width;
+                    canvas.height = viewport.height;
+                    const ctx = canvas.getContext('2d');
+                    await page.render({ canvasContext: ctx, viewport }).promise;
+                    try {
+                        await maskSensitiveTextOnCanvas(page, viewport, ctx, window.pdfjsLib);
+                    } catch (maskErr) {
+                        throw new Error("Could not mask personal details on a page, so nothing was sent to Gemini.");
+                    }
+                    base64Data = canvas.toDataURL('image/jpeg', 0.85).split(',')[1];
+                    mimeType = "image/jpeg";
+                } else {
+                    base64Data = await new Promise((resolve, reject) => {
+                        const reader = new FileReader();
+                        reader.onload = () => {
+                            const res = reader.result;
+                            const b64 = typeof res === 'string' ? (res.split(',')[1] || res) : '';
+                            resolve(b64);
+                        };
+                        reader.onerror = (err) => reject(err);
+                        reader.readAsDataURL(pageFile);
+                    });
+                    mimeType = (pageFile && pageFile.type) || 'application/pdf';
+                }
                 const currentYear = new Date().getFullYear();
 
                 const promptText = `You are an expert financial bank statement parser. Extract ALL transactions from this statement page.
 Return ONLY a valid JSON array of objects with NO markdown formatting, NO extra text.
-Do NOT skip any transaction line on this page. Do NOT stop early. Extract every single row.
+CRITICAL REQUIREMENT: Do NOT skip, omit, or summarize ANY transaction row. Every single row printed on this statement page MUST be extracted into the JSON array. Output ALL rows from top to bottom without stopping early.
 
 Transaction Classifications ("type"):
 - "inflow" (or "income"): Credits, deposits, salary, freelance payouts, interest received, refunds, cashbacks.
@@ -346,7 +392,7 @@ Keys required for each transaction object:
 
 Output format example:
 [
-  {"datePrinted":"01/02/26","date":"${currentYear}-02-01","narration":"UPI-SRI SAI LEELA AMBULA","amount":1000.0,"type":"outflow","category":"Food & Drinks - Fastfood 🍔","refId":"0000639803414548","confidence":"high"},
+  {"datePrinted":"01/02/26","date":"${currentYear}-02-01","narration":"UPI-SAMPLE TIFFIN CENTRE","amount":1000.0,"type":"outflow","category":"Food & Drinks - Fastfood 🍔","refId":"0000000000000001","confidence":"high"},
   {"datePrinted":"02/02/26","date":"${currentYear}-02-02","narration":"SALARY CREDIT ACME CORP","amount":50000.0,"type":"inflow","category":"Income - Salary 💵","refId":"NEFT12345678","confidence":"high"},
   {"datePrinted":"03/02/26","date":"${currentYear}-02-03","narration":"TRANSFER TO SAVINGS A/C","amount":5000.0,"type":"neutral","category":"Transfer - Bank Transfer 🏦","refId":"UPI87654321","confidence":"medium"}
 ]`;
@@ -368,28 +414,53 @@ Output format example:
                 let response = null;
                 let lastErrMsg = "";
 
-                for (const modelName of candidateModels) {
-                    try {
-                        const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${encodeURIComponent(key)}`;
-                        const res = await fetch(apiUrl, {
-                            method: "POST",
-                            headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify(payload)
-                        });
-                        if (res.ok) {
-                            response = res;
-                            break;
-                        } else {
-                            const errData = await res.json().catch(() => ({}));
-                            lastErrMsg = errData?.error?.message || `HTTP ${res.status}`;
+                // Retry loop with rate-limit backoff
+                for (let attempt = 0; attempt < 3; attempt++) {
+                    for (const modelName of candidateModels) {
+                        try {
+                            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${encodeURIComponent(key)}`;
+                            const res = await fetch(apiUrl, {
+                                method: "POST",
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify(payload)
+                            });
+
+                            if (res.ok) {
+                                response = res;
+                                break;
+                            } else if (res.status === 429 || res.status === 503) {
+                                const errData = await res.json().catch(() => ({}));
+                                lastErrMsg = errData?.error?.message || `HTTP ${res.status}`;
+                                // Rate limited - brief wait before trying next candidate model
+                                await new Promise(r => setTimeout(r, 1500));
+                            } else {
+                                const errData = await res.json().catch(() => ({}));
+                                lastErrMsg = errData?.error?.message || `HTTP ${res.status}`;
+                            }
+                        } catch (e) {
+                            lastErrMsg = e.message;
                         }
-                    } catch (e) {
-                        lastErrMsg = e.message;
                     }
+                    if (response) break;
+                    // Exponential backoff before next attempt across models
+                    await new Promise(r => setTimeout(r, 2000 * (attempt + 1)));
                 }
 
                 if (!response) {
-                    console.warn(`Page ${pageIdx + 1} extraction failed: ${lastErrMsg}`);
+                    console.warn(`Gemini page ${pageIdx + 1} extraction failed: ${lastErrMsg}. Falling back to spatial text extractor for this page.`);
+                    if (unlockedPdf) {
+                        try {
+                            const page = await unlockedPdf.getPage(pageIdx + 1);
+                            const textContent = await page.getTextContent();
+                            const pageLines = textContent.items.map(it => it.str).join("\n");
+                            const pageTxs = parseFallbackPDFText(pageLines, file.name);
+                            if (pageTxs.length > 0) {
+                                return { pageTx: pageTxs, rawText: pageLines };
+                            }
+                        } catch (fallbackErr) {
+                            console.error("Local page fallback error:", fallbackErr);
+                        }
+                    }
                     return { pageTx: [], rawText: "" };
                 }
 
@@ -399,10 +470,11 @@ Output format example:
                 return { pageTx, rawText };
             };
 
-            // Process pages in parallel batches
-            for (let i = 0; i < totalPages; i += CONCURRENCY_LIMIT) {
+            // Process pages in parallel batches with conservative concurrency (2 at a time) to prevent 429 rate limits
+            const BATCH_SIZE = 2;
+            for (let i = 0; i < totalPages; i += BATCH_SIZE) {
                 const batchIndices = [];
-                for (let j = i; j < Math.min(i + CONCURRENCY_LIMIT, totalPages); j++) {
+                for (let j = i; j < Math.min(i + BATCH_SIZE, totalPages); j++) {
                     batchIndices.push(j);
                 }
 
@@ -411,9 +483,14 @@ Output format example:
                     pageResults[pageIdx] = res;
                     completedCount++;
                     if (typeof onProgress === 'function' && totalPages > 1) {
-                        onProgress(`⚡ Gemini AI extracted ${completedCount} of ${totalPages} pages in parallel…`);
+                        onProgress(`⚡ Gemini AI extracted ${completedCount} of ${totalPages} pages…`);
                     }
                 }));
+
+                // Gentle pause between batches to respect Gemini Free RPM limit
+                if (i + BATCH_SIZE < totalPages) {
+                    await new Promise(r => setTimeout(r, 600));
+                }
             }
 
             // Aggregate results preserving strict page order
@@ -551,8 +628,9 @@ Output format example:
         const reconcileStatementBalances = (transactions) => {
             if (!transactions || transactions.length === 0) {
                 return {
-                    passRate: 100,
-                    reconciled: true,
+                    status: "unverifiable",
+                    passRate: 0,
+                    reconciled: false,
                     totalDebits: 0,
                     totalCredits: 0,
                     mathChecks: 0,
@@ -610,10 +688,12 @@ Output format example:
                 }
             }
 
-            const passRate = mathChecks > 0 ? Math.round((mathPasses / mathChecks) * 100) : 100;
+            // Nothing was actually compared → never claim success.
+            const passRate = mathChecks > 0 ? Math.round((mathPasses / mathChecks) * 100) : 0;
             return {
+                status: mathChecks === 0 ? "unverifiable" : (passRate >= 75 ? "verified" : "mismatch"),
                 passRate,
-                reconciled: passRate >= 75,
+                reconciled: mathChecks > 0 && passRate >= 75,
                 totalDebits: Math.round(totalDebits * 100) / 100,
                 totalCredits: Math.round(totalCredits * 100) / 100,
                 mathChecks,
@@ -653,8 +733,42 @@ Output format example:
             }
         };
 
+        // Check if PDF requires a password to open
+        export const isPdfEncrypted = async (arrayBuffer) => {
+            await loadImportLibraries();
+            const pdfjsLib = window['pdfjs-dist/build/pdf'] || window.pdfjsLib;
+            if (!pdfjsLib) throw new Error("PDF.js library is not loaded.");
+            try {
+                const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer, isEvalSupported: false });
+                await loadingTask.promise;
+                return false;
+            } catch (err) {
+                if (err.name === 'PasswordException') {
+                    return true;
+                }
+                throw err;
+            }
+        };
+
+        // Verify password and return unlocked PDF document, or null if incorrect
+        export const verifyAndUnlockPdf = async (arrayBuffer, password) => {
+            await loadImportLibraries();
+            const pdfjsLib = window['pdfjs-dist/build/pdf'] || window.pdfjsLib;
+            if (!pdfjsLib) throw new Error("PDF.js library is not loaded.");
+            try {
+                const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer, password, isEvalSupported: false });
+                const pdf = await loadingTask.promise;
+                return pdf;
+            } catch (err) {
+                if (err.name === 'PasswordException') {
+                    return null; // Incorrect password - stop immediately!
+                }
+                throw err;
+            }
+        };
+
         // Client-side PDF Text & Geometry Extractor (with PDF-lib Pre-Processing & Password Decryption)
-        export const extractTextFromPDF = async (file) => {
+        export const extractTextFromPDF = async (file, userPassword = "", existingPdf = null) => {
             await loadImportLibraries();
             return new Promise((resolve, reject) => {
                 const reader = new FileReader();
@@ -662,48 +776,39 @@ Output format example:
                     try {
                         const arrayBuffer = e.target.result;
 
-                        // Pre-process PDF with PDF-lib for document metadata, AcroForm fields, and geometry
-                        const pdfLibResult = await preprocessPDFWithPDFLib(arrayBuffer);
-
                         const pdfjsLib = window['pdfjs-dist/build/pdf'] || window.pdfjsLib;
                         if (!pdfjsLib) {
                             throw new Error("PDF.js library is not loaded.");
                         }
 
-                        let pdf = null;
-                        let password = "";
-                        let attempts = 0;
-
-                        while (attempts < 3) {
+                        let pdf = existingPdf;
+                        if (!pdf) {
                             try {
                                 const loadingTask = pdfjsLib.getDocument({
                                     data: arrayBuffer,
-                                    password: password
+                                    password: userPassword || "",
+                                    // Hardening: pdf.js 3.x can run injected font code via eval on a crafted PDF
+                                    isEvalSupported: false
                                 });
                                 pdf = await loadingTask.promise;
-                                break; // Success!
                             } catch (err) {
                                 if (err.name === 'PasswordException') {
-                                    attempts++;
-                                    if (attempts >= 3) {
-                                        throw new Error("Incorrect password entered 3 times.");
-                                    }
-                                    const passwordHints = `Password Hints for Bank Statements:\n• HDFC: Cust ID / DOB (DDMMYYYY)\n• SBI: Last 5 mobile digits + DOB (DDMMYY)\n• ICICI: Name 4 letters + DOB (DDMM)\n• Axis: Name 4 letters + DOB (DDMMYY)\n• Kotak: CRN or Name + DOB`;
-                                    const msg = attempts > 1
-                                        ? `Incorrect password (Attempt ${attempts}/3).\nPlease enter password for "${file.name}":\n\n${passwordHints}`
-                                        : `The file "${file.name}" is password-protected.\n\n${passwordHints}\n\nEnter Password:`;
-                                    password = prompt(msg);
-                                    if (password === null) {
-                                        throw new Error("Password decryption cancelled by user.");
-                                    }
-                                } else {
-                                    throw err;
+                                    throw new Error("Incorrect or missing password for encrypted PDF.");
                                 }
+                                throw err;
                             }
                         }
 
                         if (!pdf) {
                             throw new Error("Failed to load PDF document.");
+                        }
+
+                        // Pre-process PDF with PDF-lib for document metadata if not encrypted
+                        let pdfLibResult = { formTextItems: [], metadata: {}, formFields: [], pageInfos: [] };
+                        try {
+                            pdfLibResult = await preprocessPDFWithPDFLib(arrayBuffer);
+                        } catch (pErr) {
+                            console.warn("PDF-lib notice:", pErr);
                         }
 
                         let fullText = "";
@@ -857,6 +962,96 @@ Output format example:
             return null;
         };
 
+        // True when a local template can read this document (used to prefer it over the AI parser).
+        export const hasStatementTemplate = (pdfResult) => {
+            const items = typeof pdfResult === "object" && pdfResult?.items ? pdfResult.items : [];
+            return items.length > 0 && !!detectStatementTemplate(items);
+        };
+
+        // Credits that are bill payments (not income/refunds) are pass-through for expense tracking.
+        const CARD_BILL_NARRATION_RE = /CRED\s*CLUB|CC\s*PAYMENT|CREDIT\s*CARD|CARD\s*PAYMENT|BPPY/i;
+        const PAYMENT_NARRATION_RE = /\b(PAYMENT|BPPY|BBPS|NEFT|IMPS|RTGS|AUTOPAY|AUTO DEBIT|THANK YOU)\b/i;
+
+        // crypto.randomUUID needs a secure context (HTTPS/localhost) — fine on GitHub Pages, but be defensive.
+        const newId = () => (typeof crypto !== "undefined" && crypto.randomUUID)
+            ? crypto.randomUUID()
+            : `tx_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
+
+        const parseStatementTemplate = (pageItems, pdfMetadata) => {
+            let parsed = null;
+            try {
+                parsed = parseStatementWithTemplate(pageItems);
+            } catch (e) {
+                console.warn("Statement template failed, falling back to generic parser:", e);
+                return null;
+            }
+            if (!parsed) return null;
+
+            const bankProfile = {
+                name: `${parsed.issuer} ${parsed.product && parsed.product !== parsed.issuer ? "· " + parsed.product : ""}`.trim(),
+                code: parsed.template,
+                icon: parsed.kind === "bank" ? "🏦" : "💳",
+                primaryColor: "#6558D3"
+            };
+            const reconciliation = parsed.audit;
+
+            return parsed.rows.map((row) => {
+                let type;
+                let note = "";
+                if (parsed.kind === "bank") {
+                    // Savings/current account: card bill payments are pass-through (the card statement holds the spends).
+                    if (row.direction === "debit" && CARD_BILL_NARRATION_RE.test(row.description)) { type = "neutral"; note = "Credit card bill payment"; }
+                    else type = row.direction === "debit" ? "expense" : "income";
+                } else if (row.direction === "debit") type = "expense";
+                else type = PAYMENT_NARRATION_RE.test(row.description) ? "neutral" : "income";
+                // Purchase + its same-statement reversal (e.g. EMI conversion) cancel out: keep both as pass-through.
+                if (row.offsetOf !== undefined) type = "neutral";
+
+                const item = {
+                    id: newId(),
+                    date: row.date,
+                    narration: row.description || "Card Transaction",
+                    merchant: row.description || "Card Transaction",
+                    amount: row.amount,
+                    type,
+                    category: "",
+                    account: "",
+                    tags: [],
+                    notes: row.offsetOf !== undefined ? "Reversed within the same statement" : note,
+                    refId: row.refId || "",
+                    source: "pdf-import",
+                    receipt: false,
+                    _bankProfile: bankProfile,
+                    _templateParsed: true,
+                    _template: parsed.template,
+                    neutralSign: type === "neutral" ? (row.direction === "credit" ? "+" : "-") : undefined,
+                    _direction: row.direction,
+                    _holder: parsed.holder || "",
+                    _accountLast4: parsed.card?.last4 || "",
+                    _statementKind: parsed.kind,
+                    _importConfidence: row.date ? "high" : "low",
+                    _rawColumns: {
+                        "Date": row.date,
+                        "Description": row.description,
+                        "Amount": row.amount,
+                        "Direction": row.direction
+                    }
+                };
+                const processed = processImportedTransaction(item, [], DEFAULT_CATEGORIES);
+                // Money moved between your own accounts / card-bill settlements is never income or spending.
+                if (processed.type !== "neutral" && /^(Transfer|Misc) - |^Credit - Card/.test(processed.category || "")) {
+                    processed.type = "neutral";
+                    processed.neutralSign = row.direction === "credit" ? "+" : "-";
+                }
+                return {
+                    ...processed,
+                    _reconciliation: reconciliation,
+                    _statement: parsed.summary,
+                    _pdfMetadata: pdfMetadata || {}
+                };
+            });
+        };
+
         // High-Precision PDF Statement & Receipt Table Parser for Bank Statements
         export const parseTransactionsFromPDFText = (pdfResult, filename) => {
             const rawText = typeof pdfResult === "string" ? pdfResult : (pdfResult?.fullText || "");
@@ -868,9 +1063,16 @@ Output format example:
 
             const bankProfile = detectBankProfile(rawText);
 
+            // Pass 0: Deterministic per-issuer template (HDFC / SBI Card / ICICI …). When one recognises the
+            // document it is exact and is audited against the totals printed on the statement itself.
+            if (pageItems.length > 0) {
+                const templated = parseStatementTemplate(pageItems, pdfMetadata);
+                if (templated) return templated;
+            }
+
             let transactions = [];
 
-            // Pass 1 & 2: Position-aware spatial table parsing with baseline clustering & dynamic column bounding
+            // Pass 1: Position-aware spatial table parsing with baseline clustering & dynamic column bounding
             if (pageItems.length > 0) {
                 const tableResult = parsePositionedPDFTable(pageItems, filename, bankProfile);
                 if (tableResult && tableResult.transactions && tableResult.transactions.length > 0) {
@@ -878,12 +1080,28 @@ Output format example:
                 }
             }
 
-            // Pass 3: Fallback line-by-line parser if spatial table engine yielded 0 rows
-            if (transactions.length === 0) {
-                transactions = parseFallbackPDFText(rawText, filename);
+            // Pass 2: Fallback line-by-line block parser
+            const fallbackResult = parseFallbackPDFText(rawText, filename);
+            if (fallbackResult && fallbackResult.length > 0) {
+                if (transactions.length === 0) {
+                    transactions = fallbackResult;
+                } else if (fallbackResult.length > transactions.length) {
+                    // Fallback found significantly more transactions than table extractor
+                    // (e.g. 75 vs 51) - prioritize the more comprehensive extraction!
+                    console.log(`Fallback line parser found ${fallbackResult.length} transactions vs ${transactions.length} from table parser.`);
+                    transactions = fallbackResult;
+                } else {
+                    // Check if any transactions in fallback were missed by table extractor
+                    const existingSignatures = new Set(transactions.map(t => `${t.date}|${Number(t.amount || 0).toFixed(2)}`));
+                    const missing = fallbackResult.filter(t => !existingSignatures.has(`${t.date}|${Number(t.amount || 0).toFixed(2)}`));
+                    if (missing.length > 0) {
+                        console.log(`Adding ${missing.length} additional transactions captured by line parser.`);
+                        transactions = [...transactions, ...missing].sort((a, b) => (a.date || "").localeCompare(b.date || ""));
+                    }
+                }
             }
 
-            // Pass 4: Mathematical Balance Reconciliation & Audit Scoring
+            // Pass 3: Mathematical Balance Reconciliation & Audit Scoring
             const reconciliation = reconcileStatementBalances(transactions);
 
             // Enrich transaction objects with Bank Profile & Audit Metadata and auto-categorize into 30 categories
@@ -1032,12 +1250,34 @@ Output format example:
             const columnNames = columns.map(c => c.name);
 
             // Regroup text items into table rows with Multi-Line Narration Stitching
-            const dateRegex = /(?:\b)(\d{4}[-/.]\d{1,2}[-/.]\d{1,2}|\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4}|(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]* \d{1,2}(?:\s*,\s*\d{2,4})?|\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*(?:\s+\d{2,4})?)(?:\b)/i;
+            const comprehensiveDateRegex = /(?:\b)(\d{4}[-/.]\d{1,2}[-/.]\d{1,2}|\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4}|\d{1,2}[-/.\s]+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*[-/.\s]+\d{2,4}|(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*[-/.\s]+\d{1,2}[-/.\s,]+\d{2,4}|\d{1,2}[-/.\s]+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*)(?:\b)/i;
             const amountRegex = /(-?[₹$€£¥]?\s?\d{1,3}(?:,\d{2,3})*(?:\.\d{1,2})?)\s*(cr|dr|crv|drv)?\b/i;
 
             const dateColIdx = columns.findIndex(c => /date|dt/i.test(c.name) && !/val/i.test(c.name));
             const dateCol = dateColIdx >= 0 ? columns[dateColIdx] : columns[0];
             const narrationCol = columns.find(c => /narration|description|particulars|details/i.test(c.name)) || columns[1] || columns[0];
+
+            const checkLineStartsNewRow = (line) => {
+                const items = line.items || [];
+                if (items.length === 0) return false;
+
+                // 1. Check if any item in the left portion of the page (x < 260) matches date regex
+                for (let j = 0; j < Math.min(items.length, 5); j++) {
+                    const it = items[j];
+                    if (it.x < 260 && comprehensiveDateRegex.test(it.str.trim())) {
+                        return true;
+                    }
+                }
+
+                // 2. Check combined prefix of the first 4 items (handles split date tokens like "01/" + "02/2026")
+                const rawPrefix = items.slice(0, 4).map(it => it.str.trim()).join(" ");
+                const compactPrefix = rawPrefix.replace(/\s*([/.-])\s*/g, "$1");
+                if (comprehensiveDateRegex.test(rawPrefix) || comprehensiveDateRegex.test(compactPrefix)) {
+                    return true;
+                }
+
+                return false;
+            };
 
             const extractedRows = [];
             let currentRow = null;
@@ -1046,15 +1286,21 @@ Output format example:
             for (let i = headerLineIdx + 1; i < allSortedLines.length; i++) {
                 const line = allSortedLines[i];
                 const lineText = line.items.map(it => it.str).join(" ").trim();
+                if (!lineText) continue;
 
-                // Skip non-table page footers, terms, & running page titles
-                if (!lineText || /page\s*no\s*:|statement\s*of\s*account|nomination\s*:|statement\s*from|account\s*branch|hdfc\s*bank|joint\s*holders|total\s*debits|total\s*credits/i.test(lineText)) {
-                    continue;
+                // Check if line starts a NEW transaction row
+                const isNewRow = checkLineStartsNewRow(line);
+
+                if (!isNewRow) {
+                    // Skip repeated table headers on page 2, 3, etc.
+                    const headerMatches = headerKeywords.filter(kw => lineText.toLowerCase().includes(kw)).length;
+                    if (headerMatches >= 2) continue;
+
+                    // Skip running page titles and summary totals ONLY if not a new row
+                    if (/^(page\s*\d+\s*(of|\/)|statement\s*of\s*account|account\s*branch|joint\s*holders|nomination\s*:|statement\s*from|total\s*(debits|credits))/i.test(lineText)) {
+                        continue;
+                    }
                 }
-
-                // Check if line starts a NEW transaction row (contains date in date column or line start)
-                const dateItem = line.items.find(it => (it.x >= dateCol.xMin && it.x <= dateCol.xMax + 15) && dateRegex.test(it.str));
-                const isNewRow = Boolean(dateItem || (line.items.length >= 2 && dateRegex.test(line.items[0].str)));
 
                 if (isNewRow) {
                     if (currentRow) {
@@ -1111,12 +1357,12 @@ Output format example:
                 let dateVal = "";
                 const dateKey = columnNames.find(k => /date|dt/i.test(k) && !/val/i.test(k)) || columnNames[0];
                 if (rawColumns[dateKey]) {
-                    const match = rawColumns[dateKey].match(dateRegex);
+                    const match = rawColumns[dateKey].match(comprehensiveDateRegex);
                     if (match) dateVal = parseHeuristicDate(match[0]) || "";
                 }
                 if (!dateVal) {
                     for (const k of columnNames) {
-                        const match = (rawColumns[k] || "").match(dateRegex);
+                        const match = (rawColumns[k] || "").match(comprehensiveDateRegex);
                         if (match) {
                             dateVal = parseHeuristicDate(match[0]) || "";
                             if (dateVal) break;
@@ -1138,9 +1384,9 @@ Output format example:
                 }
 
                 // 4. Amount & Direction (Withdrawal vs Deposit vs Combined Amount)
-                const withdrawalKey = columnNames.find(k => /withdrawal|debit|dr/i.test(k));
-                const depositKey = columnNames.find(k => /deposit|credit|cr/i.test(k));
-                const amountKey = columnNames.find(k => /amount/i.test(k));
+                const withdrawalKey = columnNames.find(k => /withdrawal|debit|dr|paid\s*out/i.test(k));
+                const depositKey = columnNames.find(k => /deposit|credit|cr|paid\s*in/i.test(k));
+                const amountKey = columnNames.find(k => /amount|txn\s*amt|value/i.test(k));
 
                 let amountVal = 0;
                 let typeVal = "expense";
@@ -1175,6 +1421,23 @@ Output format example:
                     }
                 }
 
+                // If amount is still 0, scan all columns except Date and Balance for any numeric value
+                if (amountVal === 0) {
+                    for (const [colName, colVal] of Object.entries(rawColumns)) {
+                        if (/date|dt/i.test(colName) || /bal/i.test(colName)) continue;
+                        const amtMatch = colVal.match(/(?:[₹$€£¥]\s*)?(\d{1,3}(?:,\d{2,3})*(?:\.\d{1,2})|\d+\.\d{2})/);
+                        if (amtMatch) {
+                            const parsed = parseFloat(amtMatch[1].replace(/,/g, ''));
+                            if (!isNaN(parsed) && parsed > 0) {
+                                amountVal = parsed;
+                                if (/cr|deposit/i.test(colName) || /\bcr\b/i.test(colVal)) typeVal = "income";
+                                else typeVal = "expense";
+                                break;
+                            }
+                        }
+                    }
+                }
+
                 // Standalone "Type"/"Mode" column overrides direction when present
                 const typeColKey = columnNames.find(k => /^type$/i.test(k.trim()));
                 if (typeColKey && rawColumns[typeColKey]) {
@@ -1183,7 +1446,7 @@ Output format example:
                     else if (tVal.startsWith("dr")) typeVal = "expense";
                 }
 
-                // Skip invalid rows without amount and narration
+                // Skip completely empty rows
                 if (amountVal === 0 && narrationVal.length < 2) return;
 
                 transactions.push({
@@ -1208,50 +1471,74 @@ Output format example:
             return { transactions, columnNames };
         };
 
-        // Fallback PDF parser for unstructured bank statements
+        // Robust fallback line-by-line & multi-line block parser for bank statements
         export const parseFallbackPDFText = (text, filename) => {
-            const lines = text.split("\n").map(l => l.trim()).filter(l => l.length > 0);
+            const rawLines = text.split("\n").map(l => l.trim()).filter(l => l.length > 0);
             const transactions = [];
 
-            const dateRegex = /(?:\b)(\d{4}[-/.]\d{1,2}[-/.]\d{1,2}|\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4}|(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]* \d{1,2}(?:\s*,\s*\d{2,4})?|\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*(?:\s+\d{2,4})?)(?:\b)/i;
+            const dateRegex = /(?:\b)(\d{4}[-/.]\d{1,2}[-/.]\d{1,2}|\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4}|\d{1,2}[-/.\s]+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*[-/.\s]+\d{2,4}|(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*[-/.\s]+\d{1,2}[-/.\s,]+\d{2,4}|\d{1,2}[-/.\s]+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*)(?:\b)/i;
             const amountRegex = /(-?[₹$€£¥]?\s?\d{1,3}(?:,\d{2,3})*(?:\.\d{1,2})?)\s*(cr|dr|crv|drv)?\b/i;
             const refIdRegex = /(?:ref(?:erence)?\s*(?:no\.?|id|#)?|txn\s*(?:id|no\.?)?|upi\s*ref|imps\s*ref|neft\s*ref|rtgs\s*ref|chq\s*no\.?|cheque\s*no\.?)\s*[:#]?\s*([A-Z0-9]{6,30})/i;
 
             const fallbackCols = ["Date", "Description", "Ref ID", "Amount"];
 
-            for (const line of lines) {
-                if (/^(page \d|statement of account|opening balance\s*$|closing balance\s*$|total\s*$)/i.test(line)) continue;
+            // Group lines into transaction blocks starting with each date
+            const blocks = [];
+            let currentBlock = [];
 
-                const dateMatch = line.match(dateRegex);
-                const amtMatches = [...line.matchAll(new RegExp(amountRegex, "gi"))].filter(m => {
+            for (const line of rawLines) {
+                // Skip headers/footers if no date
+                const hasDate = dateRegex.test(line);
+                if (!hasDate && /^(page\s*\d+\s*(of|\/)|statement\s*of\s*account|account\s*branch|joint\s*holders|nomination\s*:|statement\s*from|total\s*(debits|credits))/i.test(line)) {
+                    continue;
+                }
+
+                if (hasDate) {
+                    if (currentBlock.length > 0) blocks.push(currentBlock);
+                    currentBlock = [line];
+                } else if (currentBlock.length > 0) {
+                    // Append continuation lines (multi-line narration)
+                    currentBlock.push(line);
+                }
+            }
+            if (currentBlock.length > 0) blocks.push(currentBlock);
+
+            for (const block of blocks) {
+                const combinedLine = block.join(" ").replace(/\s+/g, " ").trim();
+                const dateMatch = combinedLine.match(dateRegex);
+                const amtMatches = [...combinedLine.matchAll(new RegExp(amountRegex, "gi"))].filter(m => {
                     const digits = m[1].replace(/[^\d]/g, '');
                     return digits.length > 0;
                 });
 
                 if (dateMatch && amtMatches.length > 0) {
                     const dateStr = dateMatch[0];
-                    const amtMatch = amtMatches.length >= 2 ? amtMatches[amtMatches.length - 2] : amtMatches[0];
-                    const amtStr = amtMatch[0];
-                    const crDrMarker = (amtMatch[2] || "").toLowerCase();
-
                     let parsedDate = parseHeuristicDate(dateStr);
                     if (!parsedDate) continue;
 
-                    const cleanAmtStr = amtMatch[1].replace(/[^\d.-]/g, '');
+                    // Choose appropriate amount (if 2+ amounts: withdrawal/deposit and running balance)
+                    let chosenAmtMatch = amtMatches[0];
+                    if (amtMatches.length >= 2) {
+                        // Usually second to last is the transaction amount and last is running balance
+                        chosenAmtMatch = amtMatches[amtMatches.length - 2];
+                    }
+                    const amtStr = chosenAmtMatch[0];
+                    const crDrMarker = (chosenAmtMatch[2] || "").toLowerCase();
+                    const cleanAmtStr = chosenAmtMatch[1].replace(/[^\d.-]/g, '');
                     let amount = parseFloat(cleanAmtStr);
                     if (isNaN(amount) || amount === 0) continue;
 
-                    let type;
+                    let type = "expense";
                     if (crDrMarker.startsWith("cr")) type = "income";
                     else if (crDrMarker.startsWith("dr")) type = "expense";
                     else if (amount < 0) type = "expense";
-                    else if (/\b(credited|deposit|received|refund|salary|interest paid)\b/i.test(line)) type = "income";
+                    else if (/\b(credited|deposit|received|refund|salary|interest paid|cr\b)\b/i.test(combinedLine)) type = "income";
                     else type = "expense";
 
-                    const refMatch = line.match(refIdRegex);
+                    const refMatch = combinedLine.match(refIdRegex);
                     const refId = refMatch ? refMatch[1] : "";
 
-                    let narration = line
+                    let narration = combinedLine
                         .replace(dateStr, "")
                         .replace(amtStr, "")
                         .replace(refMatch ? refMatch[0] : "", "")
@@ -1260,7 +1547,7 @@ Output format example:
 
                     narration = narration.replace(/^(debit|credit|purchase|card|pos|withdrawal|deposit)\b/i, "").trim();
 
-                    if (narration.length > 2) {
+                    if (narration.length >= 2) {
                         transactions.push({
                             id: crypto.randomUUID(),
                             date: parsedDate,
