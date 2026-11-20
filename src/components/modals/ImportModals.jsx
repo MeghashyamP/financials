@@ -421,10 +421,11 @@ import { CategoryPickerModal } from './TransactionModals.jsx';
                                     <div style={{ background: '#FFFFFF', border: '1px solid #FEF3C7', borderRadius: '8px', padding: '10px 12px', fontSize: '0.78rem', color: '#78350F' }}>
                                         <span style={{ fontWeight: 700, display: 'block', marginBottom: '4px' }}>Common Bank Password Formats:</span>
                                         <ul style={{ margin: 0, paddingLeft: '18px', display: 'flex', flexDirection: 'column', gap: '2px' }}>
-                                            <li><strong>HDFC:</strong> Customer ID or Date of Birth (DDMMYYYY)</li>
-                                            <li><strong>SBI:</strong> Last 5 digits of registered mobile + DOB (DDMMYY)</li>
-                                            <li><strong>ICICI:</strong> First 4 letters of name + DOB (DDMM)</li>
-                                            <li><strong>Axis:</strong> First 4 letters of name (UPPERCASE) + DOB (DDMMYY)</li>
+                                            <li><strong>HDFC Bank:</strong> First 4 letters (UPPERCASE) + Date of Birth (DDMM)</li>
+                                            <li><strong>ICICI Bank:</strong> First 4 letters (lowercase) + Date of Birth (DDMM)</li>
+                                            <li><strong>SBI Credit Card:</strong> Date of Birth (DDMMYYYY) + last 4 digits of card</li>
+                                            <li><strong>SBI Bank:</strong> Date of Birth (DDMMYY) + last 5 digits of mobile number</li>
+                                            <li><strong>Axis Bank:</strong> First 4 letters of name (UPPERCASE) + DOB (DDMMYY)</li>
                                             <li><strong>Kotak:</strong> CRN number or Name + DOB</li>
                                         </ul>
                                     </div>

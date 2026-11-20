@@ -63,7 +63,7 @@ export const FeaturesGuidePage = () => {
             oneLiner: 'Upload your encrypted PDF statement and type your password. If you make a typo, it safely stops without scrambling your data.',
             howToUse: 'Click "Import" $\\to$ select your statement PDF. If the PDF has a password, a prompt appears asking for your statement password.',
             whatHappensNext: 'The app unlocks the statement completely inside your browser. If the password is wrong, it alerts you immediately and halts—nothing is extracted or imported until you provide the correct password.',
-            proTip: 'The modal shows helpful bank password hints (e.g., for HDFC: your Date of Birth + Customer ID/PAN; for SBI: your mobile number + DOB).'
+            proTip: 'The modal shows helpful bank password hints (e.g., HDFC: First 4 letters UPPERCASE + DOB DDMM; SBI Bank: DOB DDMMYY + mobile last 5; SBI Card: DOB DDMMYYYY + card last 4; ICICI: First 4 letters lowercase + DOB DDMM).'
         },
         {
             id: 'privacy-mode-hide',
