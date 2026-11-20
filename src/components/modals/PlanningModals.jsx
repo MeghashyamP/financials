@@ -1205,54 +1205,220 @@ const FrequencyPicker = ({ value, onChange }) => {
         // --- SUB-PAGE: Documents (Section 14) ---
 
 
-        export const CreateBudgetModal = ({ onClose, onSave, settings }) => {
+        export const CreateBudgetModal = ({ onClose, onSave, settings, tags = [] }) => {
             useEscapeKey(onClose);
-            const categories = settings.categories || [];
-            const [category, setCategory] = React.useState(categories[0] || "");
+            const rawCategories = (settings?.categories && settings.categories.length > 0) ? settings.categories : DEFAULT_CATEGORIES;
+            const categories = rawCategories.filter(c => !/Needs Review|Uncategorized/i.test(c));
+
+            // Extract unique main categories (e.g. "Food & Drinks", "Shopping", "Entertainment")
+            const mainCategories = React.useMemo(() => {
+                const set = new Set();
+                categories.forEach(c => {
+                    const main = c.includes(" - ") ? c.split(" - ")[0].trim() : c.trim();
+                    if (main) set.add(main);
+                });
+                return Array.from(set).sort();
+            }, [categories]);
+
+            // Available tags list
+            const availableTags = React.useMemo(() => {
+                const set = new Set();
+                (tags || []).forEach(t => {
+                    const name = typeof t === 'string' ? t : (t?.name || "");
+                    if (name) set.add(name.replace(/^#/, '').trim());
+                });
+                (settings?.tags || []).forEach(t => {
+                    const name = typeof t === 'string' ? t : (t?.name || "");
+                    if (name) set.add(name.replace(/^#/, '').trim());
+                });
+                return Array.from(set).filter(Boolean).sort();
+            }, [tags, settings]);
+
+            // Target envelope type: "mainCategory" | "subCategory" | "tag"
+            const [targetType, setTargetType] = React.useState("mainCategory");
+            const [selectedMainCategory, setSelectedMainCategory] = React.useState(mainCategories[0] || "Food & Drinks");
+            const [selectedSubCategory, setSelectedSubCategory] = React.useState(categories[0] || "");
+            const [selectedTag, setSelectedTag] = React.useState(availableTags[0] || "");
+            const [customTag, setCustomTag] = React.useState("");
             const [limit, setLimit] = React.useState("");
 
             const handleSubmit = (e) => {
                 e.preventDefault();
-                if (!category || !limit || isNaN(limit) || parseFloat(limit) <= 0) return;
-                onSave({ category, limit: parseFloat(limit) });
+                const limitNum = parseFloat(limit);
+                if (isNaN(limitNum) || limitNum <= 0) return;
+
+                if (targetType === "mainCategory") {
+                    if (!selectedMainCategory) return;
+                    onSave({
+                        targetType: "mainCategory",
+                        mainCategory: selectedMainCategory,
+                        category: `${selectedMainCategory} (All)`,
+                        limit: limitNum
+                    });
+                } else if (targetType === "tag") {
+                    const effectiveTag = (customTag.trim() || selectedTag || "").replace(/^#/, '').trim();
+                    if (!effectiveTag) return;
+                    onSave({
+                        targetType: "tag",
+                        tag: effectiveTag,
+                        category: `Tag: #${effectiveTag}`,
+                        limit: limitNum
+                    });
+                } else {
+                    if (!selectedSubCategory) return;
+                    onSave({
+                        targetType: "subCategory",
+                        subCategory: selectedSubCategory,
+                        category: selectedSubCategory,
+                        limit: limitNum
+                    });
+                }
             };
+
+            const currentCurrency = getCurrencySymbol(settings?.currency || "INR");
 
             return (
                 <div className="modal-overlay">
-                    <div className="modal-container">
+                    <div className="modal-container" style={{ maxWidth: '520px' }}>
                         <div className="modal-header">
-                            <h3 className="modal-title">Create Monthly Budget</h3>
+                            <div>
+                                <h3 className="modal-title">Create Monthly Budget</h3>
+                                <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', margin: '2px 0 0' }}>
+                                    Set spending envelopes for broad categories, specific subcategories, or custom tags
+                                </p>
+                            </div>
                             <button className="modal-close-btn" onClick={onClose}>
                                 <Icon name="close" />
                             </button>
                         </div>
                         <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'hidden' }}>
-                            <div className="modal-body">
-                                <div className="form-grid">
+                            <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                                {/* Target Type Pill Selector */}
+                                <div>
+                                    <label style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '6px', display: 'block' }}>
+                                        Envelope Scope
+                                    </label>
+                                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '6px', background: '#F1F5F9', padding: '4px', borderRadius: '10px' }}>
+                                        <button
+                                            type="button"
+                                            className={`btn btn-xs ${targetType === "mainCategory" ? "btn-primary" : "btn-secondary"}`}
+                                            onClick={() => setTargetType("mainCategory")}
+                                            style={{ padding: '6px 4px', fontSize: '0.76rem', fontWeight: targetType === "mainCategory" ? 700 : 500, border: 'none' }}
+                                        >
+                                            📁 Main Category
+                                        </button>
+                                        <button
+                                            type="button"
+                                            className={`btn btn-xs ${targetType === "subCategory" ? "btn-primary" : "btn-secondary"}`}
+                                            onClick={() => setTargetType("subCategory")}
+                                            style={{ padding: '6px 4px', fontSize: '0.76rem', fontWeight: targetType === "subCategory" ? 700 : 500, border: 'none' }}
+                                        >
+                                            🏷️ Subcategory
+                                        </button>
+                                        <button
+                                            type="button"
+                                            className={`btn btn-xs ${targetType === "tag" ? "btn-primary" : "btn-secondary"}`}
+                                            onClick={() => setTargetType("tag")}
+                                            style={{ padding: '6px 4px', fontSize: '0.76rem', fontWeight: targetType === "tag" ? 700 : 500, border: 'none' }}
+                                        >
+                                            🔖 Specific Tag
+                                        </button>
+                                    </div>
+                                </div>
+
+                                {/* Main Category Option */}
+                                {targetType === "mainCategory" && (
                                     <div className="form-field">
-                                        <label>Category Envelope</label>
-                                        <select className="form-control" value={category} onChange={(e) => setCategory(e.target.value)}>
+                                        <label>Select Main Category Envelope</label>
+                                        <select
+                                            className="form-control"
+                                            value={selectedMainCategory}
+                                            onChange={(e) => setSelectedMainCategory(e.target.value)}
+                                        >
+                                            {mainCategories.map(m => (
+                                                <option key={m} value={m}>{m} (All Subcategories)</option>
+                                            ))}
+                                        </select>
+                                        <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '6px', lineHeight: 1.4 }}>
+                                            💡 <strong>Broad Envelope:</strong> Any transaction in <em>{selectedMainCategory}</em> (e.g. breakfast, lunch, dinner, fastfood, groceries) will automatically count toward this budget limit.
+                                        </div>
+                                    </div>
+                                )}
+
+                                {/* Specific Subcategory Option */}
+                                {targetType === "subCategory" && (
+                                    <div className="form-field">
+                                        <label>Select Specific Subcategory Envelope</label>
+                                        <select
+                                            className="form-control"
+                                            value={selectedSubCategory}
+                                            onChange={(e) => setSelectedSubCategory(e.target.value)}
+                                        >
                                             {renderCategoryOptions(categories)}
                                         </select>
+                                        <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '6px', lineHeight: 1.4 }}>
+                                            💡 <strong>Narrow Envelope:</strong> Only transactions specifically categorized under this exact subcategory will count toward this budget.
+                                        </div>
                                     </div>
+                                )}
 
+                                {/* Specific Tag Option */}
+                                {targetType === "tag" && (
                                     <div className="form-field">
-                                        <label>Monthly Limit ({getCurrencySymbol(settings?.currency || "INR")})</label>
-                                        <input
-                                            type="number"
-                                            step="1"
-                                            className="form-control"
-                                            placeholder="500"
-                                            value={limit}
-                                            onChange={(e) => setLimit(e.target.value)}
-                                            required
-                                        />
+                                        <label>Select or Enter Tag Envelope</label>
+                                        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                                            {availableTags.length > 0 && (
+                                                <select
+                                                    className="form-control"
+                                                    style={{ flex: '1 1 180px' }}
+                                                    value={selectedTag}
+                                                    onChange={(e) => {
+                                                        setSelectedTag(e.target.value);
+                                                        setCustomTag("");
+                                                    }}
+                                                >
+                                                    <option value="">— Choose existing tag —</option>
+                                                    {availableTags.map(t => (
+                                                        <option key={t} value={t}>#{t}</option>
+                                                    ))}
+                                                </select>
+                                            )}
+                                            <input
+                                                type="text"
+                                                className="form-control"
+                                                style={{ flex: '1 1 180px' }}
+                                                placeholder={availableTags.length > 0 ? "Or type new tag…" : "Tag name (e.g. vacation)"}
+                                                value={customTag}
+                                                onChange={(e) => {
+                                                    setCustomTag(e.target.value);
+                                                    if (e.target.value) setSelectedTag("");
+                                                }}
+                                            />
+                                        </div>
+                                        <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '6px', lineHeight: 1.4 }}>
+                                            💡 <strong>Tag Envelope:</strong> Any expense transaction tagged with <strong>#{customTag.trim() || selectedTag || 'tag'}</strong> will count toward this budget regardless of its category.
+                                        </div>
                                     </div>
+                                )}
+
+                                {/* Monthly Limit */}
+                                <div className="form-field">
+                                    <label>Monthly Limit ({currentCurrency})</label>
+                                    <input
+                                        type="number"
+                                        step="1"
+                                        className="form-control"
+                                        placeholder="e.g. 15000"
+                                        value={limit}
+                                        onChange={(e) => setLimit(e.target.value)}
+                                        required
+                                        autoFocus
+                                    />
                                 </div>
                             </div>
                             <div className="modal-footer">
                                 <button type="button" className="btn btn-secondary" onClick={onClose}>Cancel</button>
-                                <button type="submit" className="btn btn-primary">Establish Limit</button>
+                                <button type="submit" className="btn btn-primary">Establish Envelope Limit</button>
                             </div>
                         </form>
                     </div>

@@ -73,6 +73,7 @@ export const RuleBuilderModal = ({ rule, transactions = [], settings = {}, tags 
 
     const categories = React.useMemo(() => (settings.categories || []).filter((c) => !NEEDS_REVIEW_RE.test(c)), [settings.categories]);
     const accounts = settings.accounts || [];
+    const recurringItems = (settings.recurring || []).filter(Boolean);
     const money = (v) => formatCurrencyVal(v, settings.currency || 'INR');
     const problem = validateRule(draft);
 
@@ -89,7 +90,7 @@ export const RuleBuilderModal = ({ rule, transactions = [], settings = {}, tags 
     const removeAct = (i) => setDraft((d) => ({ ...d, actions: d.actions.filter((_, k) => k !== i) }));
 
     const changeField = (i, field) => setCond(i, { field, op: fieldOps(field)[0].id, value: defaultValueFor(field), value2: '' });
-    const changeActionType = (i, type) => setAct(i, { type, value: type === 'setCategory' ? '' : [] });
+    const changeActionType = (i, type) => setAct(i, { type, value: (type === 'setCategory' || type === 'linkRecurring') ? '' : [], label: undefined });
 
     const save = async () => {
         if (problem || saving) return;
@@ -196,6 +197,12 @@ export const RuleBuilderModal = ({ rule, transactions = [], settings = {}, tags 
                                     <button type="button" className="form-control" style={{ ...inputStyle, width: 'auto', minWidth: '260px', textAlign: 'left', cursor: 'pointer' }} onClick={() => setPickerFor({ kind: 'action', index: i })}>
                                         {a.value || 'Choose category…'}
                                     </button>
+                                ) : a.type === 'linkRecurring' ? (
+                                    <select className="form-control" style={{ ...inputStyle, width: 'auto', minWidth: '260px' }} value={a.value || ''}
+                                        onChange={(e) => { const r = recurringItems.find((x) => x.id === e.target.value); setAct(i, { value: e.target.value, label: r ? r.name : '' }); }}>
+                                        <option value="">Choose a recurring payment…</option>
+                                        {recurringItems.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
+                                    </select>
                                 ) : (
                                     <TagListEditor value={a.value} onChange={(v) => setAct(i, { value: v })} tags={tags} allowNew={a.type === 'addTags'} />
                                 )}

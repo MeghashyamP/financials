@@ -18,11 +18,11 @@ export const TransactionsPage = ({
     updateSetting,
     search = "",
     narrationFilter = "",
-    categoryFilter = "all",
-    accountFilter = "all",
-    tagFilter = "all",
+    categoryFilter = [],
+    accountFilter = [],
+    tagFilter = [],
     amountFilter = "",
-    typeFilter = "all",
+    typeFilter = [],
     notesFilter = "",
     customFromDate = "",
     customToDate = "",
@@ -63,24 +63,26 @@ export const TransactionsPage = ({
             return false;
         }
 
-        if (categoryFilter !== "all" && t.category !== categoryFilter && !(t.category && t.category.startsWith(categoryFilter + " - "))) {
+        if (categoryFilter.length > 0 && !categoryFilter.some(f => t.category === f || (t.category && t.category.startsWith(f + " - ")))) {
             return false;
         }
 
-        if (accountFilter !== "all" && t.account !== accountFilter) {
+        if (accountFilter.length > 0 && !accountFilter.includes(t.account)) {
             return false;
         }
 
-        if (tagFilter !== "all" && (!t.tags || !t.tags.includes(tagFilter))) {
+        if (tagFilter.length > 0 && (!t.tags || !tagFilter.some(f => t.tags.includes(f)))) {
             return false;
         }
 
-        if (typeFilter !== "all" && t.type !== typeFilter) {
+        if (typeFilter.length > 0 && !typeFilter.includes(t.type)) {
             return false;
         }
 
         const af = amountFilter.trim();
-        if (af && !String(t.amount || "").includes(af)) {
+        // Several amounts can be given separated by commas (e.g. "500, 1200")
+        const afParts = af.split(",").map(x => x.trim()).filter(Boolean);
+        if (afParts.length && !afParts.some(x => String(t.amount || "").includes(x))) {
             return false;
         }
 

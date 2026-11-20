@@ -1,6 +1,8 @@
 import React from 'react';
-import { Icon, DEFAULT_CATEGORIES, processImportedTransaction, useEscapeKey, formatCurrencyVal, renderCategoryOptions, maskNumbersInText, formatDate, localizeDatesInText, DatePickerField, generateFingerprint } from '../../utils.jsx';
-import { planImport, withFingerprints } from '../../services/importDedupe.js';
+import { Icon, DEFAULT_CATEGORIES, processImportedTransaction, useEscapeKey, formatCurrencyVal, renderCategoryOptions, maskNumbersInText, formatDate, localizeDatesInText, DatePickerField, generateFingerprint, filterCategoriesByType, calculateNextExpectedDate, toLocalDateStr } from '../../utils.jsx';
+import { planImport, withFingerprints, appendRecurringName } from '../../services/importDedupe.js';
+import { ruleTextFor } from '../../services/review.js';
+import { planRecurringMatches, isAutoApplied } from '../../services/recurringMatch.js';
 import { 
   loadImportLibraries, parseCSVText, preprocessPDFWithPDFLib, splitPdfIntoPages, 
   parseBankStatementWithGeminiAI, performCanvasOCRForPage, parseFallbackPDFText,
@@ -8,17 +10,18 @@ import {
   isPdfEncrypted, verifyAndUnlockPdf
 } from '../../services/importers.js';
 import { checkAgainstHistory } from '../../services/statementLedger.js';
+import { CategoryPickerModal } from './TransactionModals.jsx';
 
         export const ImportFileModal = ({ onClose, onCsvParsed, onPdfParsed, showToast, settings, rules = [] }) => {
             useEscapeKey(onClose);
             const [importType, setImportType] = React.useState("pdf");
-            const [pdfEngine, setPdfEngine] = React.useState("ai"); // "ai" or "local"
+            const [pdfEngine, setPdfEngine] = React.useState("local"); // default to "local" (offline local)
             const [apiKey, setApiKey] = React.useState(() => localStorage.getItem("gemini_api_key") || "");
             const [processing, setProcessing] = React.useState(false);
             const [statusMsg, setStatusMsg] = React.useState("Extracting text and identifying transactions…");
 
             // Password handling state for encrypted PDFs
-            const [passwordRequiredFile, setPasswordRequiredFile] = React.useState(null); // { file, arrayBuffer }
+            const [passwordRequiredFile, setPasswordRequiredFile] = React.useState(null); // { file }
             const [pdfPassword, setPdfPassword] = React.useState("");
             const [passwordError, setPasswordError] = React.useState("");
             const [showPassword, setShowPassword] = React.useState(false);
@@ -164,20 +167,19 @@ import { checkAgainstHistory } from '../../services/statementLedger.js';
                     setStatusMsg("Checking document encryption…");
                     try {
                         await loadImportLibraries();
-                        const arrayBuffer = await file.arrayBuffer();
-                        const encrypted = await isPdfEncrypted(arrayBuffer);
+                        const encrypted = await isPdfEncrypted(file);
                         if (encrypted) {
                             // PDF is password-protected! Ask to enter password.
                             // DO NOT EXTRACT YET!
                             setProcessing(false);
-                            setPasswordRequiredFile({ file, arrayBuffer });
+                            setPasswordRequiredFile({ file });
                             setPdfPassword("");
                             setPasswordError("");
                             return;
                         }
 
                         // Not encrypted, proceed directly to extract
-                        await runPdfExtraction(file, arrayBuffer, null);
+                        await runPdfExtraction(file, null, null);
                     } catch (err) {
                         console.error("PDF inspect error:", err);
                         setProcessing(false);
@@ -215,7 +217,11 @@ import { checkAgainstHistory } from '../../services/statementLedger.js';
                 setStatusMsg("Verifying statement password…");
 
                 try {
-                    const unlockedPdf = await verifyAndUnlockPdf(passwordRequiredFile.arrayBuffer, pdfPassword.trim());
+                    const fileToUnlock = passwordRequiredFile?.file;
+                    if (!fileToUnlock) {
+                        throw new Error("File reference lost. Please select the file again.");
+                    }
+                    const unlockedPdf = await verifyAndUnlockPdf(fileToUnlock, pdfPassword.trim());
                     if (!unlockedPdf) {
                         // INCORRECT PASSWORD:
                         // "if password wrong don't even extract;"
@@ -226,7 +232,7 @@ import { checkAgainstHistory } from '../../services/statementLedger.js';
 
                     // Password is correct! Now extract
                     setStatusMsg("Password verified! Extracting transactions…");
-                    await runPdfExtraction(passwordRequiredFile.file, passwordRequiredFile.arrayBuffer, unlockedPdf);
+                    await runPdfExtraction(fileToUnlock, null, unlockedPdf);
                 } catch (err) {
                     console.error("Password verification error:", err);
                     setProcessing(false);
@@ -310,19 +316,19 @@ import { checkAgainstHistory } from '../../services/statementLedger.js';
                                         <div style={{ display: 'flex', gap: '6px' }}>
                                             <button
                                                 type="button"
-                                                className={`btn btn-xs ${pdfEngine === "ai" ? "btn-primary" : "btn-secondary"}`}
-                                                onClick={() => setPdfEngine("ai")}
-                                                style={{ fontSize: '0.75rem', padding: '3px 9px' }}
-                                            >
-                                                ⚡ Gemini AI (Higher Precision)
-                                            </button>
-                                            <button
-                                                type="button"
                                                 className={`btn btn-xs ${pdfEngine === "local" ? "btn-primary" : "btn-secondary"}`}
                                                 onClick={() => setPdfEngine("local")}
                                                 style={{ fontSize: '0.75rem', padding: '3px 9px' }}
                                             >
-                                                🔒 Offline Local
+                                                🔒 Offline Local (Default)
+                                            </button>
+                                            <button
+                                                type="button"
+                                                className={`btn btn-xs ${pdfEngine === "ai" ? "btn-primary" : "btn-secondary"}`}
+                                                onClick={() => setPdfEngine("ai")}
+                                                style={{ fontSize: '0.75rem', padding: '3px 9px' }}
+                                            >
+                                                ⚡ Gemini AI (Optional)
                                             </button>
                                         </div>
                                     </div>
@@ -928,7 +934,9 @@ import { checkAgainstHistory } from '../../services/statementLedger.js';
             const hasLinkOptions = linkOptions.billInstances.length + linkOptions.recurring.length + linkOptions.networth.length > 0;
 
             const [searchQuery, setSearchQuery] = React.useState("");
-            const [rowFilter, setRowFilter] = React.useState("all"); // "all" | "attention"
+            const [rowFilter, setRowFilter] = React.useState("all"); // all | attention | matched | maybe | replace | dup | new
+            const [rememberLinks, setRememberLinks] = React.useState(true);
+            const [categoryPickerItem, setCategoryPickerItem] = React.useState(null);
 
             // Rows the importer will not add (already in the app) don't need a second look.
             const isSkippedByPlan = (item) => ["duplicate", "maybe-duplicate"].includes(planByTemp[item.tempId]?.action);
@@ -954,7 +962,8 @@ import { checkAgainstHistory } from '../../services/statementLedger.js';
             })), generateFingerprint);
             const planRecurring = settings?.recurring || NO_ROWS;
 
-            const [items, setItems] = React.useState(() => {
+            // Catch-up: match rows to the payments your Recurring list expects (rent, loans, SIPs…), once, when the dialog opens.
+            const initial = React.useMemo(() => {
                 const base = transactions.map((t, idx) => ({
                     ...t,
                     narration: t.narration || t.merchant || "",
@@ -968,8 +977,52 @@ import { checkAgainstHistory } from '../../services/statementLedger.js';
                 }));
                 // Overlapping statements: rows that are already in the app start unticked
                 const firstPlan = planImport(toPlanRows(base), existingTransactions, { recurring: planRecurring });
-                return base.map((row, i) => ({ ...row, selected: firstPlan[i].action === "insert" || firstPlan[i].action === "replace" }));
-            });
+                const rec = planRecurringMatches({
+                    rows: base.map((r, i) => ({
+                        date: r.date, amount: Math.abs(Number(r.amount) || 0), type: r.type, neutralSign: r.neutralSign,
+                        narration: r.narration, skip: firstPlan[i].action !== "insert"
+                    })),
+                    recurring: planRecurring,
+                    existing: existingTransactions,
+                    nextOccurrence: (item, fromIso) => calculateNextExpectedDate(item, new Date(`${fromIso}T00:00:00`)) || "",
+                    todayIso: toLocalDateStr(new Date())
+                });
+                const recById = new Map(planRecurring.map((r) => [r.id, r]));
+                const rows = base.map((row, i) => {
+                    const m = rec.matches[i];
+                    const out = { ...row, selected: firstPlan[i].action === "insert" || firstPlan[i].action === "replace" };
+                    const byRule = !!(row.linkedRecurringId && recById.get(row.linkedRecurringId));
+                    if (byRule) {
+                        // a linking rule (Rules page) already tied this row to a recurring payment
+                        out.linkTo = `recurring:${row.linkedRecurringId}`;
+                        out._autoLink = { recurringId: row.linkedRecurringId, name: recById.get(row.linkedRecurringId).name, occurrence: row.date, confidence: "high", reason: "rule", alternatives: [] };
+                    } else if (m) {
+                        out._autoLink = m;
+                        if (isAutoApplied(m)) {
+                            out.linkTo = `recurring:${m.recurringId}`;
+                            const r = recById.get(m.recurringId);
+                            // your recurring item's category beats an automatic guess (never a transfer-type row)
+                            const auto = !["manual", "rule"].includes(row.categorySource);
+                            if (r && r.category && auto && row.type !== "neutral" && (settings?.categories || []).includes(r.category)) {
+                                out._catBefore = row.category;
+                                out.category = r.category;
+                                out.categorySource = "recurring";
+                            }
+                        }
+                    }
+                    return out;
+                });
+                return { rows, missed: rec.missed };
+            }, []);
+            const [items, setItems] = React.useState(initial.rows);
+            const missedRecurring = initial.missed;
+            const unlinkAuto = (tempId) => setItems(prev => prev.map(it => {
+                if (it.tempId !== tempId) return it;
+                const next = { ...it, linkTo: "" };
+                if (it._catBefore !== undefined) { next.category = it._catBefore; next.categorySource = "unknown"; delete next._catBefore; }
+                return next;
+            }));
+            const linkAuto = (tempId, recurringId) => setItems(prev => prev.map(it => (it.tempId === tempId ? { ...it, linkTo: `recurring:${recurringId}`, _manualLink: true } : it)));
 
             const plan = React.useMemo(
                 () => planImport(toPlanRows(items), existingTransactions, { recurring: planRecurring }),
@@ -996,7 +1049,7 @@ import { checkAgainstHistory } from '../../services/statementLedger.js';
             const handleFieldChange = (tempId, field, value) => {
                 setItems(prev => prev.map(item =>
                     item.tempId === tempId
-                        ? { ...item, [field]: value, ...(field === "category" ? { categorySource: "manual", categoryConfidence: "high" } : {}) }
+                        ? { ...item, [field]: value, ...(field === "category" ? { categorySource: "manual", categoryConfidence: "high" } : {}), ...(field === "linkTo" ? { _manualLink: !!value } : {}) }
                         : item
                 ));
             };
@@ -1018,13 +1071,21 @@ import { checkAgainstHistory } from '../../services/statementLedger.js';
                 try {
                     const selectedItems = items
                         .filter(item => item.selected)
-                        .map(({ tempId, selected, _reconciliation, _pdfMetadata, _statement, ...rest }) => ({
+                        .map(({ tempId, selected, _reconciliation, _pdfMetadata, _statement, _autoLink, _catBefore, _manualLink, ...rest }) => ({
                             ...rest,
                             // a row the importer would skip but you ticked anyway → add it
                             forceInsert: ["duplicate", "maybe-duplicate"].includes(planByTemp[tempId]?.action) && planByTemp[tempId]?.reason !== "exact",
                             skipPlaceholderMatch: !!rest.skipPlaceholderMatch,
-                            narration: rest.narration,
-                            merchant: rest.narration,
+                            ...(() => {
+                                // linked to a recurring payment → its name in brackets after the bank's text
+                                const recId = String(rest.linkTo || "").startsWith("recurring:") ? rest.linkTo.split(":")[1] : null;
+                                const rItem = recId ? planRecurring.find(r => r.id === recId) : null;
+                                const text = rItem ? appendRecurringName(rest.narration, rItem.name) : rest.narration;
+                                const learn = (rItem && _manualLink && rememberLinks)
+                                    ? { text: ruleTextFor(rest.narration), recurringId: rItem.id, name: rItem.name, amount: Math.abs(Number(rest.amount) || 0), variable: !!(rItem.isVariableAmount || rItem.estimatedAmount) }
+                                    : undefined;
+                                return { narration: text, merchant: text, _learnLink: learn };
+                            })(),
                             tags: Array.isArray(rest.tags)
                                 ? rest.tags
                                 : (typeof rest.tags === "string" ? rest.tags.split(",").map(t => t.trim()).filter(Boolean) : [])
@@ -1060,8 +1121,21 @@ import { checkAgainstHistory } from '../../services/statementLedger.js';
 
             const attentionCount = items.filter(isNeedsAttention).length;
 
+            // quick filters: what each row is
+            const rowKinds = (item) => {
+                const st = planByTemp[item.tempId]?.action;
+                const k = [];
+                if (isNeedsAttention(item)) k.push("attention");
+                if (item._autoLink && item.linkTo === `recurring:${item._autoLink.recurringId}`) k.push("matched");
+                if (item._autoLink && !item.linkTo && st === "insert") k.push("maybe");
+                if (st === "replace") k.push("replace");
+                if (st === "duplicate" || st === "maybe-duplicate") k.push("dup");
+                if (st === "insert" && !item._autoLink) k.push("new");
+                return k;
+            };
+            const kindCounts = items.reduce((acc, it) => { rowKinds(it).forEach(k => { acc[k] = (acc[k] || 0) + 1; }); return acc; }, {});
             const filteredItems = items.filter(item => {
-                if (rowFilter === "attention" && !isNeedsAttention(item)) return false;
+                if (rowFilter !== "all" && !rowKinds(item).includes(rowFilter)) return false;
                 if (!searchQuery.trim()) return true;
                 const q = searchQuery.toLowerCase();
                 return (
@@ -1105,7 +1179,7 @@ import { checkAgainstHistory } from '../../services/statementLedger.js';
                                 <Icon name="close" />
                             </button>
                         </div>
-                        <div className="modal-body" style={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                        <div className="modal-body" style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '16px' }}>
 
                             {/* Bank Extraction Summary & Reconciliation Banner */}
                             <div style={{
@@ -1216,6 +1290,29 @@ import { checkAgainstHistory } from '../../services/statementLedger.js';
                                 </div>
                             )}
 
+                            {/* Recurring payments found / not found */}
+                            {(items.some(i => i._autoLink) || missedRecurring.length > 0) && (
+                                <div style={{ border: '1px solid #A7F3D0', background: '#ECFDF5', color: '#065F46', borderRadius: '10px', padding: '8px 14px', fontSize: '0.8rem' }}>
+                                    <strong>↻ Recurring payments:</strong>{" "}
+                                    {items.filter(i => i._autoLink && i.linkTo === `recurring:${i._autoLink.recurringId}`).length} row{items.filter(i => i._autoLink && i.linkTo === `recurring:${i._autoLink.recurringId}`).length === 1 ? "" : "s"} matched to your Recurring list — those payments will show as paid.
+                                    {items.filter(i => i._autoLink && !i.linkTo).length > 0 && (
+                                        <> {items.filter(i => i._autoLink && !i.linkTo).length} unsure — <button type="button" onClick={() => setRowFilter("maybe")} style={{ background: 'none', border: 'none', color: '#1D4ED8', textDecoration: 'underline', cursor: 'pointer', padding: 0, fontSize: 'inherit' }}>show only the “Maybe” rows</button>.</>
+                                    )}
+                                    <label style={{ display: 'flex', gap: '6px', alignItems: 'center', marginTop: '4px', cursor: 'pointer' }}>
+                                        <input type="checkbox" checked={rememberLinks} onChange={(e) => setRememberLinks(e.target.checked)} />
+                                        Remember the links I confirm by hand as rules (so next time they match by themselves)
+                                    </label>
+                                    {missedRecurring.length > 0 && (
+                                        <details style={{ marginTop: '4px', color: '#78350F' }}>
+                                            <summary style={{ cursor: 'pointer' }}>{missedRecurring.length} scheduled payment{missedRecurring.length === 1 ? "" : "s"} not found in this statement (may be paid from another account)</summary>
+                                            <div style={{ maxHeight: '110px', overflowY: 'auto', marginTop: '4px' }}>
+                                                {missedRecurring.map((m, k) => <div key={k}>{formatDate(m.date, settings?.dateFormat)} · {m.name} · {formatCurrencyVal(m.amount, settings?.currency)}</div>)}
+                                            </div>
+                                        </details>
+                                    )}
+                                </div>
+                            )}
+
                             {/* Overlap with what is already saved */}
                             {(planCounts.duplicate + planCounts["maybe-duplicate"] + planCounts.replace) > 0 && (
                                 <div style={{ border: '1px solid #BFDBFE', background: '#EFF6FF', color: '#1E3A8A', borderRadius: '10px', padding: '8px 14px', fontSize: '0.8rem', display: 'flex', gap: '6px 16px', flexWrap: 'wrap' }}>
@@ -1240,26 +1337,27 @@ import { checkAgainstHistory } from '../../services/statementLedger.js';
                                     />
                                 </div>
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-                                    {attentionCount > 0 && (
-                                        <div style={{ display: 'flex', gap: '6px' }}>
+                                    <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                                        {[
+                                            ["all", `All (${items.length})`],
+                                            ["attention", "Needs a look"],
+                                            ["matched", "↻ Matched to recurring"],
+                                            ["maybe", "↻ Maybe (confirm)"],
+                                            ["replace", "🔁 Replaces Dashboard payment"],
+                                            ["dup", "♻️ Already imported / duplicate"],
+                                            ["new", "New"]
+                                        ].filter(([k]) => k === "all" || kindCounts[k] > 0 || rowFilter === k).map(([k, label]) => (
                                             <button
+                                                key={k}
                                                 type="button"
-                                                className={`btn btn-xs ${rowFilter === "all" ? "btn-primary" : "btn-secondary"}`}
-                                                onClick={() => setRowFilter("all")}
+                                                className={`btn btn-xs ${rowFilter === k ? "btn-primary" : "btn-secondary"}`}
+                                                onClick={() => setRowFilter(k)}
                                                 style={{ fontSize: '0.75rem', padding: '3px 9px' }}
                                             >
-                                                All rows
+                                                {label}{k !== "all" ? ` (${kindCounts[k] || 0})` : ""}
                                             </button>
-                                            <button
-                                                type="button"
-                                                className={`btn btn-xs ${rowFilter === "attention" ? "btn-primary" : "btn-secondary"}`}
-                                                onClick={() => setRowFilter("attention")}
-                                                style={{ fontSize: '0.75rem', padding: '3px 9px' }}
-                                            >
-                                                Needs a look ({attentionCount})
-                                            </button>
-                                        </div>
-                                    )}
+                                        ))}
+                                    </div>
                                     <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontWeight: 500 }}>
                                         Selected to import: <strong style={{ color: 'var(--primary)' }}>{selectedCount} of {items.length}</strong> ({formatCurr(totalSelectedDebits)} debits, {formatCurr(totalSelectedCredits)} credits)
                                     </div>
@@ -1289,7 +1387,7 @@ import { checkAgainstHistory } from '../../services/statementLedger.js';
                                     </div>
                                 </div>
                             ) : (
-                                <div className="table-responsive" style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
+                                <div className="table-responsive" style={{ flex: '1 0 auto', minHeight: '360px', maxHeight: '70vh', overflow: 'auto' }}>
                                     <table className="table" style={{ minWidth: '1050px', fontSize: '0.82rem' }}>
                                         <thead>
                                             <tr>
@@ -1349,6 +1447,18 @@ import { checkAgainstHistory } from '../../services/statementLedger.js';
                                                             value={item.narration}
                                                             onChange={(e) => handleFieldChange(item.tempId, "narration", e.target.value)}
                                                         />
+                                                        {item._autoLink && planByTemp[item.tempId]?.action === "insert" && (() => {
+                                                            const m = item._autoLink;
+                                                            const linked = item.linkTo === `recurring:${m.recurringId}`;
+                                                            const base = { fontSize: '0.68rem', fontWeight: 600, marginTop: '3px', display: 'block' };
+                                                            const btn = { background: 'none', border: 'none', color: '#1D4ED8', cursor: 'pointer', textDecoration: 'underline', fontSize: '0.68rem', padding: 0 };
+                                                            if (linked) {
+                                                                return <span style={{ ...base, color: '#047857' }}>↻ Recurring: {m.name} · due {formatDate(m.occurrence, settings?.dateFormat)}{m.confidence === "medium" ? " (check)" : ""} <button type="button" style={btn} onClick={() => unlinkAuto(item.tempId)}>Unlink</button></span>;
+                                                            }
+                                                            if (item.linkTo) return null;
+                                                            const options = m.alternatives && m.alternatives.length ? m.alternatives : [{ recurringId: m.recurringId, name: m.name }];
+                                                            return <span style={{ ...base, color: '#B45309' }}>↻ Maybe {options.map((o, k) => (<span key={o.recurringId}>{k ? " or " : ""}{o.name} <button type="button" style={btn} onClick={() => linkAuto(item.tempId, o.recurringId)}>Link</button></span>))}</span>;
+                                                        })()}
                                                         {(() => {
                                                             const st = planByTemp[item.tempId];
                                                             if (!st || st.action === "insert") return null;
@@ -1371,13 +1481,28 @@ import { checkAgainstHistory } from '../../services/statementLedger.js';
                                                         })()}
                                                     </td>
                                                     <td>
-                                                        <select className="form-control" style={cellInput}
-                                                            value={item.category}
-                                                            onChange={(e) => handleFieldChange(item.tempId, "category", e.target.value)}
+                                                        <button
+                                                            type="button"
+                                                            className="form-control"
+                                                            style={{
+                                                                ...cellInput,
+                                                                textAlign: 'left',
+                                                                cursor: 'pointer',
+                                                                display: 'flex',
+                                                                alignItems: 'center',
+                                                                justifyContent: 'space-between',
+                                                                background: item.category && !item.category.includes('Needs Review') ? 'var(--card-bg)' : '#FEF3C7',
+                                                                borderColor: item.category && !item.category.includes('Needs Review') ? 'var(--border-color)' : '#F59E0B',
+                                                                color: item.category && !item.category.includes('Needs Review') ? 'inherit' : '#92400E'
+                                                            }}
+                                                            onClick={() => setCategoryPickerItem(item)}
+                                                            title="Click to choose category in popup picker"
                                                         >
-                                                            <option value="Others - Needs Review 🔍">🔍 Others - Needs Review</option>
-                                                            {renderCategoryOptions(rawCategories, item.type)}
-                                                        </select>
+                                                            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: '0.78rem' }}>
+                                                                {item.category || "Others - Needs Review 🔍"}
+                                                            </span>
+                                                            <span style={{ fontSize: '0.65rem', opacity: 0.6, marginLeft: '4px' }}>🔍</span>
+                                                        </button>
                                                     </td>
                                                     <td>
                                                         {accounts.length > 0 ? (
@@ -1463,6 +1588,17 @@ import { checkAgainstHistory } from '../../services/statementLedger.js';
                             </button>
                         </div>
                     </div>
+                    {categoryPickerItem && (
+                        <CategoryPickerModal
+                            categories={filterCategoriesByType(rawCategories, categoryPickerItem.type, settings?.categoryTypes)}
+                            selected={categoryPickerItem.category}
+                            onSelect={(cat) => {
+                                handleFieldChange(categoryPickerItem.tempId, "category", cat);
+                                setCategoryPickerItem(null);
+                            }}
+                            onClose={() => setCategoryPickerItem(null)}
+                        />
+                    )}
                 </div>
             );
         };

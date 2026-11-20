@@ -5,7 +5,32 @@ import {
 } from '../utils.jsx';
 import { CreateBudgetModal, CreateGoalModal } from '../components/modals/PlanningModals.jsx';
 
-export const BudgetsPage = ({ transactions, settings, updateSetting, showToast, subpageActionSignal }) => {
+export const isTxMatchingBudget = (t, b) => {
+    if (!t || t.type !== "expense") return false;
+
+    // 1. Tag budget
+    if (b.targetType === "tag" || b.tag) {
+        const targetTag = String(b.tag || (b.category || '').replace(/^Tag: #?/, '')).toLowerCase().trim();
+        const txTags = Array.isArray(t.tags)
+            ? t.tags
+            : (typeof t.tags === 'string' ? t.tags.split(',') : []);
+        return txTags.some(tag => String(tag).toLowerCase().replace(/^#/, '').trim() === targetTag);
+    }
+
+    // 2. Main category budget (e.g. "Food & Drinks (All)" or targetType === "mainCategory")
+    if (b.targetType === "mainCategory" || b.mainCategory || (b.category && b.category.endsWith(" (All)"))) {
+        const targetMain = String(b.mainCategory || b.category.replace(/ \(All\)$/i, '')).trim().toLowerCase();
+        const txCategory = String(t.category || "");
+        const txMain = (txCategory.includes(" - ") ? txCategory.split(" - ")[0] : txCategory).trim().toLowerCase();
+        return txMain === targetMain;
+    }
+
+    // 3. Specific subcategory budget
+    const targetSub = String(b.subCategory || b.category || "").trim().toLowerCase();
+    return String(t.category || "").trim().toLowerCase() === targetSub;
+};
+
+export const BudgetsPage = ({ transactions, settings, updateSetting, showToast, subpageActionSignal, tags = [] }) => {
     const budgetsList = settings.budgets || [];
     const [showCreateModal, setShowCreateModal] = React.useState(false);
     const [budgetToDelete, setBudgetToDelete] = React.useState(null);
@@ -25,30 +50,43 @@ export const BudgetsPage = ({ transactions, settings, updateSetting, showToast, 
         return tDate.getFullYear() === now.getFullYear() && tDate.getMonth() === now.getMonth();
     });
 
-    // Calculate spent per category
-    const spentByCategory = {};
-    thisMonthTx.forEach(t => {
-        if (t.type === "expense") {
-            spentByCategory[t.category] = (spentByCategory[t.category] || 0) + t.amount;
-        }
-    });
-
     const formatCurrency = (val) => formatCurrencyVal(val, settings.currency || "INR");
 
+    const getBudgetSpent = (b) => {
+        return thisMonthTx.reduce((sum, t) => isTxMatchingBudget(t, b) ? sum + (Number(t.amount) || 0) : sum, 0);
+    };
+
     const handleCreateBudget = async (item) => {
-        const exists = budgetsList.some(b => b.category.toLowerCase() === item.category.toLowerCase());
+        const exists = budgetsList.some(b => {
+            if (b.id === item.id) return true;
+            if (item.targetType === "mainCategory" && (b.targetType === "mainCategory" || (b.category && b.category.endsWith(" (All)")))) {
+                const bMain = (b.mainCategory || b.category.replace(/ \(All\)$/i, '')).trim().toLowerCase();
+                return bMain === (item.mainCategory || "").trim().toLowerCase();
+            }
+            if (item.targetType === "tag" && (b.targetType === "tag" || b.tag)) {
+                const bTag = String(b.tag || (b.category || '').replace(/^Tag: #?/, '')).trim().toLowerCase();
+                return bTag === (item.tag || "").trim().toLowerCase();
+            }
+            return (b.category || "").toLowerCase() === (item.category || "").toLowerCase();
+        });
+
         if (exists) {
-            showToast(`A budget for category "${item.category}" already exists`, "error");
+            showToast(`A budget for "${item.category}" already exists`, "error");
             return;
         }
+
         const updatedList = [...budgetsList, {
             id: crypto.randomUUID(),
+            targetType: item.targetType || "subCategory",
+            mainCategory: item.mainCategory || null,
+            subCategory: item.subCategory || null,
+            tag: item.tag || null,
             category: item.category,
             limit: Number(item.limit),
             active: true
         }];
         await updateSetting("budgets", updatedList);
-        showToast("Budget limit established");
+        showToast("Budget envelope established");
         setShowCreateModal(false);
     };
 
@@ -59,8 +97,8 @@ export const BudgetsPage = ({ transactions, settings, updateSetting, showToast, 
     };
 
     // Calculate budget health totals
-    const totalBudgetLimit = budgetsList.reduce((sum, b) => sum + b.limit, 0);
-    const totalBudgetSpent = budgetsList.reduce((sum, b) => sum + (spentByCategory[b.category] || 0), 0);
+    const totalBudgetLimit = budgetsList.reduce((sum, b) => sum + (Number(b.limit) || 0), 0);
+    const totalBudgetSpent = budgetsList.reduce((sum, b) => sum + getBudgetSpent(b), 0);
     const budgetHealthRatio = totalBudgetLimit > 0 ? (totalBudgetSpent / totalBudgetLimit) * 100 : 0;
 
     return (
@@ -70,7 +108,7 @@ export const BudgetsPage = ({ transactions, settings, updateSetting, showToast, 
                     <Icon name="budgets" />
                     <div className="empty-state-text">
                         <h3>No Budgets Set</h3>
-                        <p>Track your spending categories by setting custom monthly envelopes.</p>
+                        <p>Track your spending categories by setting custom monthly envelopes for entire main categories, subcategories, or tags.</p>
                         <button className="btn btn-primary" onClick={() => setShowCreateModal(true)}>Create budget</button>
                     </div>
                 </div>
@@ -102,21 +140,51 @@ export const BudgetsPage = ({ transactions, settings, updateSetting, showToast, 
                         <div className="card" style={{ justifyContent: 'center', alignItems: 'center', textAlign: 'center' }}>
                             <span className="card-title">Envelopes Set</span>
                             <div className="card-value" style={{ marginTop: '8px', color: 'var(--primary)' }}>{budgetsList.length}</div>
-                            <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Active Categories</span>
+                            <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Active Envelopes</span>
                         </div>
                     </div>
 
                     {/* Envelopes list */}
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '20px' }}>
                         {budgetsList.map(b => {
-                            const spent = spentByCategory[b.category] || 0;
-                            const ratio = (spent / b.limit) * 100;
+                            const spent = getBudgetSpent(b);
+                            const ratio = b.limit > 0 ? (spent / b.limit) * 100 : 0;
                             const remaining = b.limit - spent;
+
+                            const isMain = b.targetType === "mainCategory" || b.mainCategory || (b.category && b.category.endsWith(" (All)"));
+                            const isTag = b.targetType === "tag" || b.tag;
+                            const displayName = isTag
+                                ? `#${b.tag || b.category.replace(/^Tag: #?/, '')}`
+                                : (isMain ? (b.mainCategory || b.category.replace(/ \(All\)$/i, '')) : (b.subCategory || b.category));
 
                             return (
                                 <div key={b.id} className="card" style={{ padding: '20px' }}>
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '14px', alignItems: 'center' }}>
-                                        <h4 style={{ fontWeight: 600, fontSize: '1rem' }}>{b.category}</h4>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px', alignItems: 'flex-start' }}>
+                                        <div>
+                                            <div style={{ marginBottom: '4px' }}>
+                                                {isMain && (
+                                                    <span style={{ fontSize: '0.68rem', padding: '2px 8px', borderRadius: '12px', background: 'var(--primary-light)', color: 'var(--primary)', fontWeight: 700 }}>
+                                                        📁 Entire Main Category
+                                                    </span>
+                                                )}
+                                                {isTag && (
+                                                    <span style={{ fontSize: '0.68rem', padding: '2px 8px', borderRadius: '12px', background: 'rgba(59, 130, 246, 0.12)', color: '#2563EB', fontWeight: 700 }}>
+                                                        🔖 Tag Envelope
+                                                    </span>
+                                                )}
+                                                {!isMain && !isTag && (
+                                                    <span style={{ fontSize: '0.68rem', padding: '2px 8px', borderRadius: '12px', background: 'rgba(107, 114, 128, 0.12)', color: 'var(--text-muted)', fontWeight: 600 }}>
+                                                        🏷️ Subcategory
+                                                    </span>
+                                                )}
+                                            </div>
+                                            <h4 style={{ fontWeight: 700, fontSize: '1.05rem', margin: 0 }}>{displayName}</h4>
+                                            <div style={{ fontSize: '0.73rem', color: 'var(--text-muted)', marginTop: '2px' }}>
+                                                {isMain && `Counts all subcategories under ${displayName} (breakfast, dinner, fastfood, etc.)`}
+                                                {isTag && `Counts all expenses tagged #${b.tag || displayName.replace(/^#/, '')}`}
+                                                {!isMain && !isTag && `Only counts transactions in this specific subcategory`}
+                                            </div>
+                                        </div>
                                         <button
                                             className="btn btn-secondary btn-sm"
                                             style={{ border: 'none', color: 'var(--danger)', padding: 0 }}
@@ -126,14 +194,14 @@ export const BudgetsPage = ({ transactions, settings, updateSetting, showToast, 
                                             <Icon name="trash" />
                                         </button>
                                     </div>
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', marginBottom: '6px' }}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', margin: '10px 0 6px' }}>
                                         <span style={{ color: 'var(--text-muted)' }}>Spent: <strong>{formatCurrency(spent)}</strong></span>
                                         <span>Limit: {formatCurrency(b.limit)}</span>
                                     </div>
 
                                     {/* Progress indicator bar */}
                                     <div className="progress-container" style={{ margin: 0 }}>
-                                        <div className="progress-bar-bg" style={{ height: '6px' }}>
+                                        <div className="progress-bar-bg" style={{ height: '7px' }}>
                                             <div
                                                 className={`progress-bar-fill ${ratio > 100 ? "danger" : ratio > 80 ? "warning" : "success"}`}
                                                 style={{ width: `${Math.min(ratio, 100)}%` }}
@@ -162,6 +230,7 @@ export const BudgetsPage = ({ transactions, settings, updateSetting, showToast, 
                     onClose={() => setShowCreateModal(false)}
                     onSave={handleCreateBudget}
                     settings={settings}
+                    tags={tags}
                 />
             )}
 

@@ -1,5 +1,5 @@
 import React from 'react';
-import { formatCurrencyVal, formatDate } from '../utils.jsx';
+import { formatCurrencyVal, formatDate, DEFAULT_CATEGORIES } from '../utils.jsx';
 import { CategoryPickerModal } from './modals/TransactionModals.jsx';
 import { groupForReview, learnedMerchants } from '../services/review.js';
 
@@ -11,7 +11,8 @@ const NEEDS_REVIEW_CATEGORY_RE = /Needs Review|Uncategorized/i;
  */
 export const ReviewInbox = ({ transactions = [], settings = {}, onBulkCategorize, onSaveRule, showToast }) => {
     const groups = React.useMemo(() => groupForReview(transactions), [transactions]);
-    const categories = (settings.categories || []).filter((c) => !NEEDS_REVIEW_CATEGORY_RE.test(c));
+    const rawCats = (settings.categories && settings.categories.length > 0) ? settings.categories : DEFAULT_CATEGORIES;
+    const categories = rawCats.filter((c) => !NEEDS_REVIEW_CATEGORY_RE.test(c));
     const money = (v) => formatCurrencyVal(v, settings.currency || 'INR');
     const shortDate = (d) => (d ? formatDate(d, settings.dateFormat) : '');
     const [picked, setPicked] = React.useState({});
@@ -122,7 +123,8 @@ export const ReviewInbox = ({ transactions = [], settings = {}, onBulkCategorize
  */
 export const LearnedMerchants = ({ transactions = [], settings = {}, onBulkCategorize, showToast }) => {
     const merchants = React.useMemo(() => learnedMerchants(transactions), [transactions]);
-    const categories = (settings.categories || []).filter((c) => !NEEDS_REVIEW_CATEGORY_RE.test(c));
+    const rawCats = (settings.categories && settings.categories.length > 0) ? settings.categories : DEFAULT_CATEGORIES;
+    const categories = rawCats.filter((c) => !NEEDS_REVIEW_CATEGORY_RE.test(c));
     const [query, setQuery] = React.useState('');
     const [onlyMixed, setOnlyMixed] = React.useState(false);
     const [draft, setDraft] = React.useState({});

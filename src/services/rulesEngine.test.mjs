@@ -186,3 +186,18 @@ test('rules read back in plain words', () => {
     assert.equal(d.when, 'narration contains any of “swiggy”, “zomato” and amount is at least 500');
     assert.equal(d.then, 'set category to Food; add tags a, b');
 });
+
+test('a linking rule links the transaction to a recurring payment, names it in brackets, and reverts cleanly', () => {
+    const r = rule({ conditions: [{ field: 'narration', op: 'containsAny', value: 'landlord' }], actions: [{ type: 'linkRecurring', value: 'rec-rent', label: 'Home Rent' }] });
+    const t0 = tx({ narration: 'UPI-LANDLORD NAME', merchant: 'UPI-LANDLORD NAME' });
+    const res = applyRules(t0, [r]);
+    assert.equal(res.changed, true);
+    assert.equal(res.tx.linkedRecurringId, 'rec-rent');
+    assert.equal(res.tx.narration, 'UPI-LANDLORD NAME (Home Rent)');
+    assert.equal(applyRules(res.tx, [r]).changed, false, 'second run changes nothing');
+    assert.match(describeRule(r).then, /link to recurring payment “Home Rent”/);
+    assert.equal(validateRule(rule({ actions: [{ type: 'linkRecurring', value: '' }] })) !== null, true);
+    const back = revertRuleOnTx(res.tx, r.id);
+    assert.equal(back.tx.linkedRecurringId, undefined);
+    assert.equal(back.tx.narration, 'UPI-LANDLORD NAME');
+});

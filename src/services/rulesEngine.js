@@ -14,6 +14,7 @@
  */
 
 import { NEUTRAL_CATEGORY_RE } from './review.js';
+import { appendRecurringName } from './importDedupe.js';
 
 // ───────────────────────── shape ─────────────────────────
 
@@ -42,7 +43,8 @@ export const CONDITION_FIELDS = [
 export const ACTION_TYPES = [
     { id: 'setCategory', label: 'Set category' },
     { id: 'addTags', label: 'Add tags' },
-    { id: 'removeTags', label: 'Remove tags' }
+    { id: 'removeTags', label: 'Remove tags' },
+    { id: 'linkRecurring', label: 'Link to recurring payment' }
 ];
 
 export const isEnabled = (rule) => !!rule && (rule.enabled === 1 || rule.enabled === true);
@@ -90,7 +92,7 @@ export const isConditionFilled = (c) => {
     }
     return toList(c.op === 'contains' ? [c.value] : c.value).length > 0;
 };
-export const isActionFilled = (a) => !!a && (a.type === 'setCategory' ? !!a.value : toList(a.value).length > 0);
+export const isActionFilled = (a) => !!a && ((a.type === 'setCategory' || a.type === 'linkRecurring') ? !!a.value : toList(a.value).length > 0);
 
 // ───────────────────────── matching ─────────────────────────
 
@@ -159,6 +161,7 @@ const mergeDelta = (prev, next) => {
     if (!prev) return next;
     const out = { ...prev };
     if (next.category) out.category = prev.category ? { ...prev.category, to: next.category.to } : next.category;
+    if (next.link) out.link = prev.link ? { ...prev.link, to: next.link.to } : next.link;
     for (const k of ['tagsAdded', 'tagsRemoved']) if (next[k]) out[k] = [...new Set([...(prev[k] || []), ...next[k]])];
     return out;
 };
@@ -191,6 +194,14 @@ export const applyRules = (tx, rules = [], { overwriteManual = false, pool = nul
                 cur.categorySource = 'rule';
                 cur.categoryConfidence = 'high';
                 flipForCategory(cur, target);
+            } else if (action.type === 'linkRecurring') {
+                if (cur.linkedRecurringId === action.value) continue;
+                delta.link = { from: cur.linkedRecurringId || null, to: action.value, narrationFrom: cur.narration, merchantFrom: cur.merchant, label: action.label || '' };
+                cur.linkedRecurringId = action.value;
+                if (action.label) {
+                    cur.narration = appendRecurringName(cur.narration, action.label);
+                    cur.merchant = appendRecurringName(cur.merchant || cur.narration, action.label);
+                }
             } else if (action.type === 'addTags') {
                 const added = toList(action.value).filter((v) => !hasTag(cur.tags, v));
                 if (added.length) { cur.tags = [...cur.tags, ...added]; delta.tagsAdded = [...(delta.tagsAdded || []), ...added]; }
@@ -200,7 +211,7 @@ export const applyRules = (tx, rules = [], { overwriteManual = false, pool = nul
                 if (removed.length) { cur.tags = cur.tags.filter((t) => !removed.includes(t)); delta.tagsRemoved = [...(delta.tagsRemoved || []), ...removed]; }
             }
         }
-        if (delta.category || delta.tagsAdded || delta.tagsRemoved) {
+        if (delta.category || delta.tagsAdded || delta.tagsRemoved || delta.link) {
             changes[rule.id] = delta;
             cur.ruleChanges = { ...(cur.ruleChanges || {}), [rule.id]: mergeDelta((cur.ruleChanges || {})[rule.id], delta) };
         }
@@ -228,6 +239,14 @@ export const revertRuleOnTx = (tx, ruleId) => {
             cur.type = rec.category.typeFrom;
             if (cur.type === 'neutral') cur.neutralSign = rec.category.signFrom || '-'; else delete cur.neutralSign;
             typeChanged = true;
+        }
+        changed = true;
+    }
+    if (rec.link && cur.linkedRecurringId === rec.link.to) {
+        if (rec.link.from) cur.linkedRecurringId = rec.link.from; else delete cur.linkedRecurringId;
+        if (rec.link.label && cur.narration === appendRecurringName(rec.link.narrationFrom, rec.link.label)) {
+            cur.narration = rec.link.narrationFrom;
+            cur.merchant = rec.link.merchantFrom || rec.link.narrationFrom;
         }
         changed = true;
     }
@@ -288,6 +307,7 @@ export const describeAction = (a) => {
     if (a.type === 'setCategory') return `set category to ${a.value}`;
     if (a.type === 'addTags') return `add tag${vals.length === 1 ? '' : 's'} ${vals.join(', ')}`;
     if (a.type === 'removeTags') return `remove tag${vals.length === 1 ? '' : 's'} ${vals.join(', ')}`;
+    if (a.type === 'linkRecurring') return `link to recurring payment “${a.label || a.value}”`;
     return '';
 };
 

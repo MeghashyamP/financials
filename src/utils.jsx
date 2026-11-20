@@ -753,6 +753,17 @@ export const Icon = ({ name, currency = "INR", className = "" }) => {
                 <path d="M4 10h12M4 14h12M4 18h12M14 6h6M17 3v6" />
             </svg>
         ),
+        features: (
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1-2.5-2.5Z" />
+                <path d="M6 6h10M6 10h10" />
+            </svg>
+        ),
+        sparkles: (
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3L12 3z" />
+            </svg>
+        ),
         settings: (
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <circle cx="12" cy="12" r="3" />
@@ -1104,10 +1115,13 @@ export const DatePickerField = ({ value, onChange, dateFormat, className = "form
     );
 };
 
+// Strip trailing bracketed content added during recurring mapping, e.g. "UPI-NAME (Recurring Item)" -> "UPI-NAME"
+const stripTrailingBrackets = (s) => String(s || '').replace(/\s*\([^)]*\)\s*$/g, '').trim();
+
 // Generates the transaction duplicate detection fingerprint
 export const generateFingerprint = (t) => {
     const dateStr = String(t.date || "").trim();
-    const merchantStr = String(t.merchant || "").trim().toLowerCase();
+    const merchantStr = stripTrailingBrackets(t.merchant || "").toLowerCase();
     const amountVal = Number(t.amount || 0).toFixed(2);
     const accountStr = String(t.account || "Imported account").trim().toLowerCase();
     // type is part of the key so a purchase and its same-day refund/reversal (same merchant + amount) are both kept
@@ -1117,7 +1131,7 @@ export const generateFingerprint = (t) => {
 // Lowercase and trim merchant, strip terminal # plus digits, reference numbers
 export const normalizeMerchantName = (merchant) => {
     if (!merchant) return "";
-    let name = merchant.trim().toLowerCase();
+    let name = stripTrailingBrackets(merchant).toLowerCase();
     // Remove common payment terminal suffix codes (e.g. "Merchant Name #12345", "Merchant Name *982", "Merchant Name Ref 8943")
     name = name.replace(/#\d+/g, '');
     name = name.replace(/\*\d+/g, '');
@@ -2235,3 +2249,5 @@ export const getOccurrencesInPeriod = (item, pStartStr, pEndStr) => {
     }
     return count;
 };
+
+export { toYYYYMMDD, isRecurringPaidOnDate, isNetWorthPaidOnDate } from './services/recurringPaid.js';

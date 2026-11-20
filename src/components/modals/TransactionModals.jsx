@@ -5,14 +5,17 @@ import {
   CATEGORY_DESCRIPTIONS, getCurrencySymbol
 } from '../../utils.jsx';
 
-        export const CategoryPickerModal = ({ categories, selected, onSelect, onClose }) => {
+        export const CategoryPickerModal = ({ categories, selected, onSelect, onClose, title = "Select Category", onSelectGroup, onClear }) => {
             const [search, setSearch] = React.useState("");
+            // `selected` may be a single value (picker) or an array (multi-select filter)
+            const isMulti = Array.isArray(selected);
+            const has = (v) => isMulti ? selected.includes(v) : selected === v;
             const [activeTab, setActiveTab] = React.useState("all");
             useEscapeKey(onClose);
 
             // Navigate / scroll directly to the selected category on modal open
             React.useEffect(() => {
-                if (selected) {
+                if (selected && !isMulti) {
                     const timer = setTimeout(() => {
                         const selectedEl = document.querySelector('.category-picker-body .selected');
                         if (selectedEl) {
@@ -95,11 +98,16 @@ import {
                     <div className="category-picker-container" onClick={(e) => e.stopPropagation()}>
                         <div className="category-picker-header">
                             <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                                <h3 className="modal-title" style={{ margin: 0 }}>Select Category</h3>
+                                <h3 className="modal-title" style={{ margin: 0 }}>{title}</h3>
                                 <span className="badge badge-info" style={{ fontSize: '0.72rem', padding: '3px 8px', borderRadius: '12px' }}>
                                     {totalCategoriesCount} Available
                                 </span>
                             </div>
+                            {isMulti && <span style={{ marginLeft: 'auto', fontSize: '0.78rem', color: 'var(--text-muted)' }}>{selected.length} selected</span>}
+                            {onClear && (isMulti ? selected.length > 0 : (selected && selected !== 'all')) && (
+                                <button type="button" className="btn btn-secondary btn-sm" style={{ marginLeft: isMulti ? '10px' : 'auto', marginRight: '10px' }} onClick={onClear}>Clear filter</button>
+                            )}
+                            {isMulti && <button type="button" className="btn btn-primary btn-sm" style={{ marginRight: '10px' }} onClick={onClose}>Done</button>}
                             <button type="button" className="modal-close-btn" onClick={onClose}>
                                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                                     <line x1="18" y1="6" x2="6" y2="18"></line>
@@ -155,13 +163,14 @@ import {
                                     const hasSubcategories = g.items.length > 1 || (g.items.length === 1 && g.items[0].label !== g.name);
 
                                     if (hasSubcategories) {
-                                        const isParentSelected = selected === g.name || (selected && selected.startsWith(g.name + " - "));
+                                        const isParentSelected = isMulti ? has(g.name) : (selected === g.name || (selected && selected.startsWith(g.name + " - ")));
 
                                         return (
                                             <div key={g.name} className="category-group">
                                                 <div
                                                     className="category-group-header"
                                                     onClick={() => {
+                                                        if (onSelectGroup) { onSelectGroup(g.name); return; }
                                                         const othersItem = g.items.find(item => item.label.toLowerCase() === "others") || g.items[0];
                                                         onSelect(othersItem.full);
                                                     }}
@@ -176,7 +185,7 @@ import {
                                                 </div>
                                                 <div className="subcategory-grid">
                                                     {g.items.map(item => {
-                                                        const isSel = selected === item.full;
+                                                        const isSel = has(item.full);
                                                         return (
                                                             <button
                                                                 key={item.full}
@@ -197,7 +206,7 @@ import {
                                         );
                                     } else {
                                         const item = g.items[0];
-                                        const isSel = selected === item.full || selected === g.name;
+                                        const isSel = has(item.full) || has(g.name);
 
                                         return (
                                             <div

@@ -12,8 +12,10 @@ const NEEDS_REVIEW = 'Others - Needs Review';
 
 // ───────────── text normalisation ─────────────
 
+const stripTrailingBrackets = (s) => String(s || '').replace(/\s*\([^)]*\)\s*$/g, '').trim();
+
 // Lowercased text with long reference numbers and banking noise removed; used for whole-word matching.
-export const cleanNarration = (s) => String(s || '')
+export const cleanNarration = (s) => String(stripTrailingBrackets(s) || '')
     .toLowerCase()
     .replace(/\(ref#[^)]*\)?/g, ' ')
     .replace(/\b\d{5,}\b/g, ' ')                                  // reference / phone numbers
@@ -24,11 +26,11 @@ export const cleanNarration = (s) => String(s || '')
 
 // Same text with every separator removed: lets brand names match inside glued strings such as
 // "SWIGGYFOODBANGALORE" or "PZELECTRICITYMUMBAI" that card statements print.
-const squash = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+const squash = (s) => String(stripTrailingBrackets(s) || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 
 // Stable key for "same merchant/payee" across months (used by learned memory).
 export const merchantKey = (narration) => {
-    let t = String(narration || '').toLowerCase();
+    let t = String(stripTrailingBrackets(narration) || '').toLowerCase();
     // SBI/ICICI style  UPI/DR/<ref>/<PAYEE>/<BANK>/<vpa>/<note>  →  keep payee + vpa
     const parts = t.split('/');
     if (parts.length >= 5 && /^(upi|mmt|imps)/.test(parts[0])) t = `${parts[3]} ${parts[5] || ''}`;

@@ -14,6 +14,16 @@
 
 import { cleanNarration } from '../categorizer.js';
 
+/** "UPI-LANDLORD" + "Home Rent" → "UPI-LANDLORD (Home Rent)" (duplicate checks ignore a trailing bracket). */
+export const appendRecurringName = (text, name) => {
+    const t = String(text || '').trim();
+    const n = String(name || '').trim();
+    if (!n || t.endsWith(`(${n})`)) return t;
+    return `${t} (${n})`;
+};
+
+export const stripTrailingBrackets = (s) => String(s || '').replace(/\s*\([^)]*\)\s*$/g, '').trim();
+
 const canon = (s) => String(s || '').trim().toLowerCase();
 const toUtc = (iso) => { const [y, m, d] = String(iso).slice(0, 10).split('-').map(Number); return Date.UTC(y, (m || 1) - 1, d || 1); };
 export const dayDiff = (a, b) => Math.round((toUtc(b) - toUtc(a)) / 86400000);
@@ -33,8 +43,8 @@ export const isDashboardPlaceholder = (t) => !!t
     && !!t.linkedRecurringId
     && (t.source === 'dashboard' || /^Created (Inflow|Outflow) from Dashboard/i.test(String(t.notes || '')));
 
-const tokens = (s) => new Set(cleanNarration(s).split(' ').filter((w) => w.length >= 3 && !/^\d+$/.test(w)));
-const squash = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+const tokens = (s) => new Set(cleanNarration(stripTrailingBrackets(s)).split(' ').filter((w) => w.length >= 3 && !/^\d+$/.test(w)));
+const squash = (s) => String(stripTrailingBrackets(s) || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 
 /** Same payee, allowing for different wrapping / noise between two statements. */
 export const narrationsAlike = (a, b) => {
@@ -52,7 +62,7 @@ export const narrationsAlike = (a, b) => {
     return shared / Math.min(ta.size, tb.size) >= 0.6 && shared >= 1;
 };
 
-const legacyKey = (p) => `${String(p.date || '').trim()}|${String(p.merchant || p.narration || '').trim().toLowerCase()}|${Number(p.amount || 0).toFixed(2)}|${String(p.account || 'Imported account').trim().toLowerCase()}`;
+const legacyKey = (p) => `${String(p.date || '').trim()}|${stripTrailingBrackets(p.merchant || p.narration).trim().toLowerCase()}|${Number(p.amount || 0).toFixed(2)}|${String(p.account || 'Imported account').trim().toLowerCase()}`;
 
 /**
  * @param incoming  processed rows: { date, amount, type, neutralSign, account, narration, merchant, refId, fingerprint }
@@ -168,11 +178,21 @@ export const mergeIntoPlaceholder = (ph, row, { fmtDate = (d) => d } = {}) => {
     // or it is a transfer-type row (type and category must agree).
     const keepCategory = !neutral && !rowChoseCategory && ph.category && !/Needs Review|Uncategorized/i.test(ph.category);
     const tags = [...new Set([...(Array.isArray(ph.tags) ? ph.tags : []), ...(Array.isArray(row.tags) ? row.tags : [])])];
+
+    const recurringName = String(ph.merchant || ph.narration || '').trim();
+    // Keep the manually created recurring name in brackets after the original bank narration for readability
+    const narrationWithBracket = recurringName && !String(row.narration || '').includes(`(${recurringName})`)
+        ? `${row.narration} (${recurringName})`
+        : row.narration;
+    const merchantWithBracket = recurringName && !String(row.merchant || '').includes(`(${recurringName})`)
+        ? `${row.merchant || row.narration} (${recurringName})`
+        : (row.merchant || row.narration);
+
     const merged = {
         ...ph,
         date: row.date,
-        narration: row.narration,
-        merchant: row.merchant || row.narration,
+        narration: narrationWithBracket,
+        merchant: merchantWithBracket,
         refId: row.refId || ph.refId || '',
         amount: row.amount,
         type: row.type,

@@ -733,13 +733,36 @@ Output format example:
             }
         };
 
+        // Helper to obtain fresh bytes from File, Blob, ArrayBuffer, or TypedArray without detachment issues
+        const toFreshUint8Array = async (input) => {
+            if (!input) return null;
+            if (typeof Blob !== 'undefined' && input instanceof Blob) {
+                const buf = await input.arrayBuffer();
+                return new Uint8Array(buf);
+            }
+            if (input instanceof ArrayBuffer) {
+                if (input.byteLength === 0) {
+                    throw new Error("Detached or empty ArrayBuffer provided.");
+                }
+                return new Uint8Array(input.slice(0));
+            }
+            if (input && input.buffer instanceof ArrayBuffer) {
+                if (input.byteLength === 0 || input.buffer.byteLength === 0) {
+                    throw new Error("Detached or empty typed array provided.");
+                }
+                return new Uint8Array(input.buffer.slice(input.byteOffset, input.byteOffset + input.byteLength));
+            }
+            return input;
+        };
+
         // Check if PDF requires a password to open
-        export const isPdfEncrypted = async (arrayBuffer) => {
+        export const isPdfEncrypted = async (input) => {
             await loadImportLibraries();
             const pdfjsLib = window['pdfjs-dist/build/pdf'] || window.pdfjsLib;
             if (!pdfjsLib) throw new Error("PDF.js library is not loaded.");
             try {
-                const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer, isEvalSupported: false });
+                const bytes = await toFreshUint8Array(input);
+                const loadingTask = pdfjsLib.getDocument({ data: bytes, isEvalSupported: false });
                 await loadingTask.promise;
                 return false;
             } catch (err) {
@@ -751,12 +774,13 @@ Output format example:
         };
 
         // Verify password and return unlocked PDF document, or null if incorrect
-        export const verifyAndUnlockPdf = async (arrayBuffer, password) => {
+        export const verifyAndUnlockPdf = async (input, password) => {
             await loadImportLibraries();
             const pdfjsLib = window['pdfjs-dist/build/pdf'] || window.pdfjsLib;
             if (!pdfjsLib) throw new Error("PDF.js library is not loaded.");
             try {
-                const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer, password, isEvalSupported: false });
+                const bytes = await toFreshUint8Array(input);
+                const loadingTask = pdfjsLib.getDocument({ data: bytes, password, isEvalSupported: false });
                 const pdf = await loadingTask.promise;
                 return pdf;
             } catch (err) {
@@ -774,7 +798,8 @@ Output format example:
                 const reader = new FileReader();
                 reader.onload = async (e) => {
                     try {
-                        const arrayBuffer = e.target.result;
+                        const rawBuffer = e.target.result;
+                        const arrayBuffer = rawBuffer.slice(0); // Protect against detachment
 
                         const pdfjsLib = window['pdfjs-dist/build/pdf'] || window.pdfjsLib;
                         if (!pdfjsLib) {
@@ -785,7 +810,7 @@ Output format example:
                         if (!pdf) {
                             try {
                                 const loadingTask = pdfjsLib.getDocument({
-                                    data: arrayBuffer,
+                                    data: new Uint8Array(rawBuffer.slice(0)),
                                     password: userPassword || "",
                                     // Hardening: pdf.js 3.x can run injected font code via eval on a crafted PDF
                                     isEvalSupported: false

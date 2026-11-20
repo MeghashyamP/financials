@@ -4,17 +4,29 @@ import {
     ModernDateFilterPicker, PeriodSelectOptions, getContrastTextColor,
     formatCategorySubIconFirst, calculatePeriodDateRange, getCurrencySymbol,
     getOccurrencesInPeriod, NET_WORTH_GROUPS, getAnchorDayOfMonth, getAnchorDayForRecurring,
-    shiftDateByCadence, netWorthMonthsPerCycle
+    shiftDateByCadence, netWorthMonthsPerCycle, DatePickerField
 } from '../utils.jsx';
 import { updateTransactionInDB, deleteTransactionFromDB } from '../store.js';
 import { LogBillInstanceModal } from '../components/modals/PlanningModals.jsx';
+
+import { stripTrailingBrackets } from '../services/importDedupe.js';
+
+// A payment linked to a recurring item is shown by that item's name (readable); the bank's own text goes underneath.
+const nameParts = (tx, recurring = []) => {
+    const rec = tx && tx.linkedRecurringId ? (recurring || []).find(r => r && r.id === tx.linkedRecurringId) : null;
+    const raw = tx?.merchant || tx?.narration || "";
+    if (!rec || !rec.name) return { title: raw || "Transaction", sub: "" };
+    const bank = stripTrailingBrackets(raw);
+    const same = bank.trim().toLowerCase() === rec.name.trim().toLowerCase();
+    return { title: rec.name, sub: same ? "" : bank };
+};
 
 const MONTHS = [
     "January", "February", "March", "April", "May", "June",
     "July", "August", "September", "October", "November", "December"
 ];
 
-export const DashboardPage = ({ transactions, allTransactions, settings, setActivePage, updateSetting, loadState, showToast, setTxCategoryFilter }) => {
+export const DashboardPage = ({ transactions, allTransactions, settings, setActivePage, updateSetting, loadState, showToast, setTxCategoryFilter, onViewCategoryTransactions }) => {
     const expenseTx = transactions.filter(t => t.type === "expense");
     const incomeTx = transactions.filter(t => t.type === "income");
     const fullTx = allTransactions || transactions;
@@ -82,11 +94,11 @@ export const DashboardPage = ({ transactions, allTransactions, settings, setActi
                     total={spendingSum}
                     settings={settings}
                     onViewTransactions={(catName) => {
-                        if (setTxCategoryFilter) {
-                            setTxCategoryFilter(catName);
-                        }
-                        if (setActivePage) {
-                            setActivePage("transactions");
+                        if (onViewCategoryTransactions) {
+                            onViewCategoryTransactions(catName);
+                        } else {
+                            if (setTxCategoryFilter) setTxCategoryFilter([catName]);
+                            if (setActivePage) setActivePage("transactions");
                         }
                     }}
                 />
@@ -141,7 +153,10 @@ export const DashboardPage = ({ transactions, allTransactions, settings, setActi
                                                         {firstChar}
                                                     </div>
                                                     <div>
-                                                        <div style={{ fontWeight: 600, color: 'var(--text-main)' }}>{t.merchant || "Transaction"}</div>
+                                                        <div style={{ fontWeight: 600, color: 'var(--text-main)' }}>{nameParts(t, settings.recurring).title}</div>
+                                                        {nameParts(t, settings.recurring).sub && (
+                                                            <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', maxWidth: '260px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={t.merchant}>{nameParts(t, settings.recurring).sub}</div>
+                                                        )}
                                                         {t.paymentMode && (
                                                             <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{t.paymentMode}</div>
                                                         )}
@@ -299,6 +314,41 @@ const FinancialInsightsPanel = ({ transactions, settings, setActivePage }) => {
 
 // --- SHARED DATE HELPERS FOR PAYMENTS WIDGETS ---
 // (getAnchorDayOfMonth / getAnchorDayForRecurring live in utils.jsx)
+const toYYYYMMDD = (dStr) => {
+    if (!dStr) return "";
+    if (dStr instanceof Date) {
+        const y = dStr.getFullYear();
+        const m = String(dStr.getMonth() + 1).padStart(2, '0');
+        const day = String(dStr.getDate()).padStart(2, '0');
+        return `${y}-${m}-${day}`;
+    }
+    const str = String(dStr).trim();
+    const ymd = str.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/);
+    if (ymd) {
+        return `${ymd[1]}-${String(parseInt(ymd[2], 10)).padStart(2, '0')}-${String(parseInt(ymd[3], 10)).padStart(2, '0')}`;
+    }
+    const dmy = str.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{2,4})/);
+    if (dmy) {
+        let p1 = parseInt(dmy[1], 10), p2 = parseInt(dmy[2], 10), p3 = parseInt(dmy[3], 10);
+        if (p3 < 100) p3 += 2000;
+        let day = p1 > 12 ? p1 : (p2 > 12 ? p2 : p1);
+        let month = p1 > 12 ? p2 : (p2 > 12 ? p1 : p2);
+        return `${p3}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    }
+    const d = new Date(str);
+    if (isNaN(d.getTime())) return "";
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+};
+
+const getMainCategory = (cat) => {
+    if (!cat) return "";
+    const str = String(cat).trim();
+    return str.includes(" - ") ? str.split(" - ")[0].trim() : str;
+};
+
 const getDueDateInMonth = (anchorDay, viewYear, viewMonth) => {
     const maxDays = new Date(viewYear, viewMonth + 1, 0).getDate();
     const day = anchorDay === 'last' ? maxDays : Math.min(Math.max(Number(anchorDay) || 1, 1), maxDays);
@@ -307,37 +357,131 @@ const getDueDateInMonth = (anchorDay, viewYear, viewMonth) => {
     return `${viewYear}-${m}-${d}`;
 };
 
+const isRecurringPaidOnDate = ({
+    recurringItem,
+    targetDateStr,
+    viewMonthPrefix,
+    transactions,
+    billInstances
+}) => {
+    if (!recurringItem || !targetDateStr) return false;
+    const targetMonth = targetDateStr.slice(0, 7);
+    const monthPrefix = viewMonthPrefix || targetMonth;
+    const targetObj = new Date(targetDateStr + "T00:00:00");
+
+    // 1. Check bill instances
+    const billInsts = (billInstances || []).filter(b => b && b.recurringId === recurringItem.id);
+    const monthBillInst = billInsts.find(b => b.dueDate && (b.dueDate === targetDateStr || b.dueDate.startsWith(monthPrefix)));
+    if (monthBillInst) {
+        if (monthBillInst.status === 'paid') {
+            // Verify that a corresponding payment transaction actually exists in transactions
+            const hasBackingTx = (transactions || []).some(t => {
+                if (!t) return false;
+                if (monthBillInst.linkedTxId && t.id === monthBillInst.linkedTxId) {
+                    return true;
+                }
+                const isLinked = (t.linkedRecurringId === recurringItem.id);
+                const isNameMatch = Boolean(t.merchant && recurringItem.name && t.merchant.trim().toLowerCase() === recurringItem.name.trim().toLowerCase());
+                if (!isLinked && !isNameMatch) return false;
+                if (t.scheduledDate) {
+                    return t.scheduledDate === targetDateStr || t.scheduledDate.startsWith(monthPrefix);
+                }
+                const tDate = toYYYYMMDD(t.date);
+                return tDate && tDate.startsWith(monthPrefix);
+            });
+            if (hasBackingTx) {
+                return true;
+            }
+            // If no backing transaction exists (e.g. was deleted), do not treat as paid!
+        } else {
+            return false;
+        }
+    }
+
+    // 2. Check transactions
+    const flexDays = Number(recurringItem.dateFlexDays) || 0;
+
+    return (transactions || []).some(t => {
+        if (!t) return false;
+        const tDate = toYYYYMMDD(t.date);
+        if (!tDate) return false;
+
+        const isLinked = (t.linkedRecurringId === recurringItem.id);
+        const isNameMatch = Boolean(t.merchant && recurringItem.name && t.merchant.trim().toLowerCase() === recurringItem.name.trim().toLowerCase());
+        const isCatMatch = Boolean(flexDays > 0 && t.category && recurringItem.category && t.category === recurringItem.category);
+
+        if (!isLinked && !isNameMatch && !isCatMatch) return false;
+
+        // If transaction has an explicit scheduledDate, it must match this target date or month
+        if (t.scheduledDate) {
+            return t.scheduledDate === targetDateStr || t.scheduledDate.startsWith(monthPrefix);
+        }
+
+        const txTs = new Date(tDate + "T00:00:00").getTime();
+        const diffDays = Math.abs(txTs - targetObj.getTime()) / (1000 * 60 * 60 * 24);
+
+        if (flexDays > 0) {
+            return diffDays <= flexDays;
+        }
+
+        // flexDays === 0:
+        // Must be in the same month cycle
+        if (tDate.startsWith(monthPrefix)) return true;
+
+        // Or if explicitly linked by user (isLinked):
+        // Allow within 20 days IF this target date is in the past relative to nextDate (e.g. user marked past month paid with early tx)
+        if (isLinked && diffDays <= 20) {
+            if (recurringItem.nextDate && targetDateStr < recurringItem.nextDate) {
+                return true;
+            }
+        }
+
+        return false;
+    });
+};
+
+const isNetWorthPaidOnDate = ({
+    networthItem,
+    targetDateStr,
+    viewMonthPrefix,
+    transactions
+}) => {
+    if (!networthItem || !targetDateStr) return false;
+    const targetMonth = targetDateStr.slice(0, 7);
+    const monthPrefix = viewMonthPrefix || targetMonth;
+    const targetObj = new Date(targetDateStr + "T00:00:00");
+
+    return (transactions || []).some(t => {
+        if (!t) return false;
+        const tDate = toYYYYMMDD(t.date);
+        if (!tDate) return false;
+
+        const isLinked = (t.linkedRecurringId === networthItem.id);
+        const isNameMatch = Boolean(t.merchant && networthItem.name && t.merchant.trim().toLowerCase() === networthItem.name.trim().toLowerCase());
+
+        if (!isLinked && !isNameMatch) return false;
+
+        if (t.scheduledDate) {
+            return t.scheduledDate === targetDateStr || t.scheduledDate.startsWith(monthPrefix);
+        }
+
+        if (tDate.startsWith(monthPrefix)) return true;
+
+        const txTs = new Date(tDate + "T00:00:00").getTime();
+        const diffDays = Math.abs(txTs - targetObj.getTime()) / (1000 * 60 * 60 * 24);
+
+        if (isLinked && diffDays <= 20) {
+            if (networthItem.nextDueDate && targetDateStr < networthItem.nextDueDate) {
+                return true;
+            }
+        }
+
+        return false;
+    });
+};
+
 // --- SUB-COMPONENT: Calendar widget for the Dashboard ---
 const PaymentsCalendarWidget = ({ settings, transactions, selectedDay, setSelectedDay, viewDate, setViewDate }) => {
-    const toYYYYMMDD = (dStr) => {
-        if (!dStr) return "";
-        if (dStr instanceof Date) {
-            const y = dStr.getFullYear();
-            const m = String(dStr.getMonth() + 1).padStart(2, '0');
-            const day = String(dStr.getDate()).padStart(2, '0');
-            return `${y}-${m}-${day}`;
-        }
-        const str = String(dStr).trim();
-        const ymd = str.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/);
-        if (ymd) {
-            return `${ymd[1]}-${String(parseInt(ymd[2], 10)).padStart(2, '0')}-${String(parseInt(ymd[3], 10)).padStart(2, '0')}`;
-        }
-        const dmy = str.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{2,4})/);
-        if (dmy) {
-            let p1 = parseInt(dmy[1], 10), p2 = parseInt(dmy[2], 10), p3 = parseInt(dmy[3], 10);
-            if (p3 < 100) p3 += 2000;
-            let day = p1 > 12 ? p1 : (p2 > 12 ? p2 : p1);
-            let month = p1 > 12 ? p2 : (p2 > 12 ? p1 : p2);
-            return `${p3}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-        }
-        const d = new Date(str);
-        if (isNaN(d.getTime())) return "";
-        const y = d.getFullYear();
-        const m = String(d.getMonth() + 1).padStart(2, '0');
-        const day = String(d.getDate()).padStart(2, '0');
-        return `${y}-${m}-${day}`;
-    };
-
     const year = viewDate.getFullYear();
     const month = viewDate.getMonth();
 
@@ -366,12 +510,13 @@ const PaymentsCalendarWidget = ({ settings, transactions, selectedDay, setSelect
             if (r.endDate && itemDueDateStr > r.endDate) return;
 
             // Check if already paid in this view month
-            const isPaid = currentMonthBillInst
-                ? (currentMonthBillInst.status === 'paid')
-                : (transactions || []).some(t => {
-                    const tDate = toYYYYMMDD(t.date);
-                    return tDate && tDate.startsWith(viewMonthPrefix) && (t.linkedRecurringId === r.id || t.merchant === r.name);
-                });
+            const isPaid = isRecurringPaidOnDate({
+                recurringItem: r,
+                targetDateStr: itemDueDateStr,
+                viewMonthPrefix,
+                transactions,
+                billInstances: settings.billInstances
+            });
 
             if (!isPaid) {
                 items.push({ date: itemDueDateStr });
@@ -383,9 +528,11 @@ const PaymentsCalendarWidget = ({ settings, transactions, selectedDay, setSelect
             const anchorDay = getAnchorDayOfMonth(it.nextDueDate);
             const itemDueDateStr = getDueDateInMonth(anchorDay, year, month);
 
-            const isPaid = (transactions || []).some(t => {
-                const tDate = toYYYYMMDD(t.date);
-                return tDate && tDate.startsWith(viewMonthPrefix) && (t.linkedRecurringId === it.id || t.merchant === it.name);
+            const isPaid = isNetWorthPaidOnDate({
+                networthItem: it,
+                targetDateStr: itemDueDateStr,
+                viewMonthPrefix,
+                transactions
             });
 
             if (!isPaid) {
@@ -573,6 +720,28 @@ const PaymentsSectionWidget = ({ settings, transactions, updateSetting, loadStat
     const [selectedMapTxIds, setSelectedMapTxIds] = React.useState([]);
     const [unmarkConfirmItem, setUnmarkConfirmItem] = React.useState(null);
     const [unmarkLinkedTxs, setUnmarkLinkedTxs] = React.useState([]);
+    const [createdDateOption, setCreatedDateOption] = React.useState("due_date");
+    const [customCreatedDate, setCustomCreatedDate] = React.useState("");
+
+    // Self-heal: automatically remove orphaned bill instances marked 'paid' whose backing transaction was deleted
+    React.useEffect(() => {
+        if (!settings.billInstances || settings.billInstances.length === 0) return;
+        const orphaned = settings.billInstances.filter(b => {
+            if (b.status !== 'paid') return false;
+            if (b.linkedTxId) {
+                return !(transactions || []).some(t => t && t.id === b.linkedTxId);
+            }
+            return !(transactions || []).some(t => {
+                if (!t || t.linkedRecurringId !== b.recurringId) return false;
+                const sched = t.scheduledDate || t.date;
+                return b.dueDate === sched || (sched && b.dueDate && b.dueDate.startsWith(sched.slice(0, 7)));
+            });
+        });
+        if (orphaned.length > 0 && typeof updateSetting === 'function') {
+            const cleaned = settings.billInstances.filter(b => !orphaned.includes(b));
+            updateSetting("billInstances", cleaned);
+        }
+    }, [transactions, settings.billInstances]);
 
     const handleSaveBillInstance = async (billInst) => {
         const existing = settings.billInstances || [];
@@ -677,19 +846,13 @@ const PaymentsSectionWidget = ({ settings, transactions, updateSetting, loadStat
             const billInstancesForR = (settings.billInstances || []).filter(b => b.recurringId === r.id);
             const currentMonthBillInst = billInstancesForR.find(b => b.dueDate && b.dueDate.startsWith(viewMonthPrefix));
 
-            // Helper to check if a recurring date is paid via transactions
             const checkTxPaid = (targetDateStr) => {
-                const targetObj = new Date(targetDateStr + "T00:00:00");
-                return (transactions || []).some(t => {
-                    const tDate = toYYYYMMDD(t.date);
-                    if (!tDate) return false;
-                    if (flexDays > 0) {
-                        const txTs = new Date(tDate + "T00:00:00").getTime();
-                        const anchorTs = targetObj.getTime();
-                        const diffDays = Math.abs(txTs - anchorTs) / (1000 * 60 * 60 * 24);
-                        return diffDays <= flexDays && (t.linkedRecurringId === r.id || t.merchant === r.name || t.category === r.category);
-                    }
-                    return (t.linkedRecurringId === r.id || t.merchant === r.name);
+                return isRecurringPaidOnDate({
+                    recurringItem: r,
+                    targetDateStr,
+                    viewMonthPrefix,
+                    transactions,
+                    billInstances: settings.billInstances
                 });
             };
 
@@ -750,9 +913,7 @@ const PaymentsSectionWidget = ({ settings, transactions, updateSetting, loadStat
 
             // 2. UPCOMING CHECK: Check current view month item (if >= todayStr)
             if (occursInViewMonth && isWithinActiveRange && effectiveDueDateStr >= todayStr && effectiveDueDateStr.startsWith(viewMonthPrefix)) {
-                const isPaidUpcoming = currentMonthBillInst
-                    ? (currentMonthBillInst.status === 'paid')
-                    : checkTxPaid(effectiveDueDateStr);
+                const isPaidUpcoming = checkTxPaid(effectiveDueDateStr);
 
                 if (!isPaidUpcoming) {
                     const upcomingDateObj = new Date(effectiveDueDateStr + "T00:00:00");
@@ -783,9 +944,11 @@ const PaymentsSectionWidget = ({ settings, transactions, updateSetting, loadStat
             const monthDueDateStr = getDueDateInMonth(anchorDay, viewYear, viewMonth);
 
             const isTxPaid = (targetDateStr) => {
-                return (transactions || []).some(t => {
-                    const tDate = toYYYYMMDD(t.date);
-                    return tDate && (t.linkedRecurringId === it.id || t.merchant === it.name);
+                return isNetWorthPaidOnDate({
+                    networthItem: it,
+                    targetDateStr,
+                    viewMonthPrefix,
+                    transactions
                 });
             };
 
@@ -847,21 +1010,35 @@ const PaymentsSectionWidget = ({ settings, transactions, updateSetting, loadStat
 
     const getItemDueDate = React.useCallback((item) => {
         if (!item) return item?.date;
+        if (item.scheduledDate) return item.scheduledDate;
         if (item.dueDate) return item.dueDate;
         if (item.linkedRecurringId) {
+            const billInsts = (settings.billInstances || []).filter(b => b && b.recurringId === item.linkedRecurringId);
+            const linkedBill = billInsts.find(b => (b.linkedTxId && b.linkedTxId === item.id) || (b.status === 'paid' && b.dueDate));
+            if (linkedBill && linkedBill.dueDate) return linkedBill.dueDate;
             const r = (settings.recurring || []).find(rec => rec && rec.id === item.linkedRecurringId);
             if (r) {
                 const anchorDay = getAnchorDayForRecurring(r);
+                const txDateStr = toYYYYMMDD(item.date);
+                if (txDateStr) {
+                    const txParts = txDateStr.split('-');
+                    return getDueDateInMonth(anchorDay, parseInt(txParts[0], 10), parseInt(txParts[1], 10) - 1);
+                }
                 return getDueDateInMonth(anchorDay, viewYear, viewMonth);
             }
             const netW = (settings.networthItems || []).find(it => it && it.id === item.linkedRecurringId);
             if (netW && netW.nextDueDate) {
                 const anchorDay = getAnchorDayOfMonth(netW.nextDueDate);
+                const txDateStr = toYYYYMMDD(item.date);
+                if (txDateStr) {
+                    const txParts = txDateStr.split('-');
+                    return getDueDateInMonth(anchorDay, parseInt(txParts[0], 10), parseInt(txParts[1], 10) - 1);
+                }
                 return getDueDateInMonth(anchorDay, viewYear, viewMonth);
             }
         }
         return item.date;
-    }, [settings.recurring, settings.networthItems, viewYear, viewMonth]);
+    }, [settings.recurring, settings.networthItems, settings.billInstances, viewYear, viewMonth]);
 
     const paidItems = React.useMemo(() => {
         const list = (transactions || []).filter(t => t.linkedRecurringId || t.linkTo || t.source === "recurring" || (t.notes && t.notes.includes("Marked as paid")));
@@ -905,7 +1082,16 @@ const PaymentsSectionWidget = ({ settings, transactions, updateSetting, loadStat
             }
         }
     }, [selectedDayStr, todayStr, overdueItems, viewYear, viewMonth]);
-    const filteredPaid = selectedDayStr ? paidItems.filter(i => toYYYYMMDD(i.date) === selectedDayStr) : paidItems.filter(i => toYYYYMMDD(i.date).startsWith(viewMonthPrefix));
+    const filteredPaid = React.useMemo(() => {
+        return paidItems.filter(i => {
+            const txDateStr = toYYYYMMDD(i.date);
+            const dueDateStr = toYYYYMMDD(getItemDueDate(i));
+            if (selectedDayStr) {
+                return txDateStr === selectedDayStr || dueDateStr === selectedDayStr;
+            }
+            return txDateStr.startsWith(viewMonthPrefix) || dueDateStr.startsWith(viewMonthPrefix);
+        });
+    }, [paidItems, selectedDayStr, viewMonthPrefix, getItemDueDate]);
 
     // Auto-select active filter tab based on calendar view & date selection rules
     React.useEffect(() => {
@@ -983,7 +1169,7 @@ const PaymentsSectionWidget = ({ settings, transactions, updateSetting, loadStat
         return () => window.removeEventListener("keydown", handleKeyDown);
     }, [markPaidModalItem, unmarkConfirmItem]);
 
-    // Candidate matching transactions for Mark Paid modal (excluding already mapped transactions)
+    // Candidate matching transactions for Mark Paid modal (exact same date and amount)
     const candidateMatches = React.useMemo(() => {
         if (!markPaidModalItem) return [];
         const itemDateStr = markPaidModalItem.date;
@@ -996,19 +1182,34 @@ const PaymentsSectionWidget = ({ settings, transactions, updateSetting, loadStat
         });
     }, [markPaidModalItem, transactions]);
 
-    // Transactions list for multi-transaction mapping mode (type and category matched, excluding already mapped transactions)
+    // Unmapped transactions matching exact amount across all dates (for same price suggestion)
+    const samePriceMatches = React.useMemo(() => {
+        if (!markPaidModalItem) return [];
+        const itemType = markPaidModalItem.type || "expense";
+        const itemAmount = Math.abs(Number(markPaidModalItem.amount || 0));
+        if (itemAmount <= 0) return [];
+        return (transactions || []).filter(t => {
+            if (t.linkedRecurringId) return false;
+            const tType = t.type || "expense";
+            if (tType !== itemType) return false;
+            const tAmount = Math.abs(Number(t.amount || 0));
+            return Math.abs(tAmount - itemAmount) < 0.01;
+        }).sort((a, b) => new Date(b.date) - new Date(a.date));
+    }, [markPaidModalItem, transactions]);
+
+    // Transactions list for multi-transaction mapping mode (type and main category matched, excluding already mapped transactions)
     const candidateTxList = React.useMemo(() => {
         if (!markPaidModalItem) return [];
         const itemType = markPaidModalItem.type || "expense";
-        const itemCat = (markPaidModalItem.category || "").trim().toLowerCase();
+        const itemMainCat = getMainCategory(markPaidModalItem.category).toLowerCase();
 
         return (transactions || []).filter(t => {
             if (t.linkedRecurringId) return false;
             const tType = t.type || "expense";
             if (tType !== itemType) return false;
-            const tCat = (t.category || "").trim().toLowerCase();
-            if (itemCat && itemCat !== "general" && tCat) {
-                return tCat === itemCat;
+            const tMainCat = getMainCategory(t.category).toLowerCase();
+            if (itemMainCat && itemMainCat !== "general" && tMainCat) {
+                return tMainCat === itemMainCat;
             }
             return true;
         }).sort((a, b) => new Date(b.date) - new Date(a.date));
@@ -1020,11 +1221,12 @@ const PaymentsSectionWidget = ({ settings, transactions, updateSetting, loadStat
             .reduce((acc, t) => acc + Math.abs(Number(t.amount || 0)), 0);
     }, [candidateTxList, selectedMapTxIds]);
 
-    const confirmMarkPaid = async (item, txIdToLink) => {
+    const confirmMarkPaid = async (item, txIdToLink, creationDateOverride) => {
         try {
             const isIncome = item.type === "income";
             const linkIds = Array.isArray(txIdToLink) ? txIdToLink : (txIdToLink ? [txIdToLink] : []);
             const dateFormatted = formatDate(todayStr, settings.dateFormat);
+            let createdTxId = null;
 
             if (linkIds.length > 0) {
                 for (const id of linkIds) {
@@ -1034,6 +1236,7 @@ const PaymentsSectionWidget = ({ settings, transactions, updateSetting, loadStat
                         const updatedTx = {
                             ...existingTx,
                             linkedRecurringId: item.id,
+                            scheduledDate: existingTx.scheduledDate || item.date || todayStr,
                             notes: existingTx.notes ? (existingTx.notes.includes("from Dashboard") ? existingTx.notes : `${existingTx.notes} (${noteMsg})`) : noteMsg
                         };
                         await updateTransactionInDB(updatedTx);
@@ -1048,9 +1251,11 @@ const PaymentsSectionWidget = ({ settings, transactions, updateSetting, loadStat
                 const payFrom = accountList.includes("Bank 1")
                     ? "Bank 1"
                     : (accountList.find(a => accountProfiles[a]?.type === "bank") || accountList[0] || "Bank 1");
+                createdTxId = crypto.randomUUID();
+                const txDate = creationDateOverride || (createdDateOption === "due_date" ? (item.date || todayStr) : (createdDateOption === "today" ? todayStr : (customCreatedDate || item.date || todayStr)));
                 const newTx = {
-                    id: crypto.randomUUID(),
-                    date: todayStr,
+                    id: createdTxId,
+                    date: txDate,
                     merchant: item.name,
                     narration: item.name,
                     amount: item.amount,
@@ -1059,23 +1264,37 @@ const PaymentsSectionWidget = ({ settings, transactions, updateSetting, loadStat
                     account: payFrom,
                     linkedRecurringId: item.id,
                     source: "dashboard",
-                    scheduledDate: item.date || todayStr,
+                    scheduledDate: item.date || txDate,
                     tags: [],
                     notes: noteMsg
                 };
                 await updateTransactionInDB(newTx);
             }
 
+            const effectiveLinkedTxId = linkIds[0] || createdTxId || null;
+
             // Advance schedule on item or mark bill instance paid
             if (item.kind === "recurring") {
                 if (item.hasBillInstance && item.billInstanceId) {
                     const updatedInstances = (settings.billInstances || []).map(b => {
                         if (b.id === item.billInstanceId) {
-                            return { ...b, status: 'paid', linkedTxId: linkIds[0] || null };
+                            return { ...b, status: 'paid', linkedTxId: effectiveLinkedTxId };
                         }
                         return b;
                     });
                     await updateSetting("billInstances", updatedInstances);
+                } else if (item.date) {
+                    const newBillInst = {
+                        id: crypto.randomUUID(),
+                        recurringId: item.id,
+                        name: item.name,
+                        amount: item.amount,
+                        dueDate: item.date,
+                        status: 'paid',
+                        linkedTxId: effectiveLinkedTxId
+                    };
+                    const existing = settings.billInstances || [];
+                    await updateSetting("billInstances", [...existing, newBillInst]);
                 }
                 const updatedList = (settings.recurring || []).map(r => {
                     if (r.id !== item.id) return r;
@@ -1168,9 +1387,30 @@ const PaymentsSectionWidget = ({ settings, transactions, updateSetting, loadStat
                     const updatedTx = {
                         ...t,
                         linkedRecurringId: null,
+                        scheduledDate: null,
                         notes: cleanedNotes
                     };
                     await updateTransactionInDB(updatedTx);
+                }
+            }
+
+            // Remove any auto-created bill instances that were linked to these unlinked transactions
+            if (settings.billInstances && settings.billInstances.length > 0) {
+                const targetIds = targetList.map(t => t.id);
+                const updatedInstances = (settings.billInstances || []).filter(b => {
+                    const isLinked = b.linkedTxId && targetIds.includes(b.linkedTxId);
+                    if (isLinked) return false;
+                    if (linkedRecId && b.recurringId === linkedRecId && b.status === 'paid') {
+                        const matchesAnyTx = targetList.some(t => {
+                            const sched = t.scheduledDate || t.date;
+                            return b.dueDate === sched || (sched && b.dueDate && b.dueDate.startsWith(sched.slice(0, 7)));
+                        });
+                        if (matchesAnyTx) return false;
+                    }
+                    return true;
+                });
+                if (updatedInstances.length !== settings.billInstances.length) {
+                    await updateSetting("billInstances", updatedInstances);
                 }
             }
 
@@ -1345,7 +1585,7 @@ const PaymentsSectionWidget = ({ settings, transactions, updateSetting, loadStat
                                             className="btn btn-secondary btn-sm"
                                             style={{ width: '26px', height: '26px', padding: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', borderRadius: '50%', background: '#EEF2FF', color: '#4F46E5', border: '1.5px solid #C7D2FE', cursor: 'pointer', flexShrink: 0, boxShadow: '0 1px 3px rgba(79, 70, 229, 0.15)' }}
                                             title="Mark as Paid"
-                                            onClick={() => { setMarkPaidModalItem(item); setSelectedTxIdToLink(null); }}
+                                            onClick={() => { setMarkPaidModalItem(item); setSelectedTxIdToLink(null); setCreatedDateOption("due_date"); setCustomCreatedDate(item.date || todayStr); }}
                                         >
                                             <Icon name="check" />
                                         </button>
@@ -1406,7 +1646,7 @@ const PaymentsSectionWidget = ({ settings, transactions, updateSetting, loadStat
                                         className="btn btn-primary btn-sm"
                                         style={{ width: '26px', height: '26px', padding: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', borderRadius: '50%', background: '#FEE2E2', color: '#DC2626', border: '1.5px solid #FCA5A5', cursor: 'pointer', flexShrink: 0, boxShadow: '0 1px 3px rgba(220, 38, 38, 0.15)' }}
                                         title="Mark as Paid"
-                                        onClick={() => { setMarkPaidModalItem(item); setSelectedTxIdToLink(null); }}
+                                        onClick={() => { setMarkPaidModalItem(item); setSelectedTxIdToLink(null); setCreatedDateOption("due_date"); setCustomCreatedDate(item.date || todayStr); }}
                                     >
                                         <Icon name="check" />
                                     </button>
@@ -1429,7 +1669,10 @@ const PaymentsSectionWidget = ({ settings, transactions, updateSetting, loadStat
                         filteredPaid.map((item, idx) => (
                             <div key={item.id || idx} className="payments-item-card" style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 2fr) minmax(0, 1.8fr) minmax(0, 1.35fr) minmax(0, 1fr) 28px', gap: '8px', alignItems: 'center', padding: '6px 10px', minHeight: '38px' }}>
                                 <div style={{ fontWeight: 600, fontSize: '0.84rem', color: 'var(--text-main)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
-                                    {item.merchant || item.narration || "Payment"}
+                                    {nameParts(item, settings.recurring).title}
+                                    {nameParts(item, settings.recurring).sub && (
+                                        <span style={{ fontWeight: 400, fontSize: '0.7rem', color: 'var(--text-muted)', marginLeft: '6px' }} title={item.merchant}>· {nameParts(item, settings.recurring).sub.slice(0, 22)}…</span>
+                                    )}
                                 </div>
                                 <div style={{ fontSize: '0.76rem', color: 'var(--text-muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0 }}>
                                     {item.category || "General"}
@@ -1466,9 +1709,19 @@ const PaymentsSectionWidget = ({ settings, transactions, updateSetting, loadStat
                 const isIncome = markPaidModalItem.type === "income";
                 const targetAmt = Math.abs(Number(markPaidModalItem.amount || 0));
                 const sumMatches = Math.abs(selectedMapSum - targetAmt) < 0.01;
+                const exactDateMatch = samePriceMatches.find(t => toYYYYMMDD(t.date) === markPaidModalItem.date);
+                const effectiveSelectedTxId = selectedTxIdToLink === null
+                    ? (exactDateMatch ? exactDateMatch.id : (samePriceMatches[0]?.id || "__create_new__"))
+                    : selectedTxIdToLink;
+                const isCreatingNew = effectiveSelectedTxId === "__create_new__" || samePriceMatches.length === 0;
+                const chosenCreationDate = createdDateOption === "due_date"
+                    ? (markPaidModalItem.date || todayStr)
+                    : (createdDateOption === "today"
+                        ? todayStr
+                        : (customCreatedDate || markPaidModalItem.date || todayStr));
 
                 return (
-                    <div className="modal-overlay" onClick={() => { setMarkPaidModalItem(null); setSelectedTxIdToLink(null); setIsMappingMode(false); setSelectedMapTxIds([]); }}>
+                    <div className="modal-overlay" onClick={() => { setMarkPaidModalItem(null); setSelectedTxIdToLink(null); setIsMappingMode(false); setSelectedMapTxIds([]); setCreatedDateOption("due_date"); setCustomCreatedDate(""); }}>
                         <div className="modal-container" style={{ maxWidth: '520px' }} onClick={(e) => e.stopPropagation()}>
                             <div className="modal-header">
                                 <h3 className="modal-title">
@@ -1477,7 +1730,7 @@ const PaymentsSectionWidget = ({ settings, transactions, updateSetting, loadStat
                                         : (isIncome ? "Mark Inflow as Received" : "Mark Outflow as Paid")
                                     }
                                 </h3>
-                                <button className="modal-close-btn" onClick={() => { setMarkPaidModalItem(null); setSelectedTxIdToLink(null); setIsMappingMode(false); setSelectedMapTxIds([]); }}>
+                                <button className="modal-close-btn" onClick={() => { setMarkPaidModalItem(null); setSelectedTxIdToLink(null); setIsMappingMode(false); setSelectedMapTxIds([]); setCreatedDateOption("due_date"); setCustomCreatedDate(""); }}>
                                     <Icon name="close" />
                                 </button>
                             </div>
@@ -1498,20 +1751,21 @@ const PaymentsSectionWidget = ({ settings, transactions, updateSetting, loadStat
                                             </div>
                                         </div>
 
-                                        {candidateMatches.length > 0 ? (
+                                        {samePriceMatches.length > 0 ? (
                                             <div>
                                                 <p style={{ fontSize: '0.84rem', fontWeight: 600, color: 'var(--text-main)', marginBottom: '8px' }}>
-                                                    Found {candidateMatches.length} existing transaction{candidateMatches.length > 1 ? 's' : ''} on this date matching <span style={{ whiteSpace: 'nowrap' }}>{`${isIncome ? '+' : '-'}${formatCurrency(markPaidModalItem.amount)}`}</span>:
+                                                    Found {samePriceMatches.length} unmapped transaction{samePriceMatches.length > 1 ? 's' : ''} matching <span style={{ whiteSpace: 'nowrap' }}>{`${isIncome ? '+' : '-'}${formatCurrency(markPaidModalItem.amount)}`}</span>:
                                                 </p>
                                                 <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '180px', overflowY: 'auto', marginBottom: '12px' }}>
-                                                    {candidateMatches.map(tx => {
-                                                        const isChecked = (selectedTxIdToLink === tx.id) || (!selectedTxIdToLink && candidateMatches[0].id === tx.id);
+                                                    {samePriceMatches.map(tx => {
+                                                        const isChecked = effectiveSelectedTxId === tx.id;
+                                                        const isExactDate = toYYYYMMDD(tx.date) === markPaidModalItem.date;
                                                         return (
                                                             <label
                                                                 key={tx.id}
                                                                 style={{
                                                                     display: 'flex', alignItems: 'center', gap: '10px', padding: '10px 12px',
-                                                                    borderRadius: '8px', border: isChecked ? '1px solid var(--primary)' : '1px solid var(--border-color)',
+                                                                    borderRadius: '8px', border: isChecked ? '1.5px solid var(--primary)' : '1px solid var(--border-color)',
                                                                     background: isChecked ? 'var(--primary-light)' : '#fff', cursor: 'pointer'
                                                                 }}
                                                             >
@@ -1521,10 +1775,20 @@ const PaymentsSectionWidget = ({ settings, transactions, updateSetting, loadStat
                                                                     checked={isChecked}
                                                                     onChange={() => setSelectedTxIdToLink(tx.id)}
                                                                 />
-                                                                <div style={{ flex: 1 }}>
-                                                                    <div style={{ fontWeight: 600, fontSize: '0.84rem' }}>{tx.merchant || tx.narration || "Transaction"}</div>
+                                                                <div style={{ flex: 1, minWidth: 0 }}>
+                                                                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                                                        <span style={{ fontWeight: 600, fontSize: '0.84rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                                                            {tx.merchant || tx.narration || "Transaction"}
+                                                                        </span>
+                                                                        {isExactDate && (
+                                                                            <span style={{ fontSize: '0.68rem', padding: '1px 6px', borderRadius: '4px', background: '#D1FAE5', color: '#065F46', fontWeight: 700 }}>
+                                                                                Exact Date
+                                                                            </span>
+                                                                        )}
+                                                                    </div>
                                                                     <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)', display: 'flex', gap: '8px' }}>
-                                                                        <span>{tx.category || "General"}</span>
+                                                                        <span>{formatDate(tx.date, settings.dateFormat)}</span>
+                                                                        <span>• {tx.category || "General"}</span>
                                                                         <span>• {tx.account || "Account"}</span>
                                                                     </div>
                                                                 </div>
@@ -1532,20 +1796,82 @@ const PaymentsSectionWidget = ({ settings, transactions, updateSetting, loadStat
                                                             </label>
                                                         );
                                                     })}
+
+                                                    <label
+                                                        style={{
+                                                            display: 'flex', alignItems: 'center', gap: '10px', padding: '10px 12px',
+                                                            borderRadius: '8px', border: effectiveSelectedTxId === '__create_new__' ? '1.5px solid var(--primary)' : '1px dashed var(--border-color)',
+                                                            background: effectiveSelectedTxId === '__create_new__' ? 'var(--primary-light)' : '#FAFAFA', cursor: 'pointer'
+                                                        }}
+                                                    >
+                                                        <input
+                                                            type="radio"
+                                                            name="txMatch"
+                                                            checked={effectiveSelectedTxId === '__create_new__'}
+                                                            onChange={() => setSelectedTxIdToLink('__create_new__')}
+                                                        />
+                                                        <div style={{ fontWeight: 600, fontSize: '0.82rem', color: 'var(--text-main)' }}>
+                                                            ➕ Create a new transaction instead
+                                                        </div>
+                                                    </label>
                                                 </div>
-                                                <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
-                                                    Would you like to link this transaction or record a new one?
-                                                </p>
                                             </div>
                                         ) : (
                                             <div>
                                                 <div style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', padding: '10px 12px', borderRadius: '10px', background: '#FFFBEB', border: '1px solid #FCD34D', color: '#92400E', fontSize: '0.82rem', marginBottom: '12px' }}>
                                                     <div style={{ marginTop: '2px', flexShrink: 0 }}><Icon name="info" /></div>
-                                                    <div>No matching transaction found on <strong>{formatDate(markPaidModalItem.date, settings.dateFormat)}</strong> for <strong style={{ whiteSpace: 'nowrap' }}>{`${isIncome ? '+' : '-'}${formatCurrency(markPaidModalItem.amount)}`}</strong>.</div>
+                                                    <div>No unmapped transactions found matching <strong style={{ whiteSpace: 'nowrap' }}>{`${isIncome ? '+' : '-'}${formatCurrency(markPaidModalItem.amount)}`}</strong>.</div>
                                                 </div>
-                                                <p style={{ fontSize: '0.84rem', color: 'var(--text-main)' }}>
+                                                <p style={{ fontSize: '0.84rem', color: 'var(--text-main)', marginBottom: '8px' }}>
                                                     {isIncome ? "Would you like to record a new inflow transaction for this item?" : "Would you like to create a new outflow transaction for this item?"}
                                                 </p>
+                                            </div>
+                                        )}
+
+                                        {isCreatingNew && (
+                                            <div style={{ background: '#F8FAFC', border: '1px solid #E2E8F0', borderRadius: '10px', padding: '12px 14px', marginTop: '10px' }}>
+                                                <div style={{ fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-main)', marginBottom: '8px' }}>
+                                                    Choose Transaction Creation Date:
+                                                </div>
+                                                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                                    <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.8rem', cursor: 'pointer' }}>
+                                                        <input
+                                                            type="radio"
+                                                            name="creationDateOpt"
+                                                            checked={createdDateOption === "due_date"}
+                                                            onChange={() => setCreatedDateOption("due_date")}
+                                                        />
+                                                        <span><strong>Due Date:</strong> {formatDate(markPaidModalItem.date, settings.dateFormat)} (Recommended)</span>
+                                                    </label>
+                                                    <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.8rem', cursor: 'pointer' }}>
+                                                        <input
+                                                            type="radio"
+                                                            name="creationDateOpt"
+                                                            checked={createdDateOption === "today"}
+                                                            onChange={() => setCreatedDateOption("today")}
+                                                        />
+                                                        <span><strong>Today:</strong> {formatDate(todayStr, settings.dateFormat)}</span>
+                                                    </label>
+                                                    <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.8rem', cursor: 'pointer' }}>
+                                                        <input
+                                                            type="radio"
+                                                            name="creationDateOpt"
+                                                            checked={createdDateOption === "custom"}
+                                                            onChange={() => setCreatedDateOption("custom")}
+                                                        />
+                                                        <span><strong>Specific Date:</strong></span>
+                                                        {createdDateOption === "custom" && (
+                                                            <div style={{ width: '150px' }} onClick={(e) => e.stopPropagation()}>
+                                                                <DatePickerField
+                                                                    value={customCreatedDate || markPaidModalItem.date || todayStr}
+                                                                    onChange={(val) => setCustomCreatedDate(val)}
+                                                                    dateFormat={settings?.dateFormat}
+                                                                    style={{ padding: '2px 8px', fontSize: '0.78rem', minHeight: '30px', borderRadius: '6px', border: '1px solid var(--border-color)', background: '#fff' }}
+                                                                />
+                                                            </div>
+                                                        )}
+                                                    </label>
+                                                </div>
                                             </div>
                                         )}
                                     </>
@@ -1570,12 +1896,12 @@ const PaymentsSectionWidget = ({ settings, transactions, updateSetting, loadStat
                                         </div>
 
                                         <p style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-main)', marginBottom: '8px' }}>
-                                            Select existing transaction(s) under <strong>{markPaidModalItem.category || "General"}</strong>:
+                                            Select existing transaction(s) under <strong>{getMainCategory(markPaidModalItem.category) || markPaidModalItem.category || "General"}</strong>:
                                         </p>
                                         <div style={{ maxHeight: '200px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '6px', marginBottom: '8px' }}>
                                             {candidateTxList.length === 0 ? (
                                                 <div style={{ padding: '16px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.8rem' }}>
-                                                    No existing {isIncome ? "inflow" : "outflow"} transactions found in category <strong>"{markPaidModalItem.category || "General"}"</strong>.
+                                                    No existing {isIncome ? "inflow" : "outflow"} transactions found in category <strong>"{getMainCategory(markPaidModalItem.category) || markPaidModalItem.category || "General"}"</strong>.
                                                 </div>
                                             ) : (
                                                 candidateTxList.map(tx => {
@@ -1620,8 +1946,21 @@ const PaymentsSectionWidget = ({ settings, transactions, updateSetting, loadStat
                                         <button className="btn btn-secondary btn-sm" onClick={() => setIsMappingMode(true)}>
                                             Map to Existing Transaction(s)
                                         </button>
-                                        <button className="btn btn-primary btn-sm" style={isIncome ? { background: '#10B981', borderColor: '#059669' } : { background: '#DC2626', borderColor: '#B91C1C', color: '#FFFFFF' }} onClick={() => confirmMarkPaid(markPaidModalItem, candidateMatches.length > 0 ? (selectedTxIdToLink || candidateMatches[0].id) : null)}>
-                                            {candidateMatches.length > 0 ? "Link Selected Transaction" : (isIncome ? "Create & Record Inflow" : "Create & Mark Outflow Paid")}
+                                        <button
+                                            className="btn btn-primary btn-sm"
+                                            style={isIncome ? { background: '#10B981', borderColor: '#059669' } : { background: '#DC2626', borderColor: '#B91C1C', color: '#FFFFFF' }}
+                                            onClick={() => {
+                                                if (isCreatingNew) {
+                                                    confirmMarkPaid(markPaidModalItem, null, chosenCreationDate);
+                                                } else {
+                                                    confirmMarkPaid(markPaidModalItem, effectiveSelectedTxId);
+                                                }
+                                            }}
+                                        >
+                                            {!isCreatingNew
+                                                ? "Link Selected Transaction"
+                                                : (isIncome ? "Create & Record Inflow" : "Create & Mark Outflow Paid")
+                                            }
                                         </button>
                                     </>
                                 ) : (

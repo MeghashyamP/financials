@@ -85,7 +85,8 @@ test('a Dashboard payment is replaced by the matching statement row', () => {
     const merged = mergeIntoPlaceholder(ph, { ...incoming, category: 'Others - Needs Review 🔍', categorySource: 'unknown', tags: [], source: 'pdf-import', documentId: 'doc1' });
     assert.equal(merged.id, ph.id, 'the transaction keeps its id');
     assert.equal(merged.date, '2026-10-06');
-    assert.equal(merged.narration, incoming.narration);
+    assert.equal(merged.narration, `${incoming.narration} (Home Rent)`);
+    assert.equal(merged.merchant, `${incoming.merchant} (Home Rent)`);
     assert.equal(merged.account, 'HDFC Debit Card');
     assert.equal(merged.linkedRecurringId, 'rec-rent', 'still linked to the recurring item');
     assert.equal(merged.category, 'Utilities - Rent 🏠', 'your recurring category survives an auto-guessed one');
@@ -96,6 +97,9 @@ test('a Dashboard payment is replaced by the matching statement row', () => {
     const nice = mergeIntoPlaceholder(ph, incoming, { fmtDate: (d) => `<${d}>` });
     assert.match(nice.notes, /of <2026-10-05>/, 'dates in notes follow the date-format setting');
     assert.equal(isDashboardPlaceholder(merged), false, 'it is a real transaction now');
+
+    // Duplicate detection ignores the bracketed content on subsequent imports
+    assert.equal(narrationsAlike(incoming.narration, merged.narration), true, 'duplicate matcher ignores trailing brackets');
 });
 
 test('placeholder matching: fixed amounts must match, variable amounts may differ, window and direction apply', () => {

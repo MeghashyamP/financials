@@ -1,4 +1,5 @@
 import React from 'react';
+import { TxColumnHeaders } from './components/TxColumnHeaders.jsx';
 import {
     Icon, DEFAULT_CATEGORIES, formatCurrencyVal, calculatePeriodDateRange,
     detectRecurringTransactions, processImportedTransaction, useEscapeKey,
@@ -27,11 +28,12 @@ import { extractTextFromPDF, parseTransactionsFromPDFText, parseCSVText } from '
 import { setCategoryMemory } from './categorizer.js';
 import { applyStatementImport } from './services/statementImport.js';
 import { planImport, mergeIntoPlaceholder, withFingerprints } from './services/importDedupe.js';
-import { applyRules, revertRuleOnTx, isEnabled as isRuleOn } from './services/rulesEngine.js';
+import { applyRules, revertRuleOnTx, isEnabled as isRuleOn, normalizeRule } from './services/rulesEngine.js';
 import { resolveStatementAccount } from './services/accounts.js';
 import { applyCategory, isNeedsReview } from './services/review.js';
 import { ReviewInbox } from './components/MerchantReview.jsx';
 import { ReportsPage } from './pages/ReportsPage.jsx';
+import { FeaturesGuidePage } from './pages/FeaturesGuidePage.jsx';
 import { LockScreen } from './components/LockScreen.jsx';
 import { isLockEnabled, getIdleMinutes, readPrivacyDefault } from './services/appLock.js';
 import { markBackup, backupHealth, snoozeBackupBanner } from './services/backupStatus.js';
@@ -296,6 +298,19 @@ const AppInner = ({ privacy }) => {
         handleUnifiedPeriodChange("custom");
     };
 
+    // Dashboard "Category Spending Breakdown" -> Transactions, filtered the same way the chart is
+    // (same period, spending only, that category; all other column filters cleared).
+    const handleViewCategoryTransactions = (catName) => {
+        setPagePeriods(prev => ({ ...prev, transactions: pagePeriods.dashboard || "this_month" }));
+        setPageCustomStarts(prev => ({ ...prev, transactions: pageCustomStarts.dashboard || "" }));
+        setPageCustomEnds(prev => ({ ...prev, transactions: pageCustomEnds.dashboard || "" }));
+        setTxCategoryFilter([catName]);
+        setTxTypeFilter(["expense"]);
+        setTxNarrationFilter(""); setTxAccountFilter([]); setTxTagFilter([]);
+        setTxAmountFilter(""); setTxNotesFilter(""); setTxSearch("");
+        handleNavigatePage("transactions");
+    };
+
     const [isSidebarCollapsed, setIsSidebarCollapsed] = React.useState(() => {
         return localStorage.getItem("sidebar_collapsed") === "true";
     });
@@ -320,6 +335,7 @@ const AppInner = ({ privacy }) => {
             case "goals": return "Savings Goals";
             case "documents": return "Document Vault";
             case "rules": return "Transaction Rules";
+            case "features": return "Feature Guide & Hidden Mechanics";
             case "settings": return "System Settings";
             default: return "Financials";
         }
@@ -337,6 +353,7 @@ const AppInner = ({ privacy }) => {
             case "goals": return "Establish and trace your long term capital targets";
             case "documents": return "Upload and store your bank statements, receipts, and invoices";
             case "rules": return "Build automation filters to map merchants to categories instantly";
+            case "features": return "Complete handbook of features, hidden heuristics, mathematical audits, and security mechanics";
             case "settings": return "Manage your custom options, catalogs, categories, and resets";
             default: return "";
         }
@@ -365,10 +382,10 @@ const AppInner = ({ privacy }) => {
 
     // Transactions search and filter states in topbar
     const [txSearch, setTxSearch] = React.useState("");
-    const [txTypeFilter, setTxTypeFilter] = React.useState("all");
-    const [txCategoryFilter, setTxCategoryFilter] = React.useState("all");
-    const [txAccountFilter, setTxAccountFilter] = React.useState("all");
-    const [txTagFilter, setTxTagFilter] = React.useState("all");
+    const [txTypeFilter, setTxTypeFilter] = React.useState([]);
+    const [txCategoryFilter, setTxCategoryFilter] = React.useState([]);
+    const [txAccountFilter, setTxAccountFilter] = React.useState([]);
+    const [txTagFilter, setTxTagFilter] = React.useState([]);
     const [txNarrationFilter, setTxNarrationFilter] = React.useState("");
     const [txAmountFilter, setTxAmountFilter] = React.useState("");
     const [txNotesFilter, setTxNotesFilter] = React.useState("");
@@ -805,9 +822,69 @@ const AppInner = ({ privacy }) => {
     // Delete transaction
     const handleDeleteTransaction = async (id) => {
         try {
+            const txToDelete = (transactions || []).find(t => t.id === id);
             await deleteTransactionFromDB(id);
+
+            // If the deleted transaction was linked to a recurring payment or created from Dashboard
+            if (txToDelete && (txToDelete.linkedRecurringId || txToDelete.source === "dashboard" || (txToDelete.notes && txToDelete.notes.includes("from Dashboard")))) {
+                const recId = txToDelete.linkedRecurringId;
+
+                // 1. Clean up bill instances
+                const currentBillInstances = settings.billInstances || [];
+                const updatedInstances = currentBillInstances.filter(b => {
+                    if (b.linkedTxId === id) return false;
+                    if (recId && b.recurringId === recId && b.status === 'paid') {
+                        const sched = txToDelete.scheduledDate || txToDelete.date;
+                        if (b.dueDate === sched || (sched && b.dueDate && b.dueDate.startsWith(sched.slice(0, 7)))) {
+                            return false;
+                        }
+                    }
+                    return true;
+                });
+                if (updatedInstances.length !== currentBillInstances.length) {
+                    await updateSetting("billInstances", updatedInstances);
+                }
+
+                // 2. Rewind recurring nextDate if needed
+                if (recId) {
+                    const rItem = (settings.recurring || []).find(r => r && r.id === recId);
+                    if (rItem) {
+                        const updatedRecurring = (settings.recurring || []).map(r => {
+                            if (!r || r.id !== recId) return r;
+                            const nextDate = shiftDateByCadence(r.nextDate, r.cadence, -1, {
+                                anchorDay: getAnchorDayForRecurring(r),
+                                intervalDays: r.customIntervalDays
+                            });
+                            return { ...r, nextDate };
+                        });
+                        await updateSetting("recurring", updatedRecurring);
+                    }
+                }
+
+                // 3. Revert Net Worth updates if linked to amortizing loan or SIP investment
+                if (recId && settings.networthItems) {
+                    const paidAmount = Math.abs(Number(txToDelete.amount || 0));
+                    if (paidAmount > 0) {
+                        const updatedNw = (settings.networthItems || []).map(nw => {
+                            if (nw.linkedRecurringId === recId && (nw.syncMode === "amortizing" || nw.syncMode === "loan_principal")) {
+                                return { ...nw, value: Number(nw.value || 0) + paidAmount };
+                            }
+                            if (nw.linkedRecurringId === recId && (nw.syncMode === "sip" || nw.syncMode === "investment_sip")) {
+                                return {
+                                    ...nw,
+                                    invested: Math.max(0, Number(nw.invested || 0) - paidAmount),
+                                    value: Math.max(0, Number(nw.value !== undefined ? nw.value : nw.invested || 0) - paidAmount)
+                                };
+                            }
+                            return nw;
+                        });
+                        await updateSetting("networthItems", updatedNw);
+                    }
+                }
+            }
+
             showToast("Transaction deleted successfully");
-            loadState();
+            await loadState();
         } catch (e) {
             showToast("Delete failed", "error");
         }
@@ -873,7 +950,7 @@ const AppInner = ({ privacy }) => {
     };
 
     const txChanged = (a, b) =>
-        a.category !== b.category || a.type !== b.type || a.neutralSign !== b.neutralSign || a.categorySource !== b.categorySource
+        a.linkedRecurringId !== b.linkedRecurringId || a.narration !== b.narration || a.category !== b.category || a.type !== b.type || a.neutralSign !== b.neutralSign || a.categorySource !== b.categorySource
         || (Array.isArray(a.tags) ? a.tags : []).join("\u0001") !== (Array.isArray(b.tags) ? b.tags : []).join("\u0001")
         || JSON.stringify(a.ruleChanges || null) !== JSON.stringify(b.ruleChanges || null);
 
@@ -1052,8 +1129,17 @@ const AppInner = ({ privacy }) => {
         linked.forEach(t => {
             const [kind, id] = t.linkTo.split(":");
             if (kind === "recurring") {
-                recurringList = recurringList.map(r => r.id === id ? { ...r, nextDate: advanceRecurringDate(t.date, r) } : r);
+                // catch-up imports link many months at once: the next due date only ever moves forward
+                recurringList = recurringList.map(r => {
+                    if (r.id !== id) return r;
+                    const adv = advanceRecurringDate(t.date, r);
+                    return { ...r, nextDate: (r.nextDate && adv && adv < r.nextDate) ? r.nextDate : adv };
+                });
                 recurringChanged = true;
+                // a pending logged bill for that month is now paid
+                const month = String(t.date).slice(0, 7);
+                billInstancesList = billInstancesList.map(b => (b.recurringId === id && b.status === 'pending' && String(b.dueDate).slice(0, 7) === month) ? { ...b, status: 'paid', linkedTxId: t.id } : b);
+                billInstancesChanged = true;
 
                 // Also check if any Net Worth item is linked to this recurring template
                 const hasLinkedNw = networthList.some(nw => nw.linkedRecurringId === id);
@@ -1126,10 +1212,35 @@ const AppInner = ({ privacy }) => {
             const itemsToInsert = selectedTransactions.map(t => ({
                 ...t,
                 source: "pdf-import",
-                documentId: docId
+                documentId: docId,
+                // a row linked to a recurring item is that payment: the Dashboard then shows it as paid
+                linkedRecurringId: (typeof t.linkTo === "string" && t.linkTo.startsWith("recurring:")) ? t.linkTo.split(":")[1] : (t.linkedRecurringId || null)
             }));
 
             const res = await handleAddTransactions(itemsToInsert, { mode: "import" });
+
+            // Links you confirmed by hand become linking rules, so the next statement matches them by itself
+            try {
+                const wanted = new Map();
+                selectedTransactions.forEach(t => { const l = t._learnLink; if (l && l.text) wanted.set(`${l.recurringId}|${l.text.toLowerCase()}`, l); });
+                const haveRules = (rules || []).map(r => normalizeRule(r)).filter(Boolean);
+                let learned = 0;
+                for (const l of wanted.values()) {
+                    const exists = haveRules.some(r => r.actions.some(a => a.type === "linkRecurring" && a.value === l.recurringId)
+                        && r.conditions.some(c => c.field === "narration" && String(c.value || "").toLowerCase().includes(l.text.toLowerCase())));
+                    if (exists) continue;
+                    const conditions = [{ field: "narration", op: "contains", value: l.text }];
+                    if (!l.variable && l.amount > 0) conditions.push({ field: "amount", op: "between", value: Math.round(l.amount * 0.995 * 100) / 100, value2: Math.round(l.amount * 1.005 * 100) / 100 });
+                    await handleSaveRule({
+                        version: 2, match: "all", enabled: 1, name: `Link “${l.text}” → ${l.name}`,
+                        conditions, actions: [{ type: "linkRecurring", value: l.recurringId, label: l.name }]
+                    }, { applyExisting: false, quiet: true });
+                    learned++;
+                }
+                if (learned) showToast(`Learned ${learned} linking rule${learned === 1 ? "" : "s"} — see Rules.`);
+            } catch (learnErr) {
+                console.warn("Link learning notice:", learnErr);
+            }
 
             try {
                 await applyLedgerLinks(selectedTransactions);
@@ -1498,6 +1609,7 @@ const AppInner = ({ privacy }) => {
                         { id: "reports", label: "Reports", icon: "subscriptions" },
                         { id: "documents", label: "Documents", icon: "documents" },
                         { id: "rules", label: "Rules", icon: "rules" },
+                        { id: "features", label: "Feature Guide", icon: "features" },
                         { id: "settings", label: "Settings", icon: "settings" }
                     ].map(item => (
                         <li
@@ -1690,6 +1802,7 @@ const AppInner = ({ privacy }) => {
                         { id: "reports", label: "Reports", icon: "subscriptions" },
                         { id: "documents", label: "Docs", icon: "documents" },
                         { id: "rules", label: "Rules", icon: "rules" },
+                        { id: "features", label: "Guide", icon: "features" },
                         { id: "settings", label: "Settings", icon: "settings" }
                     ].map(item => (
                         <div
@@ -2224,11 +2337,12 @@ const AppInner = ({ privacy }) => {
                                 <select
                                     className="form-control"
                                     style={{ height: '34px', fontSize: '0.83rem', padding: '0 8px', flexShrink: 0, width: '120px' }}
-                                    value={txTypeFilter}
-                                    onChange={(e) => setTxTypeFilter(e.target.value)}
+                                    value={txTypeFilter.length === 1 ? txTypeFilter[0] : (txTypeFilter.length > 1 ? 'multi' : 'all')}
+                                    onChange={(e) => setTxTypeFilter(e.target.value === 'all' || e.target.value === 'multi' ? [] : [e.target.value])}
                                     title="Filter by Transaction Type"
                                 >
                                     <option value="all">All Types</option>
+                                    {txTypeFilter.length > 1 && <option value="multi">Multiple types</option>}
                                     <option value="expense">Outflow</option>
                                     <option value="income">Inflow</option>
                                     <option value="neutral">Neutral</option>
@@ -2247,73 +2361,21 @@ const AppInner = ({ privacy }) => {
                                 </button>
                             </div>
 
-                            {/* Row 2: Interactive column header bar */}
-                            <div className="tx-column-headers-bar" style={{
-                                display: 'grid',
-                                gridTemplateColumns: '120px 1fr 160px 130px 150px 120px 110px 120px',
-                                alignItems: 'center',
-                                background: '#F9FAFB',
-                                border: '1px solid var(--border-color)',
-                                borderRadius: '10px',
-                                padding: '8px 18px',
-                                fontSize: '0.78rem',
-                                fontWeight: 600,
-                                color: 'var(--text-muted)',
-                                letterSpacing: '0.04em',
-                                textTransform: 'uppercase',
-                                userSelect: 'none'
-                            }}>
-                                {/* DATE */}
-                                <div style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }} onClick={() => handleTxSort('date')}>
-                                    <span style={{ color: txSortField === "date" ? 'var(--primary)' : 'inherit', fontWeight: txSortField === "date" ? 700 : 600 }}>Date</span>
-                                    {renderSortIcon("date")}
-                                </div>
-
-                                {/* NARRATION */}
-                                <div style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }} onClick={() => handleTxSort('narration')}>
-                                    <span style={{ color: (txNarrationFilter || txSortField === 'narration') ? 'var(--primary)' : 'inherit', fontWeight: (txNarrationFilter || txSortField === 'narration') ? 700 : 600 }}>Narration</span>
-                                    {txNarrationFilter && <span className="badge badge-info" style={{ fontSize: '0.62rem', padding: '1px 5px' }}>Filtered</span>}
-                                    {renderSortIcon("narration")}
-                                </div>
-
-                                {/* CATEGORY */}
-                                <div style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }} onClick={() => handleTxSort('category')}>
-                                    <span style={{ color: (txCategoryFilter !== 'all' || txSortField === 'category') ? 'var(--primary)' : 'inherit', fontWeight: (txCategoryFilter !== 'all' || txSortField === 'category') ? 700 : 600 }}>Category</span>
-                                    {txCategoryFilter !== 'all' && <span className="badge badge-info" style={{ fontSize: '0.62rem', padding: '1px 5px' }}>Filtered</span>}
-                                    {renderSortIcon("category")}
-                                </div>
-
-                                {/* ACCOUNT */}
-                                <div style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }} onClick={() => handleTxSort('account')}>
-                                    <span style={{ color: (txAccountFilter !== 'all' || txSortField === 'account') ? 'var(--primary)' : 'inherit', fontWeight: (txAccountFilter !== 'all' || txSortField === 'account') ? 700 : 600 }}>Account</span>
-                                    {txAccountFilter !== 'all' && <span className="badge badge-info" style={{ fontSize: '0.62rem', padding: '1px 5px' }}>Filtered</span>}
-                                    {renderSortIcon("account")}
-                                </div>
-
-                                {/* TAGS */}
-                                <div style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }} onClick={() => handleTxSort('tags')}>
-                                    <span style={{ color: (txTagFilter !== 'all' || txSortField === 'tags') ? 'var(--primary)' : 'inherit', fontWeight: (txTagFilter !== 'all' || txSortField === 'tags') ? 700 : 600 }}>Tags</span>
-                                    {txTagFilter !== 'all' && <span className="badge badge-info" style={{ fontSize: '0.62rem', padding: '1px 5px' }}>Filtered</span>}
-                                    {renderSortIcon("tags")}
-                                </div>
-
-                                {/* AMOUNT */}
-                                <div style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }} onClick={() => handleTxSort('amount')}>
-                                    <span style={{ color: (txTypeFilter !== 'all' || txAmountFilter || txSortField === 'amount') ? 'var(--primary)' : 'inherit', fontWeight: (txTypeFilter !== 'all' || txAmountFilter || txSortField === 'amount') ? 700 : 600 }}>Amount</span>
-                                    {(txTypeFilter !== 'all' || txAmountFilter) && <span className="badge badge-info" style={{ fontSize: '0.62rem', padding: '1px 5px' }}>Filtered</span>}
-                                    {renderSortIcon("amount")}
-                                </div>
-
-                                {/* NOTES */}
-                                <div style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }} onClick={() => handleTxSort('notes')}>
-                                    <span style={{ color: (txNotesFilter || txSortField === 'notes') ? 'var(--primary)' : 'inherit', fontWeight: (txNotesFilter || txSortField === 'notes') ? 700 : 600 }}>Notes</span>
-                                    {txNotesFilter && <span className="badge badge-info" style={{ fontSize: '0.62rem', padding: '1px 5px' }}>Filtered</span>}
-                                    {renderSortIcon("notes")}
-                                </div>
-
-                                {/* ACTIONS */}
-                                <div style={{ textAlign: 'center' }}>Actions</div>
-                            </div>
+                            {/* Row 2: Interactive column header bar (click a name to filter, arrows to sort) */}
+                            <TxColumnHeaders
+                                settings={settings}
+                                tags={tags}
+                                sortField={txSortField}
+                                handleTxSort={handleTxSort}
+                                renderSortIcon={renderSortIcon}
+                                narrationFilter={txNarrationFilter} setNarrationFilter={setTxNarrationFilter}
+                                categoryFilter={txCategoryFilter} setCategoryFilter={setTxCategoryFilter}
+                                accountFilter={txAccountFilter} setAccountFilter={setTxAccountFilter}
+                                tagFilter={txTagFilter} setTagFilter={setTxTagFilter}
+                                typeFilter={txTypeFilter} setTypeFilter={setTxTypeFilter}
+                                amountFilter={txAmountFilter} setAmountFilter={setTxAmountFilter}
+                                notesFilter={txNotesFilter} setNotesFilter={setTxNotesFilter}
+                            />
                         </div>
                     )}
 
@@ -2435,7 +2497,7 @@ const AppInner = ({ privacy }) => {
                             updateSetting={updateSetting}
                             loadState={loadState}
                             showToast={showToast}
-                            setTxCategoryFilter={setTxCategoryFilter}
+                            onViewCategoryTransactions={handleViewCategoryTransactions}
                         />
                     )}
                     {activePage === "transactions" && (
@@ -2512,6 +2574,7 @@ const AppInner = ({ privacy }) => {
                             selectedPeriod={calcPeriod}
                             customStart={calcCustomStart}
                             customEnd={calcCustomEnd}
+                            tags={tags}
                         />
                     )}
                     {activePage === "goals" && (
@@ -2564,6 +2627,9 @@ const AppInner = ({ privacy }) => {
                             onRunRule={handleRunRule}
                             onDeleteRule={handleDeleteRule}
                         />
+                    )}
+                    {activePage === "features" && (
+                        <FeaturesGuidePage />
                     )}
                     {activePage === "settings" && (
                         <SettingsPage
