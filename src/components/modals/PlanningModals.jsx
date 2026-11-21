@@ -1607,128 +1607,254 @@ const FrequencyPicker = ({ value, onChange }) => {
                 return computed || item.nextDate || item.date || todayStr;
             }, [item, referenceDate, todayStr]);
 
-            const existingBillInst = React.useMemo(() => {
-                if (!item) return null;
-                const pendingList = (settings?.billInstances || []).filter(b => b.recurringId === item.id && b.status === 'pending');
-                if (pendingList.length === 0) return null;
-                if (initialExpectedDate) {
-                    const match = pendingList.find(b => b.dueDate === initialExpectedDate || (b.dueDate && b.dueDate.substring(0, 7) === initialExpectedDate.substring(0, 7)));
-                    if (match) return match;
-                }
-                return pendingList[0];
-            }, [item, settings?.billInstances, initialExpectedDate]);
+            // All bill instances logged for this recurring item across all cycles
+            const allBillInsts = React.useMemo(() => {
+                if (!item) return [];
+                return (settings?.billInstances || [])
+                    .filter(b => b && b.recurringId === item.id)
+                    .sort((a, b) => (b.dueDate || '').localeCompare(a.dueDate || ''));
+            }, [item, settings?.billInstances]);
 
-            const [amount, setAmount] = React.useState(existingBillInst ? existingBillInst.amount : (item?.estimatedAmount || item?.amount || ""));
-            const [dueDate, setDueDate] = React.useState(existingBillInst?.dueDate || initialExpectedDate);
+            const defaultInitialCycleId = React.useMemo(() => {
+                if (item?._targetBillInstance?.id) return item._targetBillInstance.id;
+                if (allBillInsts.length === 0) return 'new';
+                const match = allBillInsts.find(b => b.dueDate === initialExpectedDate || (b.dueDate && b.dueDate.substring(0, 7) === initialExpectedDate.substring(0, 7)));
+                if (match) return match.id;
+                return 'new';
+            }, [item, allBillInsts, initialExpectedDate]);
 
-            // Keep state in sync if item or existing bill instance changes
+            const [selectedCycleId, setSelectedCycleId] = React.useState(defaultInitialCycleId);
+
+            const activeBillInst = React.useMemo(() => {
+                if (selectedCycleId === 'new') return null;
+                return allBillInsts.find(b => b.id === selectedCycleId) || null;
+            }, [selectedCycleId, allBillInsts]);
+
+            const [amount, setAmount] = React.useState(() => {
+                if (activeBillInst) return activeBillInst.amount;
+                return item?.estimatedAmount || item?.amount || "";
+            });
+            const [dueDate, setDueDate] = React.useState(() => {
+                if (activeBillInst) return activeBillInst.dueDate;
+                return initialExpectedDate;
+            });
+
+            // Keep form in sync when selected cycle changes
             React.useEffect(() => {
-                setAmount(existingBillInst ? existingBillInst.amount : (item?.estimatedAmount || item?.amount || ""));
-                setDueDate(existingBillInst?.dueDate || initialExpectedDate);
-            }, [existingBillInst, item, initialExpectedDate]);
+                if (activeBillInst) {
+                    setAmount(activeBillInst.amount);
+                    setDueDate(activeBillInst.dueDate);
+                } else if (selectedCycleId === 'new') {
+                    setAmount(item?.estimatedAmount || item?.amount || "");
+                    setDueDate(initialExpectedDate);
+                }
+            }, [selectedCycleId, activeBillInst, item, initialExpectedDate]);
+
+            const handleCycleSelectChange = (newCycleId) => {
+                setSelectedCycleId(newCycleId);
+                if (newCycleId === 'new') {
+                    setAmount(item?.estimatedAmount || item?.amount || "");
+                    setDueDate(initialExpectedDate);
+                } else {
+                    const inst = allBillInsts.find(b => b.id === newCycleId);
+                    if (inst) {
+                        setAmount(inst.amount);
+                        setDueDate(inst.dueDate);
+                    }
+                }
+            };
 
             const handleSubmit = (ev) => {
                 ev.preventDefault();
                 if (!amount || !dueDate) return;
+                const existing = activeBillInst || allBillInsts.find(b => b.dueDate === dueDate);
                 onSave({
-                    id: existingBillInst?.id || ('bill_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5)),
+                    id: existing?.id || ('bill_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5)),
                     recurringId: item.id,
                     name: item.name,
                     category: item.category,
                     type: item.type || 'expense',
                     amount: Number(amount),
                     dueDate,
-                    status: 'pending',
-                    linkedTxId: null,
-                    createdAt: existingBillInst?.createdAt || new Date().toISOString()
+                    status: existing?.status || 'pending',
+                    linkedTxId: existing?.linkedTxId || null,
+                    createdAt: existing?.createdAt || new Date().toISOString()
                 });
                 onClose();
             };
 
             const handleClear = () => {
-                if (onClear && item?.id) {
-                    onClear(item.id, existingBillInst?.id);
+                if (onClear && item?.id && activeBillInst?.id) {
+                    onClear(item.id, activeBillInst.id);
                 }
                 onClose();
             };
 
             const currencySymbol = getCurrencySymbol(settings?.currency || "INR");
 
-            const modalTitle = existingBillInst 
+            const modalTitle = activeBillInst 
                 ? (isIncome ? "Update Logged Inflow" : "Update Logged Outflow")
-                : (isIncome ? "Log Inflow Received" : "Log Outflow Received");
+                : (isIncome ? "Log Inflow Cycle" : "Log Outflow Cycle");
 
             const dateLabel = isIncome ? "Actual Expected Date" : "Actual Due Date";
 
-            const submitBtnText = existingBillInst
+            const submitBtnText = activeBillInst
                 ? (isIncome ? "Update Inflow Log" : "Update Outflow Log")
                 : (isIncome ? "Save Inflow Instance" : "Save Outflow Instance");
 
-            const clearBtnText = isIncome ? "🗑️ Clear Logged Inflow" : "🗑️ Clear Logged Outflow";
+            const clearBtnText = isIncome ? "🗑️ Clear This Logged Inflow" : "🗑️ Clear This Logged Outflow";
 
             return (
                 <div className="modal-overlay">
-                    <div className="modal-container" style={{ maxWidth: '400px', borderRadius: '16px', padding: '24px 28px', textAlign: 'center' }}>
-                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', marginBottom: '18px' }}>
+                    <div className="modal-container" style={{ maxWidth: '580px', width: '100%', borderRadius: '16px', padding: '24px 28px', textAlign: 'center' }}>
+                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', marginBottom: '16px' }}>
                             <div style={{
                                 width: '48px',
                                 height: '48px',
                                 borderRadius: '50%',
-                                background: existingBillInst ? 'linear-gradient(135deg, #ECFDF5 0%, #D1FAE5 100%)' : 'linear-gradient(135deg, #EEF2FF 0%, #E0E7FF 100%)',
-                                color: existingBillInst ? '#047857' : '#4338CA',
+                                background: activeBillInst ? 'linear-gradient(135deg, #ECFDF5 0%, #D1FAE5 100%)' : 'linear-gradient(135deg, #EEF2FF 0%, #E0E7FF 100%)',
+                                color: activeBillInst ? '#047857' : '#4338CA',
                                 display: 'flex',
                                 alignItems: 'center',
                                 justifyContent: 'center',
                                 fontSize: '1.4rem',
-                                marginBottom: '12px',
-                                boxShadow: existingBillInst ? '0 2px 8px rgba(16, 185, 129, 0.2)' : '0 2px 8px rgba(79, 70, 229, 0.15)'
+                                marginBottom: '10px',
+                                boxShadow: activeBillInst ? '0 2px 8px rgba(16, 185, 129, 0.2)' : '0 2px 8px rgba(79, 70, 229, 0.15)'
                             }}>
-                                {existingBillInst ? '🧾' : '🧾'}
+                                🧾
                             </div>
                             <h3 style={{ margin: 0, fontSize: '1.15rem', fontWeight: 700, color: 'var(--text-main)' }}>
                                 {modalTitle}
                             </h3>
                             <p style={{ margin: '4px 0 0 0', fontSize: '0.82rem', color: 'var(--text-muted)' }}>
-                                {existingBillInst ? (
-                                    <span>Currently logged: <strong style={{ color: 'var(--success)' }}>{formatCurrencyVal(existingBillInst.amount, settings?.currency)}</strong> {isIncome ? 'expected' : 'due'} on <strong>{formatDate(existingBillInst.dueDate, settings?.dateFormat)}</strong></span>
+                                {activeBillInst ? (
+                                    <span>Currently logged: <strong style={{ color: 'var(--success)' }}>{formatCurrencyVal(activeBillInst.amount, settings?.currency)}</strong> {isIncome ? 'expected' : 'due'} on <strong>{formatDate(activeBillInst.dueDate, settings?.dateFormat)}</strong></span>
                                 ) : (
-                                    <span>Enter statement figures for <strong style={{ color: 'var(--text-main)' }}>{item?.name}</strong></span>
+                                    <span>Enter statement cycle figures for <strong style={{ color: 'var(--text-main)' }}>{item?.name}</strong></span>
                                 )}
                             </p>
                         </div>
 
+                        {/* Select Billing Cycle / Month List (Scrollable, showing 5+ cycles) */}
+                        <div style={{ marginBottom: '16px', textAlign: 'left' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                                <label style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--text-main)', margin: 0 }}>
+                                    Select Billing Cycle / Month {allBillInsts.length > 0 ? `(${allBillInsts.length})` : ''}
+                                </label>
+                                <button
+                                    type="button"
+                                    onClick={() => handleCycleSelectChange('new')}
+                                    style={{
+                                        background: selectedCycleId === 'new' ? '#EEF2FF' : 'transparent',
+                                        border: selectedCycleId === 'new' ? '1.5px solid #6366F1' : '1px dashed var(--border-color)',
+                                        color: selectedCycleId === 'new' ? '#4F46E5' : 'var(--text-muted)',
+                                        fontSize: '0.74rem',
+                                        fontWeight: 700,
+                                        padding: '3px 8px',
+                                        borderRadius: '6px',
+                                        cursor: 'pointer'
+                                    }}
+                                >
+                                    + Log New Cycle
+                                </button>
+                            </div>
+
+                            {allBillInsts.length === 0 ? (
+                                <div style={{ padding: '10px 12px', background: 'var(--bg-color)', borderRadius: '8px', fontSize: '0.8rem', color: 'var(--text-muted)', border: '1px solid var(--border-color)' }}>
+                                    No previous billing cycles recorded. Enter the figures below to create the first cycle.
+                                </div>
+                            ) : (
+                                <div style={{
+                                    maxHeight: '185px',
+                                    overflowY: 'auto',
+                                    border: '1px solid var(--border-color)',
+                                    borderRadius: '8px',
+                                    background: '#fff',
+                                    display: 'flex',
+                                    flexDirection: 'column',
+                                    gap: '2px',
+                                    padding: '4px'
+                                }}>
+                                    {allBillInsts.map(b => {
+                                        const isSelected = selectedCycleId === b.id;
+                                        const isPaid = b.status === 'paid';
+                                        const isOverdue = !isPaid && b.dueDate && b.dueDate < todayStr;
+                                        const statusBadge = isPaid
+                                            ? <span className="badge badge-success" style={{ fontSize: '0.7rem', padding: '1px 6px' }}>🟢 Paid</span>
+                                            : (isOverdue
+                                                ? <span className="badge badge-danger" style={{ fontSize: '0.7rem', padding: '1px 6px' }}>🔴 Overdue</span>
+                                                : <span className="badge badge-warning" style={{ fontSize: '0.7rem', padding: '1px 6px' }}>🟡 Upcoming</span>);
+
+                                        return (
+                                            <div
+                                                key={b.id}
+                                                onClick={() => handleCycleSelectChange(b.id)}
+                                                style={{
+                                                    display: 'flex',
+                                                    justifyContent: 'space-between',
+                                                    alignItems: 'center',
+                                                    padding: '7px 10px',
+                                                    borderRadius: '6px',
+                                                    cursor: 'pointer',
+                                                    background: isSelected ? '#EEF2FF' : 'transparent',
+                                                    border: isSelected ? '1.5px solid #6366F1' : '1px solid transparent',
+                                                    transition: 'all 0.15s ease'
+                                                }}
+                                            >
+                                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                                    <span style={{ fontSize: '0.84rem', fontWeight: isSelected ? 700 : 600, color: isSelected ? '#1E1B4B' : 'var(--text-main)' }}>
+                                                        Due {formatDate(b.dueDate, settings?.dateFormat)}
+                                                    </span>
+                                                    {statusBadge}
+                                                </div>
+                                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                                    <span style={{ fontSize: '0.86rem', fontWeight: 700, color: isSelected ? '#4338CA' : (isIncome ? 'var(--success)' : 'var(--danger)') }}>
+                                                        {isIncome ? '+' : '-'}{formatCurrencyVal(b.amount, settings?.currency)}
+                                                    </span>
+                                                    {isSelected && <span style={{ color: '#4F46E5', fontWeight: 800, fontSize: '0.8rem' }}>✓</span>}
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            )}
+                        </div>
+
                         <form onSubmit={handleSubmit} style={{ textAlign: 'left' }}>
-                            <div className="form-field" style={{ marginBottom: '16px' }}>
-                                <label style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-main)', marginBottom: '6px', display: 'block', textAlign: 'center' }}>
-                                    Actual Amount ({currencySymbol})
-                                </label>
-                                <input
-                                    type="number"
-                                    step="0.01"
-                                    className="form-control"
-                                    value={amount}
-                                    onChange={(e) => setAmount(e.target.value)}
-                                    required
-                                    autoFocus
-                                    placeholder="0.00"
-                                    style={{ textAlign: 'center', fontSize: '1.1rem', fontWeight: 700, height: '42px', borderRadius: '8px' }}
-                                />
+                            {/* Actual Amount (₹) - Actual Due Date in the same line */}
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px', marginBottom: '18px' }}>
+                                <div className="form-field">
+                                    <label style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-main)', marginBottom: '6px', display: 'block' }}>
+                                        Actual Amount ({currencySymbol})
+                                    </label>
+                                    <input
+                                        type="number"
+                                        step="0.01"
+                                        className="form-control"
+                                        value={amount}
+                                        onChange={(e) => setAmount(e.target.value)}
+                                        required
+                                        autoFocus
+                                        placeholder="0.00"
+                                        style={{ fontSize: '1.05rem', fontWeight: 700, height: '42px', borderRadius: '8px' }}
+                                    />
+                                </div>
+
+                                <div className="form-field">
+                                    <label style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-main)', marginBottom: '6px', display: 'block' }}>
+                                        {dateLabel}
+                                    </label>
+                                    <DatePickerField
+                                        value={dueDate}
+                                        onChange={setDueDate}
+                                        dateFormat={settings?.dateFormat}
+                                        label="Date"
+                                        style={{ height: '42px', borderRadius: '8px' }}
+                                    />
+                                </div>
                             </div>
 
-                            <div className="form-field" style={{ marginBottom: '20px' }}>
-                                <label style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-main)', marginBottom: '6px', display: 'block', textAlign: 'center' }}>
-                                    {dateLabel}
-                                </label>
-                                <DatePickerField
-                                    value={dueDate}
-                                    onChange={setDueDate}
-                                    dateFormat={settings?.dateFormat}
-                                    label="Date"
-                                    style={{ textAlign: 'center', justifyContent: 'center', fontSize: '1rem', fontWeight: 600, height: '42px', borderRadius: '8px' }}
-                                />
-                            </div>
-
-                            {existingBillInst && (
+                            {activeBillInst && (
                                 <div style={{ marginBottom: '16px', textAlign: 'center' }}>
                                     <button
                                         type="button"

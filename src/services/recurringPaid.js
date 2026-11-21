@@ -42,13 +42,14 @@ export const isRecurringPaidOnDate = ({
 
     // 1. Check bill instances
     const billInsts = (billInstances || []).filter(b => b && b.recurringId === recurringItem.id);
-    const monthBillInst = billInsts.find(b => b.dueDate && (b.dueDate === targetDateStr || b.dueDate.startsWith(monthPrefix)));
-    if (monthBillInst) {
-        if (monthBillInst.status === 'paid') {
+    const targetBillInst = billInsts.find(b => b.dueDate === targetDateStr)
+        || billInsts.find(b => b.dueDate && b.dueDate.startsWith(monthPrefix));
+    if (targetBillInst) {
+        if (targetBillInst.status === 'paid') {
             // Verify that a corresponding payment transaction actually exists in transactions
             const hasBackingTx = (transactions || []).some(t => {
                 if (!t || t.pendingMapping) return false;
-                if (monthBillInst.linkedTxId && t.id === monthBillInst.linkedTxId) {
+                if (targetBillInst.linkedTxId && t.id === targetBillInst.linkedTxId) {
                     return true;
                 }
                 const isLinked = (t.linkedRecurringId === recurringItem.id);
@@ -160,4 +161,180 @@ export const isNetWorthPaidOnDate = ({
 
         return false;
     });
+};
+
+export const addMonthsClamped = (date, n, anchorDay) => {
+    const day = anchorDay === 'last' ? 31 : (Number(anchorDay) || date.getDate());
+    const y = date.getFullYear();
+    const m = date.getMonth() + n;
+    const maxDays = new Date(y, m + 1, 0).getDate();
+    return new Date(y, m, Math.min(day, maxDays));
+};
+
+export const getAnchorDayOfMonth = (dStr) => {
+    if (!dStr) return 1;
+    if (typeof dStr === 'string' && dStr.includes('-')) {
+        const parts = dStr.split('-');
+        if (parts.length === 3) {
+            const dayNum = parseInt(parts[2].substring(0, 2), 10);
+            if (!isNaN(dayNum) && dayNum >= 1 && dayNum <= 31) return dayNum;
+        }
+    }
+    const d = new Date(dStr);
+    if (!isNaN(d.getTime())) return d.getDate();
+    return 1;
+};
+
+export const getAnchorDayForRecurring = (r) => {
+    if (!r) return 1;
+    if (r.monthlyDays) {
+        const rawMD = r.monthlyDays;
+        const isLast = (typeof rawMD === 'string' && rawMD.trim().toLowerCase() === 'last') ||
+            (Array.isArray(rawMD) && rawMD.length === 1 && String(rawMD[0]).toLowerCase() === 'last');
+        if (isLast) return 'last';
+        const parsed = Array.isArray(rawMD)
+            ? parseInt(rawMD[0], 10)
+            : parseInt(String(rawMD).split(',')[0].trim(), 10);
+        if (!isNaN(parsed) && parsed >= 1 && parsed <= 31) return parsed;
+    }
+    const sDate = r.startDate || r.nextDate;
+    return getAnchorDayOfMonth(sDate);
+};
+
+export const getPastCycleDueDates = (r, beforeDateStr) => {
+    if (!r || !beforeDateStr) return [];
+    const sDateStr = toYYYYMMDD(r.startDate || r.nextDate);
+    if (!sDateStr) return [];
+    if (sDateStr >= beforeDateStr) return [];
+
+    const cadence = r.cadence || "monthly";
+    const cycleDates = [];
+    const limit = 1200;
+
+    if (cadence === "once") {
+        if (sDateStr < beforeDateStr && (!r.endDate || sDateStr <= r.endDate)) {
+            cycleDates.push(sDateStr);
+        }
+        return cycleDates;
+    }
+
+    if (cadence === "custom_days" || cadence === "custom_dates") {
+        if (!r.customDays) return [];
+        const datesList = typeof r.customDays === "string"
+            ? r.customDays.split(",").map(s => s.trim()).filter(Boolean)
+            : (Array.isArray(r.customDays) ? r.customDays : []);
+        for (const d of datesList) {
+            const dStr = toYYYYMMDD(d);
+            if (dStr && dStr >= sDateStr && dStr < beforeDateStr && (!r.endDate || dStr <= r.endDate)) {
+                cycleDates.push(dStr);
+            }
+        }
+        return cycleDates.sort();
+    }
+
+    if (cadence === "monthly" || cadence === "monthly_days") {
+        const rawMonthlyDays = r.monthlyDays;
+        const isLast = rawMonthlyDays && (
+            (typeof rawMonthlyDays === 'string' && rawMonthlyDays.trim().toLowerCase() === 'last') ||
+            (Array.isArray(rawMonthlyDays) && rawMonthlyDays.length === 1 && String(rawMonthlyDays[0]).toLowerCase() === 'last')
+        );
+
+        let targetDays;
+        if (isLast) {
+            targetDays = ['last'];
+        } else if (rawMonthlyDays) {
+            const parsed = typeof rawMonthlyDays === "string"
+                ? rawMonthlyDays.split(",").map(x => parseInt(x.trim(), 10)).filter(n => !isNaN(n) && n >= 1 && n <= 31)
+                : (Array.isArray(rawMonthlyDays) ? rawMonthlyDays.map(x => parseInt(x, 10)).filter(n => !isNaN(n)) : []);
+            targetDays = parsed.length > 0 ? parsed : [getAnchorDayForRecurring(r)];
+        } else {
+            targetDays = [getAnchorDayForRecurring(r)];
+        }
+
+        const [sY, sM] = sDateStr.split('-').map(Number);
+        const [todayY, todayM] = beforeDateStr.split('-').map(Number);
+
+        let y = sY;
+        let m = sM - 1;
+        let iter = 0;
+
+        while ((y < todayY || (y === todayY && m <= (todayM - 1))) && iter < limit) {
+            iter++;
+            const maxDays = new Date(y, m + 1, 0).getDate();
+            for (const td of targetDays) {
+                const actualDay = td === 'last' ? maxDays : Math.min(Number(td), maxDays);
+                const dStr = `${y}-${String(m + 1).padStart(2, '0')}-${String(actualDay).padStart(2, '0')}`;
+                if (dStr >= sDateStr && dStr < beforeDateStr && (!r.endDate || dStr <= r.endDate)) {
+                    cycleDates.push(dStr);
+                }
+            }
+            m++;
+            if (m > 11) {
+                m = 0;
+                y++;
+            }
+        }
+        return cycleDates.sort();
+    }
+
+    if (cadence === "quarterly" || cadence === "half_yearly" || cadence === "semi_annual" || cadence === "yearly" || cadence === "annual" || cadence === "annually") {
+        const monthStep = cadence === "quarterly" ? 3 : (cadence === "half_yearly" || cadence === "semi_annual") ? 6 : 12;
+        const anchorDay = getAnchorDayForRecurring(r);
+        const sParts = sDateStr.split('-').map(Number);
+        const baseDate = new Date(sParts[0], sParts[1] - 1, sParts[2]);
+        let k = 0;
+        while (k < limit) {
+            const nextDate = addMonthsClamped(baseDate, k * monthStep, anchorDay);
+            const dStr = toYYYYMMDD(nextDate);
+            if (!dStr || dStr >= beforeDateStr) break;
+            if (dStr >= sDateStr && (!r.endDate || dStr <= r.endDate)) {
+                cycleDates.push(dStr);
+            }
+            k++;
+        }
+        return cycleDates.sort();
+    }
+
+    if (cadence === "daily" || cadence === "weekly" || cadence === "weekly_days" || cadence === "biweekly" || cadence === "custom_interval" || cadence === "every") {
+        const stepDays = cadence === "daily" ? 1
+            : cadence === "biweekly" ? 14
+            : (cadence === "custom_interval" || cadence === "every") ? Math.max(1, Number(r.customIntervalDays) || 14)
+            : 7;
+
+        if (cadence === "weekly_days" && Array.isArray(r.weeklyDays) && r.weeklyDays.length > 0) {
+            const dayMap = { "Sun": 0, "Mon": 1, "Tue": 2, "Wed": 3, "Thu": 4, "Fri": 5, "Sat": 6 };
+            const targetDayNums = r.weeklyDays.map(d => dayMap[d]).filter(n => n !== undefined);
+            const sParts = sDateStr.split('-').map(Number);
+            const curr = new Date(sParts[0], sParts[1] - 1, sParts[2]);
+            let iter = 0;
+            while (iter < limit) {
+                iter++;
+                const dStr = toYYYYMMDD(curr);
+                if (dStr >= beforeDateStr) break;
+                if (targetDayNums.includes(curr.getDay())) {
+                    if (dStr >= sDateStr && (!r.endDate || dStr <= r.endDate)) {
+                        cycleDates.push(dStr);
+                    }
+                }
+                curr.setDate(curr.getDate() + 1);
+            }
+            return cycleDates.sort();
+        }
+
+        const sParts = sDateStr.split('-').map(Number);
+        const curr = new Date(sParts[0], sParts[1] - 1, sParts[2]);
+        let iter = 0;
+        while (iter < limit) {
+            iter++;
+            const dStr = toYYYYMMDD(curr);
+            if (dStr >= beforeDateStr) break;
+            if (dStr >= sDateStr && (!r.endDate || dStr <= r.endDate)) {
+                cycleDates.push(dStr);
+            }
+            curr.setDate(curr.getDate() + stepDays);
+        }
+        return cycleDates.sort();
+    }
+
+    return cycleDates;
 };

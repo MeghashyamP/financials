@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { isRecurringPaidOnDate, isNetWorthPaidOnDate, toYYYYMMDD } from './recurringPaid.js';
+import { isRecurringPaidOnDate, isNetWorthPaidOnDate, toYYYYMMDD, getPastCycleDueDates } from './recurringPaid.js';
 
 test('toYYYYMMDD handles Date objects and various string date formats', () => {
     assert.equal(toYYYYMMDD('2026-12-07'), '2026-12-07');
@@ -229,4 +229,122 @@ test('partially paid recurring item with multiple linked transactions', () => {
         }]
     });
     assert.equal(isPendingInstPaid, false, 'Pending bill instance must not be treated as paid');
+});
+
+test('distinct monthly bill instances (Sep, Oct, Nov) are independently checked for payment without collision', () => {
+    const cardRecurring = {
+        id: 'rec-card-1',
+        name: 'HDFC Credit Card',
+        isVariableAmount: true,
+        estimatedAmount: 150000,
+        amount: 150000,
+        cadence: 'monthly',
+        monthlyDays: '7',
+        nextDate: '2026-11-07'
+    };
+
+    const billInstances = [
+        { id: 'bi-sep', recurringId: 'rec-card-1', dueDate: '2026-09-07', amount: 147615, status: 'paid', linkedTxId: 'tx-pay-sep' },
+        { id: 'bi-oct', recurringId: 'rec-card-1', dueDate: '2026-10-07', amount: 130000, status: 'pending', linkedTxId: null },
+        { id: 'bi-nov', recurringId: 'rec-card-1', dueDate: '2026-11-07', amount: 200000, status: 'pending', linkedTxId: null }
+    ];
+
+    const sepTx = {
+        id: 'tx-pay-sep',
+        merchant: 'HDFC Credit Card',
+        date: '2026-09-08',
+        amount: 147615,
+        scheduledDate: '2026-09-07',
+        linkedRecurringId: 'rec-card-1'
+    };
+
+    // Sep 7 is paid
+    assert.equal(isRecurringPaidOnDate({
+        recurringItem: cardRecurring,
+        targetDateStr: '2026-09-07',
+        viewMonthPrefix: '2026-09',
+        transactions: [sepTx],
+        billInstances
+    }), true, 'Sep cycle with paid bill instance is marked paid');
+
+    // Oct 7 is pending (unpaid overdue)
+    assert.equal(isRecurringPaidOnDate({
+        recurringItem: cardRecurring,
+        targetDateStr: '2026-10-07',
+        viewMonthPrefix: '2026-10',
+        transactions: [sepTx],
+        billInstances
+    }), false, 'Oct cycle with pending bill instance is unpaid');
+
+    // Nov 7 is pending (unpaid upcoming)
+    assert.equal(isRecurringPaidOnDate({
+        recurringItem: cardRecurring,
+        targetDateStr: '2026-11-07',
+        viewMonthPrefix: '2026-11',
+        transactions: [sepTx],
+        billInstances
+    }), false, 'Nov cycle with pending bill instance is unpaid');
+});
+
+test('getPastCycleDueDates generates all cycle due dates starting from startDate', () => {
+    const r = {
+        id: 'rec-card-1',
+        name: 'HDFC Credit Card',
+        amount: 150000,
+        cadence: 'monthly',
+        monthlyDays: '7',
+        startDate: '2026-08-07'
+    };
+
+    // Up to Nov 21, 2026: should include Aug 7, Sep 7, Oct 7, Nov 7
+    const cyclesNov21 = getPastCycleDueDates(r, '2026-11-21');
+    assert.deepEqual(cyclesNov21, ['2026-08-07', '2026-09-07', '2026-10-07', '2026-11-07']);
+
+    // Up to Oct 15, 2026 (specific selected date): should include Aug 7, Sep 7, Oct 7
+    const cyclesOct15 = getPastCycleDueDates(r, '2026-10-15');
+    assert.deepEqual(cyclesOct15, ['2026-08-07', '2026-09-07', '2026-10-07']);
+
+    // Up to Sep 30, 2026 (end of September month): should include Aug 7, Sep 7
+    const cyclesSepEnd = getPastCycleDueDates(r, '2026-09-30');
+    assert.deepEqual(cyclesSepEnd, ['2026-08-07', '2026-09-07']);
+
+    // On or before start date: returns empty
+    const cyclesBefore = getPastCycleDueDates(r, '2026-08-07');
+    assert.deepEqual(cyclesBefore, []);
+});
+
+test('getPastCycleDueDates respects endDate and monthlyDays last', () => {
+    const rLast = {
+        id: 'rec-rent',
+        name: 'House Rent',
+        amount: 25000,
+        cadence: 'monthly',
+        monthlyDays: 'last',
+        startDate: '2026-01-15',
+        endDate: '2026-04-30'
+    };
+
+    const cycles = getPastCycleDueDates(rLast, '2026-06-01');
+    assert.deepEqual(cycles, ['2026-01-31', '2026-02-28', '2026-03-31', '2026-04-30']);
+});
+
+test('filtering overdue items by selectedDate (dueDate <= selectedDate) shows all past months transactions', () => {
+    const overdueList = [
+        { id: 'rec-1', name: 'Credit Card', date: '2026-08-07', amount: 50000 },
+        { id: 'rec-1', name: 'Credit Card', date: '2026-09-07', amount: 50000 },
+        { id: 'rec-1', name: 'Credit Card', date: '2026-10-07', amount: 50000 },
+        { id: 'rec-1', name: 'Credit Card', date: '2026-11-07', amount: 50000 }
+    ];
+
+    // Selecting Oct 15, 2026: all overdue on or before Oct 15 (Aug 7, Sep 7, Oct 7)
+    const selectedDate = '2026-10-15';
+    const filtered = overdueList.filter(i => i.date <= selectedDate);
+    assert.equal(filtered.length, 3);
+    assert.deepEqual(filtered.map(i => i.date), ['2026-08-07', '2026-09-07', '2026-10-07']);
+
+    // Selecting Month View for September 2026 (last day: 2026-09-30)
+    const sepMonthEnd = '2026-09-30';
+    const filteredMonth = overdueList.filter(i => i.date <= sepMonthEnd);
+    assert.equal(filteredMonth.length, 2);
+    assert.deepEqual(filteredMonth.map(i => i.date), ['2026-08-07', '2026-09-07']);
 });

@@ -129,7 +129,7 @@ test('net worth: bank accounts use the closing balance', () => {
     assert.equal(r.items[0].value, 250.5);
 });
 
-test('card bill: creates a monthly bill and a pending cycle bill; a newer statement supersedes the old one', () => {
+test('card bill: creates a monthly bill and a pending cycle bill; older cycles are preserved for history', () => {
     const sep = rec(card({ dueDate: '2026-10-07' }));
     const p1 = planCardBill({ record: sep, todayIso: '2026-09-25', newId });
     assert.equal(p1.recurring.length, 1);
@@ -148,8 +148,9 @@ test('card bill: creates a monthly bill and a pending cycle bill; a newer statem
     assert.equal(p2.recurring.length, 1);
     assert.equal(p2.recurring[0].estimatedAmount, 7000);
     assert.equal(p2.recurring[0].nextDate, '2026-11-07');
-    assert.equal(p2.billInstances.length, 1);
-    assert.equal(p2.billInstances[0].dueDate, '2026-11-07');
+    assert.equal(p2.billInstances.length, 2, 'both Sep and Oct cycles are preserved');
+    assert.equal(p2.billInstances[0].dueDate, '2026-10-07');
+    assert.equal(p2.billInstances[1].dueDate, '2026-11-07');
 });
 
 test('card bill: your own recurring item named after the card is adopted, never duplicated', () => {
@@ -164,17 +165,19 @@ test('card bill: your own recurring item named after the card is adopted, never 
     assert.equal(p.recurring[0].nextDate, '2026-11-07');
     assert.equal(p.recurring[0].estimatedAmount, 150000);
     assert.equal(p.recurring[0].autoAccount, 'HDFC Credit Card');
-    assert.equal(p.billInstances.length, 1);
-    assert.equal(p.billInstances[0].dueDate, '2026-11-07');
-    assert.equal(p.billInstances[0].recurringId, 'cc');
-    assert.equal(p.billInstances[0].name, 'HDFC Credit Card');
+    assert.equal(p.billInstances.length, 2, 'both manual bill and statement bill exist');
+    assert.equal(p.billInstances[0].dueDate, '2026-09-07');
+    assert.equal(p.billInstances[1].dueDate, '2026-11-07');
+    assert.equal(p.billInstances[1].recurringId, 'cc');
+    assert.equal(p.billInstances[1].name, 'HDFC Credit Card');
 
-    // the due date has already passed: no new bill, but the amount owed follows the statement and the stale bill goes
+    // the due date has already passed: no new bill, but the amount owed follows the statement and existing bill remains
     const past = planCardBill({ recurring: [mine], billInstances: [oldManualBill], record: stmt, todayIso: '2026-11-20', newId });
     assert.equal(past.recurring.length, 1);
     assert.equal(past.recurring[0].estimatedAmount, 150000);
     assert.equal(past.recurring[0].nextDate, '2026-09-07', 'schedule untouched');
-    assert.equal(past.billInstances.length, 0);
+    assert.equal(past.billInstances.length, 1);
+    assert.equal(past.billInstances[0].dueDate, '2026-09-07');
 });
 
 test('card bill: a paid bill is never touched, a past due date creates nothing, zero due creates nothing', () => {

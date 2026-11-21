@@ -733,31 +733,36 @@ export const RecurringPage = ({
                                     <td style={{ whiteSpace: 'nowrap' }}>{c.endDate ? formatDate(c.endDate, settings?.dateFormat) : "No End Date"}</td>
                                     <td>
                                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'nowrap' }}>
-                                            {c.isVariableAmount ? (
-                                                <button
-                                                    className="btn btn-secondary btn-sm"
-                                                    style={{
-                                                        fontSize: '0.85rem',
-                                                        width: '28px',
-                                                        height: '26px',
-                                                        padding: 0,
-                                                        borderRadius: '6px',
-                                                        whiteSpace: 'nowrap',
-                                                        display: 'inline-flex',
-                                                        alignItems: 'center',
-                                                        justifyContent: 'center',
-                                                        background: pendingBillInst ? '#ECFDF5' : 'transparent',
-                                                        color: pendingBillInst ? '#047857' : '#374151',
-                                                        border: pendingBillInst ? '1px solid #A7F3D0' : 'none',
-                                                        cursor: 'pointer',
-                                                        flexShrink: 0
-                                                    }}
-                                                    onClick={() => setLoggingBillItem(c)}
-                                                    title={pendingBillInst ? `Logged: ${formatCurrency(pendingBillInst.amount)} due ${formatDate(pendingBillInst.dueDate, settings?.dateFormat)} (Click to edit)` : "Log Bill Statement"}
-                                                >
-                                                    🧾
-                                                </button>
-                                            ) : (
+                                            {c.isVariableAmount ? (() => {
+                                                const allBillInstsForC = (settings?.billInstances || []).filter(b => b && b.recurringId === c.id);
+                                                const hasMultipleCycles = allBillInstsForC.length > 1;
+                                                return (
+                                                    <button
+                                                        className="btn btn-secondary btn-sm"
+                                                        style={{
+                                                            fontSize: '0.82rem',
+                                                            width: hasMultipleCycles ? 'auto' : '28px',
+                                                            height: '26px',
+                                                            padding: hasMultipleCycles ? '0 6px' : 0,
+                                                            borderRadius: '6px',
+                                                            whiteSpace: 'nowrap',
+                                                            display: 'inline-flex',
+                                                            alignItems: 'center',
+                                                            justifyContent: 'center',
+                                                            gap: '3px',
+                                                            background: pendingBillInst ? '#ECFDF5' : (allBillInstsForC.length > 0 ? '#EEF2FF' : 'transparent'),
+                                                            color: pendingBillInst ? '#047857' : (allBillInstsForC.length > 0 ? '#4338CA' : '#374151'),
+                                                            border: pendingBillInst ? '1px solid #A7F3D0' : (allBillInstsForC.length > 0 ? '1px solid #C7D2FE' : 'none'),
+                                                            cursor: 'pointer',
+                                                            flexShrink: 0
+                                                        }}
+                                                        onClick={() => setLoggingBillItem(c)}
+                                                        title={allBillInstsForC.length > 0 ? `${allBillInstsForC.length} cycle(s) logged. Click to view/edit statement figures.` : "Log Bill Statement"}
+                                                    >
+                                                        🧾{hasMultipleCycles ? <span style={{ fontSize: '0.72rem', fontWeight: 700 }}>{allBillInstsForC.length}</span> : null}
+                                                    </button>
+                                                );
+                                            })() : (
                                                 <div style={{ width: '28px', height: '26px', flexShrink: 0 }} />
                                             )}
                                             <button
@@ -1501,6 +1506,88 @@ export const RecurringPage = ({
                                         {mappedModalItem.excludeFromMonthlyCalculations ? "🚫 Excluded from Calculations" : "📊 Included in Calculations"}
                                     </span>
                                 </div>
+                            </div>
+
+                            {/* Section 0: Billing Cycles & Monthly History */}
+                            <div style={{ marginBottom: '24px' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+                                    <h4 style={{ fontSize: '0.9rem', fontWeight: 700, margin: 0, color: 'var(--text-main)' }}>
+                                        Billing Cycles & History ({(settings?.billInstances || []).filter(b => b && b.recurringId === mappedModalItem.id).length})
+                                    </h4>
+                                    <button
+                                        type="button"
+                                        className="btn btn-secondary btn-sm"
+                                        style={{ fontSize: '0.75rem', padding: '3px 8px', borderRadius: '6px' }}
+                                        onClick={() => setLoggingBillItem(mappedModalItem)}
+                                    >
+                                        + Log Cycle / Bill
+                                    </button>
+                                </div>
+                                {((settings?.billInstances || []).filter(b => b && b.recurringId === mappedModalItem.id)).length === 0 ? (
+                                    <div className="empty-state" style={{ padding: '12px 16px', background: 'var(--bg-color)', borderRadius: '8px' }}>
+                                        <div className="empty-state-text">
+                                            <p style={{ fontSize: '0.82rem', margin: 0 }}>
+                                                No individual billing cycles logged yet.
+                                                {mappedModalItem.isVariableAmount ? " Click '+ Log Cycle / Bill' to log a statement amount for a month (e.g. Sep 7, Oct 7, Nov 7)." : ""}
+                                            </p>
+                                        </div>
+                                    </div>
+                                ) : (
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '200px', overflowY: 'auto' }}>
+                                        {(settings?.billInstances || [])
+                                            .filter(b => b && b.recurringId === mappedModalItem.id)
+                                            .sort((a, b) => (b.dueDate || '').localeCompare(a.dueDate || ''))
+                                            .map(b => {
+                                                const isPaid = b.status === 'paid';
+                                                const isOverdue = !isPaid && b.dueDate && b.dueDate < todayStr;
+                                                const statusBadge = isPaid
+                                                    ? <span className="badge badge-success" style={{ fontSize: '0.72rem' }}>🟢 Paid</span>
+                                                    : (isOverdue
+                                                        ? <span className="badge badge-danger" style={{ fontSize: '0.72rem' }}>🔴 Overdue</span>
+                                                        : <span className="badge badge-warning" style={{ fontSize: '0.72rem' }}>🟡 Upcoming</span>);
+                                                const linkedTx = b.linkedTxId ? (transactions || []).find(t => t.id === b.linkedTxId) : null;
+
+                                                return (
+                                                    <div key={b.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '9px 12px', borderRadius: '8px', border: '1px solid var(--border-color)', background: '#fff' }}>
+                                                        <div>
+                                                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                                                <span style={{ fontWeight: 600, fontSize: '0.88rem' }}>Due {formatDate(b.dueDate, settings?.dateFormat)}</span>
+                                                                {statusBadge}
+                                                            </div>
+                                                            {linkedTx && (
+                                                                <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)', marginTop: '2px' }}>
+                                                                    Paid via: {linkedTx.narration || linkedTx.merchant} on {formatDate(linkedTx.date, settings?.dateFormat)}
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                                            <span style={{ fontWeight: 700, fontSize: '0.9rem', color: mappedModalItem.type === 'income' ? 'var(--success)' : 'var(--danger)' }}>
+                                                                {mappedModalItem.type === 'income' ? '+' : '-'}{formatCurrency(b.amount)}
+                                                            </span>
+                                                            <button
+                                                                type="button"
+                                                                className="btn btn-secondary btn-sm"
+                                                                style={{ padding: '2px 6px', fontSize: '0.72rem', height: '24px' }}
+                                                                onClick={() => setLoggingBillItem({ ...mappedModalItem, _targetBillInstance: b })}
+                                                                title="Edit this cycle"
+                                                            >
+                                                                ✏️
+                                                            </button>
+                                                            <button
+                                                                type="button"
+                                                                className="btn btn-secondary btn-sm"
+                                                                style={{ padding: '2px 6px', fontSize: '0.72rem', height: '24px', color: '#DC2626' }}
+                                                                onClick={() => handleClearBillInstance(mappedModalItem.id, b.id)}
+                                                                title="Clear this cycle"
+                                                            >
+                                                                🗑️
+                                                            </button>
+                                                        </div>
+                                                    </div>
+                                                );
+                                            })}
+                                    </div>
+                                )}
                             </div>
 
                             {/* Section 1: Mapped Ledger Transactions */}

@@ -273,16 +273,8 @@ export const planCardBill = ({ recurring = [], billInstances = [], record, today
 
     const recId = idx >= 0 ? recs[idx].id : null;
     let bills = billInstances.slice();
-    // A newer statement settles older pending bills of this card (their amounts are carried into the new total due),
-    // including ones you logged by hand — left in place they would show as overdue and distort Net Worth.
-    if (recId) {
-        const before = bills.length;
-        bills = bills.filter((b) => !(b && b.status === 'pending' && b.recurringId === recId && b.dueDate < due));
-        if (bills.length !== before) changed = true;
-    }
-    const beforeAuto = bills.length;
-    bills = bills.filter((b) => !(b && b.autoSource === 'statement' && b.autoAccount === record.account && b.status === 'pending' && b.dueDate < due));
-    if (bills.length !== beforeAuto) changed = true;
+    // Distinct monthly billing cycles are preserved to maintain full history across cycles (e.g. Sep 7, Oct 7, Nov 7).
+    // Older pending bills are NOT deleted so they remain visible as separate overdue instances on Dashboard.
 
     if (recId && upcoming && total > 0) {
         const existing = bills.find((b) => b && b.recurringId === recId && b.dueDate === due);
