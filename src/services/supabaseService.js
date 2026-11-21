@@ -2,7 +2,7 @@ import { createClient } from '@supabase/supabase-js';
 import { fetchStateFromDB, initDB, saveSettingInDB, saveTagInDB, saveRuleInDB, saveDocumentInDB, wipeDatabase } from '../store.js';
 import { restoreBackup } from './backup.js';
 import { encryptPayload, decryptPayload, recoverSecret } from './crypto.js';
-import { DEFAULT_CATEGORIES, stripLocalOnlySettings } from '../utils.jsx';
+import { DEFAULT_CATEGORIES, stripLocalOnlySettings, normalizeCategoryName } from './categories.js';
 
 const SUPABASE_URL = "https://gsdddichdmfpmdbufmad.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_23pX17k4nzfpmiiubWbSUA_0OCA_UCW";
@@ -38,8 +38,9 @@ const optimizeSettingsForSync = (settingsObj = {}) => {
         if (isDefaultList) {
             delete cleanSettings.categories;
         } else {
-            // Keep only custom added categories
-            const customOnly = cleanSettings.categories.filter(c => !DEFAULT_CATEGORIES.includes(c));
+            // Keep only custom added categories (names not matching any default category)
+            const defaultNormSet = new Set(DEFAULT_CATEGORIES.map(normalizeCategoryName));
+            const customOnly = cleanSettings.categories.filter(c => !defaultNormSet.has(normalizeCategoryName(c)));
             if (customOnly.length === 0) {
                 delete cleanSettings.categories;
             } else {

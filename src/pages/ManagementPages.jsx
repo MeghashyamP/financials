@@ -9,7 +9,7 @@ import {
     Icon, formatCurrencyVal, formatDate, formatDateTime, DatePickerField, DEFAULT_CATEGORIES,
     filterCategoriesByType, getContrastTextColor, formatCategorySubIconFirst,
     renderCategoryOptions, getOccurrencesInPeriod, calculateNextExpectedDate, useEscapeKey, CATEGORY_DESCRIPTIONS,
-    calculatePeriodDateRange, getISOStringInTimezone, isRuleEnabled
+    calculatePeriodDateRange, getISOStringInTimezone, isRuleEnabled, normalizeCategoryName
 } from '../utils.jsx';
 import {
     updateTransactionInDB, deleteTransactionFromDB, saveRuleInDB, deleteRuleFromDB, wipeDatabase,
@@ -2260,7 +2260,7 @@ export const SettingsPage = ({
 
         const fullName = `${parent} - ${sub} ${emoji}`;
 
-        if (categories.some(c => c.toLowerCase() === fullName.toLowerCase())) {
+        if (categories.some(c => normalizeCategoryName(c) === normalizeCategoryName(fullName))) {
             showToast("Category and Subcategory mapping already exists", "error");
             return;
         }

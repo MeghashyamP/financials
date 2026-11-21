@@ -1,4 +1,4 @@
-import { DEFAULT_CATEGORIES } from "./utils.jsx";
+import { DEFAULT_CATEGORIES, normalizeCategoryName } from "./utils.jsx";
 import { seedDefaultAccounts } from "./services/accounts.js";
 
 export const DB_NAME = "FinancialsDB";
@@ -157,11 +157,80 @@ export const fetchStateFromDB = async () => {
         saveSettingInDB("selectedPeriod", "this_month");
     }
 
-    // Seed the default categories on first run. Existing transactions, budgets and rules are never
-    // re-categorised or moved automatically.
+    // Seed and reconcile categories: ensure default categories remain fixed, canonical,
+    // and complete, while preserving any user-created categories.
     if (!settings.categories || settings.categories.length === 0) {
         settings.categories = DEFAULT_CATEGORIES;
         saveSettingInDB("categories", DEFAULT_CATEGORIES);
+    } else {
+        const defaultNormMap = new Map();
+        DEFAULT_CATEGORIES.forEach(c => defaultNormMap.set(normalizeCategoryName(c), c));
+
+        const userCreated = [];
+        const seenNorms = new Set();
+        settings.categories.forEach(c => {
+            if (!c || typeof c !== 'string') return;
+            const norm = normalizeCategoryName(c);
+            if (!norm) return;
+            if (!defaultNormMap.has(norm) && !seenNorms.has(norm)) {
+                seenNorms.add(norm);
+                userCreated.push(c.trim());
+            }
+        });
+
+        const reconciled = [...DEFAULT_CATEGORIES, ...userCreated];
+        const isSame = reconciled.length === settings.categories.length &&
+            reconciled.every((c, idx) => c === settings.categories[idx]);
+
+        if (!isSame) {
+            settings.categories = reconciled;
+            saveSettingInDB("categories", reconciled);
+        }
+
+        // Remap recurring item categories if they have obsolete emojis matching default categories
+        if (Array.isArray(settings.recurring)) {
+            let changed = false;
+            settings.recurring.forEach(r => {
+                if (r && r.category) {
+                    const norm = normalizeCategoryName(r.category);
+                    if (defaultNormMap.has(norm) && r.category !== defaultNormMap.get(norm)) {
+                        r.category = defaultNormMap.get(norm);
+                        changed = true;
+                    }
+                }
+            });
+            if (changed) saveSettingInDB("recurring", settings.recurring);
+        }
+
+        // Remap billInstances categories if needed
+        if (Array.isArray(settings.billInstances)) {
+            let changed = false;
+            settings.billInstances.forEach(bi => {
+                if (bi && bi.category) {
+                    const norm = normalizeCategoryName(bi.category);
+                    if (defaultNormMap.has(norm) && bi.category !== defaultNormMap.get(norm)) {
+                        bi.category = defaultNormMap.get(norm);
+                        changed = true;
+                    }
+                }
+            });
+            if (changed) saveSettingInDB("billInstances", settings.billInstances);
+        }
+
+        // Remap budgets categories if needed
+        if (Array.isArray(settings.budgets)) {
+            let changed = false;
+            settings.budgets.forEach(b => {
+                if (b && b.category) {
+                    const norm = normalizeCategoryName(b.category);
+                    if (defaultNormMap.has(norm) && b.category !== defaultNormMap.get(norm)) {
+                        b.category = defaultNormMap.get(norm);
+                        changed = true;
+                    }
+                }
+            });
+            if (changed) saveSettingInDB("budgets", settings.budgets);
+        }
     }
 
     // Sort newest first. No cap: this state is what gets written to the linked file,

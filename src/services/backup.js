@@ -5,8 +5,16 @@
  * importBackup(): Parses an uploaded .json file and restores all data into IndexedDB.
  */
 
-import { getISOStringInTimezone, stripLocalOnlySettings, LOCAL_ONLY_SETTING_KEYS } from '../utils.jsx';
+import {
+    getISOStringInTimezone,
+    stripLocalOnlySettings,
+    LOCAL_ONLY_SETTING_KEYS,
+    reconcileBackupCategories,
+    normalizeCategoryName
+} from './categories.js';
 import { markBackup } from './backupStatus.js';
+
+export { reconcileBackupCategories, normalizeCategoryName };
 
 export const BACKUP_VERSION = 1;
 
@@ -92,6 +100,10 @@ export const restoreBackup = async (backup, {
     saveDocumentInDB,
     wipeDatabase,
 }) => {
+    // 0. Reconcile categories: ensure default categories remain fixed and canonical,
+    // match names ignoring emojis to default categories, and preserve user-created categories.
+    reconcileBackupCategories(backup);
+
     // 1. Wipe existing data first
     await wipeDatabase();
 

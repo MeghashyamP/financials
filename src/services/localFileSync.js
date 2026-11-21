@@ -5,7 +5,7 @@
  * to link and auto-sync JSON data directly to a local project file on disk.
  */
 
-import { getISOStringInTimezone, stripLocalOnlySettings } from '../utils.jsx';
+import { getISOStringInTimezone, stripLocalOnlySettings } from './categories.js';
 import { markBackup } from './backupStatus.js';
 
 // Check if File System Access API is supported in the browser
