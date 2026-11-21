@@ -93,12 +93,12 @@ const RULES = [
     R('Hidden Charges - Fine', [], ['penalty|challan|fine']),
 
     // ── credit-card bill settlement ──
-    R('Credit - Card', ['credclub', 'cc payment', 'ccpayment', 'bppy', 'paymentreceived', 'creditcardpayment', 'cardpayment', 'billdeskcard'], ['credit card|card payment|cred club|payment received|thank you']),
+    R('Credit - Bill', ['credclub', 'cc payment', 'ccpayment', 'bppy', 'paymentreceived', 'creditcardpayment', 'cardpayment', 'billdeskcard'], ['credit card|card payment|cred club|payment received|thank you']),
 
     // ── investments ──
     R('Investment - NPS', ['npstrust', 'pfrda'], ['nps']),
     R('Investment - Stocks', ['zerodha', 'indianclearingcorp', 'upstox', 'angelone', 'angelbroking', 'icicidirect', 'hdfcsec', 'kotaksecurities'], ['groww stocks|demat|broking']),
-    R('Investment - Mutual Funds', ['mutualfund', 'kuvera', 'indmoney', 'coinbyzerodha', 'smallcase', 'camsonline', 'kfintech'], ['sip|mf']),
+    R('Investment - Funds', ['mutualfund', 'kuvera', 'indmoney', 'coinbyzerodha', 'smallcase', 'camsonline', 'kfintech'], ['sip|mf']),
     R('Investment - Crypto', ['coinswitch', 'coindcx', 'wazirx', 'binance'], []),
     R('Investment - PPF', [], ['ppf|sukanya']),
 
@@ -129,7 +129,7 @@ const RULES = [
     R('Subscriptions - Apps', ['appleservices', 'apple.com/bill', 'itunes'], []),
 
     // ── health ──
-    R('Health - Medicines', ['apollopharm', 'pharmacy', 'pharmeasy', 'medplus', '1mg', 'netmeds', 'drugmart', 'medicalstore', 'medicals', 'chemist', 'ameerpetdrug', 'wellness forever', 'medicare', 'pharma'], ['drug|pharma|phar|medical|medico|chemists']),
+    R('Health - Pharmacy', ['apollopharm', 'pharmacy', 'pharmeasy', 'medplus', '1mg', 'netmeds', 'drugmart', 'medicalstore', 'medicals', 'chemist', 'ameerpetdrug', 'wellness forever', 'medicare', 'pharma'], ['drug|pharma|phar|medical|medico|chemists']),
     R('Health - Optics', ['eyespecia', 'eyecare', 'opticals', 'optician', 'lenskart', 'visioncare'], ['eye|optical|optics']),
     R('Health - Dentist', ['dental', 'dentist'], []),
     R('Health - Labs', ['diagnostic', 'pathlab', 'thyrocare', 'metropolis', 'lalpath', 'redcliffe'], ['lab|labs']),
@@ -154,7 +154,7 @@ const RULES = [
     // ── food (delivery first, then eateries) ──
     R('Food & Drinks - Delivery', ['swiggy', 'zomato', 'eatsure', 'magicpin', 'faasos', 'boxeight'], []),
     R('Food & Drinks - Fastfood', ['dominos', 'mcdonald', 'mcdonalds', 'kfc', 'burgerking', 'subway', 'pizzahut', 'dunkin', 'wendys'], ['burger|pizza|momos']),
-    R('Food & Drinks - Coffee', ['starbucks', 'cafecoffeeday', 'thirdwave', 'blueTokai', 'chaayos', 'chaipoint'], ['coffee|chai|tea|cafe']),
+    R('Food & Drinks - Cafes', ['starbucks', 'cafecoffeeday', 'thirdwave', 'blueTokai', 'chaayos', 'chaipoint'], ['coffee|chai|tea|cafe']),
     R('Food & Drinks - Sweets', ['sweets', 'mithai', 'haldiram', 'icecream', 'baskinrobbins'], []),
     R('Food & Drinks - Bakery', ['bakery', 'bakers', 'cakes'], []),
     R('Food & Drinks - Snacks', ['chatbandar', 'chat bandar', 'chaat', 'pani puri', 'tiffin'], ['chat|snacks|samosa|bhel']),
@@ -168,7 +168,7 @@ const RULES = [
     // ── shopping ──
     R('Shopping - Clothes', ['myntra', 'ajio', 'zara', 'uniqlo', 'pantaloons', 'trends', 'lifestylestores', 'westside', 'shoppersstop', 'maxfashion', 'bewakoof', 'clothing', 'textiles', 'fashion'], []),
     R('Shopping - Shoes', ['nike', 'adidas', 'metroshoes', 'footwear'], ['bata|puma']),
-    R('Shopping - Electronics', ['reliancedigital', 'croma', 'vijaysales', 'samsung', 'oneplus', 'electronics'], []),
+    R('Shopping - Gadgets', ['reliancedigital', 'croma', 'vijaysales', 'samsung', 'oneplus', 'electronics'], []),
     R('Shopping - Beauty', ['nykaa', 'purplle', 'sephora', 'beautyparlour', 'cosmetics'], []),
     R('Shopping - Others', ['amazon', 'amzn', 'flipkart', 'meesho', 'snapdeal', 'ikea', 'decathlon', 'tatacliq', 'shopsy', 'firstcry'], []),
     R('Home - Furniture', ['pepperfry', 'urbanladder', 'furniture', 'woodenstreet'], []),
@@ -178,7 +178,7 @@ const RULES = [
     R('Entertainment - Gaming', ['playstation', 'xbox', 'epicgames'], ['steam']),
     R('Fitness - Gym', ['cultfit', 'curefit', 'anytimefitness', 'goldsgym', 'fitnessfirst'], ['gym|fitness']),
     R('Personal - Salon', ['urbancompany', 'urbanclap', 'naturalssalon', 'lakme salon', 'greentrends', 'jawed'], ['salon|spa|barber|saloon']),
-    R('Personal - Haircut', [], ['haircut|hair cut|hair']),
+    R('Personal - Salon', [], ['haircut|hair cut|hair']),
 
     // ── services / education ──
     R('Services - Courier', ['dtdc', 'delhivery', 'bluedart', 'ecomexpress', 'shiprocket', 'logistics', 'courier'], ['courier']),
@@ -198,7 +198,8 @@ const RULES = [
 const REMARK_RULES = [
     R('Utilities - Rent', [], ['rent|house rent|monthly rent']),
     R('Investment - Others', [], ['investments?|invest']),
-    R('Support - Parents', [], ['mom|dad|mother|father|amma|nanna']),
+    R('Support - Mom', [], ['mom|mother|amma']),
+    R('Support - Dad', [], ['dad|father|nanna']),
     R('Groceries - Staples', [], ['milk|rice|vegetables|veg|fruits|groceries|kirana']),
     R('Transport - Auto', [], ['auto']),
     R('Transport - Cab', [], ['cab|rapid|rapido']),
@@ -277,7 +278,7 @@ export const categorize = ({ narration = '', type = 'expense', direction, holder
             return done('Income - Refund', 'medium', 'card-credit');
         }
         for (const r of INCOME_RULES) if (matches(r, text, sq)) return done(r.c, 'high', 'income-rule');
-        if (/\b(payment received|thank you|bppy|cc payment)\b/i.test(raw) || sq.includes('paymentreceived')) return done('Credit - Card', 'high', 'card-payment');
+        if (/\b(payment received|thank you|bppy|cc payment)\b/i.test(raw) || sq.includes('paymentreceived')) return done('Credit - Bill', 'high', 'card-payment');
     }
 
     // 3. own-account transfers (money you moved between your own accounts: never income or spending).
@@ -286,7 +287,7 @@ export const categorize = ({ narration = '', type = 'expense', direction, holder
 
     // 4. merchant dictionary
     for (const r of RULES) {
-        if (r.c === 'Credit - Card' && isCredit && kind !== 'card') continue;
+        if (r.c === 'Credit - Bill' && isCredit && kind !== 'card') continue;
         if (matches(r, text, sq)) return done(r.c, 'high', 'merchant');
     }
 

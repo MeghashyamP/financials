@@ -50,7 +50,7 @@ const pairUp = (lefts, rights, { minDays, maxDays, tolerance = 0.015, amountOf =
 export const matchCardPayments = (transactions = [], profiles = {}) => {
     const typeOf = (t) => profiles[t.account]?.type;
     const bankOut = transactions.filter((t) => isNeutral(t) && t.neutralSign === '-' && typeOf(t) === 'bank'
-        && (/^Credit - Card/.test(t.category || '') || CARD_BILL_RE.test(`${t.narration || ''} ${t.merchant || ''}`)));
+        && (/^Credit - Bill/.test(t.category || '') || CARD_BILL_RE.test(`${t.narration || ''} ${t.merchant || ''}`)));
     const cardIn = transactions.filter((t) => isNeutral(t) && t.neutralSign === '+' && typeOf(t) === 'credit_card');
     // The card credit posts the same day or a few days after the bank debit. Paying "the total due" through CRED / UPI
     // is often rounded to the rupee (₹1,64,388 for ₹1,64,390.80 owed), so allow a few rupees of difference.

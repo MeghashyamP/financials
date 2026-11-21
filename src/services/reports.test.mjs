@@ -27,7 +27,7 @@ test('summary counts income and expense only; transfers are ignored', () => {
         tx({ date: '2026-04-10', type: 'income', amount: 100000, category: 'Income - Salary 💵' }),
         tx({ date: '2026-04-12', amount: 20000, category: 'Groceries - Staples 🌾' }),
         tx({ date: '2026-05-02', amount: 5000, category: 'Groceries - Veggies 🥦' }),
-        tx({ date: '2026-05-03', type: 'neutral', neutralSign: '-', amount: 50000, category: 'Credit - Card 💳' }),
+        tx({ date: '2026-05-03', type: 'neutral', neutralSign: '-', amount: 50000, category: 'Credit - Bill 💳' }),
         tx({ date: '2027-04-01', amount: 999 }) // next FY
     ];
     const s = summarizeFy(list, 2026);

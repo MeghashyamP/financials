@@ -229,7 +229,7 @@ const dayOf = (iso) => Number(iso.slice(8, 10));
  * for this cycle with the exact amount due, so it shows on the calendar and in Upcoming Payments.
  * Pending auto-bills from older statements are superseded (the new total already includes them).
  */
-export const planCardBill = ({ recurring = [], billInstances = [], record, todayIso, category = 'Credit - Card 💳', newId }) => {
+export const planCardBill = ({ recurring = [], billInstances = [], record, todayIso, category = 'Credit - Bill 💳', newId }) => {
     if (!record || record.kind !== 'card' || !isIso(record.dueDate) || !isIso(todayIso)) {
         return { recurring, billInstances, changed: false };
     }

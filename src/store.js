@@ -157,107 +157,11 @@ export const fetchStateFromDB = async () => {
         saveSettingInDB("selectedPeriod", "this_month");
     }
 
-    // Migrate categories if needed
-    const isOld = !settings.categories || settings.categories.length === 0 ||
-        !settings.categories.includes("Food & Drinks - Breakfast 🍳");
-
-    if (isOld) {
+    // Seed the default categories on first run. Existing transactions, budgets and rules are never
+    // re-categorised or moved automatically.
+    if (!settings.categories || settings.categories.length === 0) {
         settings.categories = DEFAULT_CATEGORIES;
         saveSettingInDB("categories", DEFAULT_CATEGORIES);
-
-        // Migrate transactions
-        const CATEGORY_MIGRATION_MAP = {
-            "Housing": "Home - Essentials 🧻",
-            "Groceries": "Groceries - Staples 🌾",
-            "Shopping": "Shopping - Clothes 👕",
-            "Dining": "Food & Drinks - Others ⚙️",
-            "Transportation": "Transport - Uber 🚗",
-            "Utilities": "Bill - Electricity ⚡",
-            "Subscriptions": "Subscription - Software 💾",
-            "Insurance": "Insurance - Others ⚙️",
-            "Health": "Medical - Medicines 💊",
-            "Entertainment": "Entertainment - Movies 🎬",
-            "Income": "Business - Salary 💵",
-            "Needs review": "Misc. - Verification ⏱️",
-            "Other": "Others - General ⚙️"
-        };
-
-        let txsUpdated = false;
-        const migratedTransactions = transactions.map(t => {
-            if (CATEGORY_MIGRATION_MAP[t.category]) {
-                txsUpdated = true;
-                return { ...t, category: CATEGORY_MIGRATION_MAP[t.category] };
-            }
-            if (t.category && !t.category.includes(" - ")) {
-                txsUpdated = true;
-                return { ...t, category: `Others - ${t.category} ⚙️` };
-            }
-            return t;
-        });
-
-        if (txsUpdated) {
-            const updateTxsInDB = async () => {
-                const dbConn = await initDB();
-                const updateTx = dbConn.transaction("transactions", "readwrite");
-                const store = updateTx.objectStore("transactions");
-                migratedTransactions.forEach(t => {
-                    store.put(t);
-                });
-            };
-            updateTxsInDB();
-            transactions.length = 0;
-            transactions.push(...migratedTransactions);
-        }
-
-        // Migrate budgets
-        let budgetsUpdated = false;
-        const migratedBudgets = (settings.budgets || []).map(b => {
-            if (CATEGORY_MIGRATION_MAP[b.category]) {
-                budgetsUpdated = true;
-                return { ...b, category: CATEGORY_MIGRATION_MAP[b.category] };
-            }
-            if (b.category && !b.category.includes(" - ")) {
-                budgetsUpdated = true;
-                return { ...b, category: `Others - ${b.category} ⚙️` };
-            }
-            return b;
-        });
-        if (budgetsUpdated) {
-            settings.budgets = migratedBudgets;
-            saveSettingInDB("budgets", migratedBudgets);
-        }
-
-        // Migrate rules
-        let rulesUpdated = false;
-        const migratedRules = rules.map(r => {
-            let changed = false;
-            let newThen = r.thenText;
-            if (CATEGORY_MIGRATION_MAP[r.thenText]) {
-                changed = true;
-                newThen = CATEGORY_MIGRATION_MAP[r.thenText];
-            } else if (r.thenText && !r.thenText.includes(" - ")) {
-                changed = true;
-                newThen = `Others - ${r.thenText} ⚙️`;
-            }
-            if (changed) {
-                rulesUpdated = true;
-                return { ...r, thenText: newThen };
-            }
-            return r;
-        });
-        if (rulesUpdated) {
-            const updateRulesInDB = async () => {
-                const dbConn = await initDB();
-                const updateTx = dbConn.transaction("rules", "readwrite");
-                const store = updateTx.objectStore("rules");
-                migratedRules.forEach(r => {
-                    store.put(r);
-                });
-            };
-            updateRulesInDB();
-            rules.length = 0;
-            rules.push(...migratedRules);
-        }
     }
 
     // Sort newest first. No cap: this state is what gets written to the linked file,

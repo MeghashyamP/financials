@@ -1277,7 +1277,7 @@ const AppInner = ({ privacy }) => {
                             saveSetting: updateSetting,
                             groupKind: nwKind,
                             effectiveValue: (it) => getEffectiveNetWorthItemValue(it, settingsRef.current.recurring || [], settingsRef.current.billInstances || []),
-                            cardBillCategory: (settingsRef.current.categories || DEFAULT_CATEGORIES).find(c => String(c).startsWith("Credit - Card")) || "Credit - Card 💳"
+                            cardBillCategory: (settingsRef.current.categories || DEFAULT_CATEGORIES).find(c => String(c).startsWith("Credit - Bill")) || "Credit - Bill 💳"
                         }
                     );
                     if (outcome.skippedReason) {

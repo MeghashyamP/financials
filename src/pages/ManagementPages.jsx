@@ -2288,12 +2288,13 @@ export const SettingsPage = ({
         await updateSetting("categories", updated);
         await updateSetting("categoryTypes", updatedTypes);
 
-        // Remove category from transactions that use this category
+        // Transactions that used this category go back to "Needs Review" so they land in the Review inbox
+        const reviewCategory = DEFAULT_CATEGORIES.find(c => c.startsWith("Others - Needs Review")) || "Others - Needs Review 🔍";
         let count = 0;
         const updatedTxList = await Promise.all(transactions.map(async t => {
             if (t.category === cat || (t.category && t.category.startsWith(cat + " - "))) {
                 count++;
-                const updatedTx = { ...t, category: "" };
+                const updatedTx = { ...t, category: reviewCategory, categorySource: "unknown" };
                 await updateTransactionInDB(updatedTx);
                 return updatedTx;
             }
@@ -2303,7 +2304,7 @@ export const SettingsPage = ({
             onUpdateTransactions(updatedTxList);
         }
 
-        showToast(`Category "${cat}" removed${count > 0 ? ` and unlinked from ${count} transaction(s)` : ''}`);
+        showToast(`Category "${cat}" removed${count > 0 ? ` and ${count} transaction(s) sent to Needs Review` : ''}`);
     };
 
     const handleRestoreSuggestions = async () => {

@@ -128,10 +128,10 @@ test('a bank card-bill payment (neutral debit) can replace a ticked credit-card 
     const incoming = row({ type: 'neutral', neutralSign: '-', amount: 50000, date: '2026-10-07', narration: 'UPI-CRED Club-cred.club@axisb' });
     const plan = planImport([incoming], [ph], { recurring: [{ id: 'rec-cc', isVariableAmount: true, estimatedAmount: 50000 }] });
     assert.equal(plan[0].action, 'replace');
-    const merged = mergeIntoPlaceholder(ph, { ...incoming, category: 'Credit - Card 💳', categorySource: 'card-payment' });
+    const merged = mergeIntoPlaceholder(ph, { ...incoming, category: 'Credit - Bill 💳', categorySource: 'card-payment' });
     assert.equal(merged.type, 'neutral');
     assert.equal(merged.neutralSign, '-');
-    assert.equal(merged.category, 'Credit - Card 💳', 'transfer-type rows keep the statement category so type and category agree');
+    assert.equal(merged.category, 'Credit - Bill 💳', 'transfer-type rows keep the statement category so type and category agree');
 });
 
 test('a duplicate row never also consumes a Dashboard payment', () => {

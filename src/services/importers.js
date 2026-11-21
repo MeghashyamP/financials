@@ -1064,7 +1064,7 @@ Output format example:
                 };
                 const processed = processImportedTransaction(item, [], DEFAULT_CATEGORIES);
                 // Money moved between your own accounts / card-bill settlements is never income or spending.
-                if (processed.type !== "neutral" && /^(Transfer|Misc) - |^Credit - Card/.test(processed.category || "")) {
+                if (processed.type !== "neutral" && /^(Transfer|Misc) - |^Credit - Bill/.test(processed.category || "")) {
                     processed.type = "neutral";
                     processed.neutralSign = row.direction === "credit" ? "+" : "-";
                 }

@@ -25,7 +25,7 @@ const makeEnv = (store, over = {}) => {
         saveSetting: async (k, v) => { store[k] = v; },
         groupKind: (c) => ({ 'Credit Cards': 'liability', 'Bank Accounts': 'balance' }[c]),
         effectiveValue: (it) => Number(it.value || 0),
-        cardBillCategory: 'Credit - Card 💳',
+        cardBillCategory: 'Credit - Bill 💳',
         ...over
     };
 };

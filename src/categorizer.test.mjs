@@ -5,9 +5,9 @@ import { categorize, setCategoryMemory, merchantKey } from './categorizer.js';
 
 const POOL = [
     'Food & Drinks - Delivery 🛵', 'Food & Drinks - Fastfood 🍔', 'Food & Drinks - Lunch 🍱', 'Food & Drinks - Others ⚙️',
-    'Groceries - Staples 🌾', 'Groceries - Others ⚙️', 'Health - Medicines 💊', 'Health - Hospital 🏥', 'Health - Others ⚙️',
+    'Groceries - Staples 🌾', 'Groceries - Others ⚙️', 'Health - Pharmacy 💊', 'Health - Hospital 🏥', 'Health - Others ⚙️',
     'Transport - Fuel ⛽', 'Transport - Train 🚆', 'Transport - Others ⚙️', 'Tax - GST 📈', 'Tax - Others ⚙️',
-    'Credit - Card 💳', 'Transfer - Self 🔄', 'Transfer - Bank 🏦', 'Income - Refund 🔙', 'Income - Others ⚙️',
+    'Credit - Bill 💳', 'Transfer - Self 🔄', 'Transfer - Bank 🏦', 'Income - Refund 🔙', 'Income - Others ⚙️',
     'Utilities - Electricity ⚡', 'Utilities - Rent 🏠', 'Utilities - Others ⚙️', 'Investment - Stocks 📊', 'Investment - Others ⚙️',
     'Shopping - Others ⚙️', 'Hidden Charges - Interest 📈', 'Hidden Charges - Processing 📑', 'Others - Needs Review 🔍'
 ];
@@ -17,7 +17,7 @@ test('glued card-statement merchants are recognised', () => {
     assert.match(cat('SWIGGY FOODBANGALORE'), /Delivery/);
     assert.match(cat('PZELECTRICITYMUMBAI'), /Electricity/);
     assert.match(cat('KESHAV PETROFIL PR41957HYDERABAD'), /Fuel/);
-    assert.match(cat('APOLLO PHARMACIES LIMIT HYDERABAD'), /Medicines/);
+    assert.match(cat('APOLLO PHARMACIES LIMIT HYDERABAD'), /Pharmacy/);
 });
 
 test('fuel station is not mistaken for a hospital/health merchant', () => {
@@ -48,8 +48,8 @@ test('a person named in a remark that contains "GST" is not tax', () => {
 });
 
 test('card bill payments', () => {
-    assert.match(cat('BPPY CC PAYMENT DP000000000001abCdE', { type: 'income', direction: 'credit', kind: 'card' }), /Credit - Card/);
-    assert.match(cat('UPI-CRED Club-cred.club@ payment on CRED'), /Credit - Card/);
+    assert.match(cat('BPPY CC PAYMENT DP000000000001abCdE', { type: 'income', direction: 'credit', kind: 'card' }), /Credit - Bill/);
+    assert.match(cat('UPI-CRED Club-cred.club@ payment on CRED'), /Credit - Bill/);
 });
 
 test('card credit that is not a payment is a refund', () => {

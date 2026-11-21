@@ -25,6 +25,8 @@ test('needs-review rows group by payee, biggest money first', () => {
 
 test('only Needs Review / Uncategorized rows are included', () => {
     assert.equal(isNeedsReview(tx({})), true);
+    assert.equal(isNeedsReview(tx({ category: '' })), true);
+    assert.equal(isNeedsReview(tx({ category: undefined })), true);
     assert.equal(isNeedsReview(tx({ category: 'Others - Uncategorized ❓' })), true);
     assert.equal(isNeedsReview(tx({ category: 'Groceries - Staples 🌾' })), false);
     assert.equal(groupForReview([tx({ category: 'Groceries - Staples 🌾' })]).length, 0);
@@ -35,7 +37,7 @@ test('choosing a transfer category makes the row neutral, and back again', () =>
     assert.equal(exp.type, 'neutral');
     assert.equal(exp.neutralSign, '-');
     assert.equal(exp.categorySource, 'manual');
-    const inc = applyCategory(tx({ type: 'income' }), 'Credit - Card 💳');
+    const inc = applyCategory(tx({ type: 'income' }), 'Credit - Bill 💳');
     assert.equal(inc.neutralSign, '+');
     const back = applyCategory(exp, 'Shopping - Online 🛍️');
     assert.equal(back.type, 'expense');

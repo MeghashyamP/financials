@@ -9,9 +9,10 @@ export { AUTO_SOURCES, isUserDecision };
 
 export const NEEDS_REVIEW_RE = /Needs Review|Uncategorized|^Needs review$/i;
 // Categories that move money between your own accounts: never income or spending.
-export const NEUTRAL_CATEGORY_RE = /^(Transfer|Misc) - |^Credit - Card/;
+export const NEUTRAL_CATEGORY_RE = /^(Transfer|Misc) - |^Credit - Bill/;
 
-export const isNeedsReview = (t) => !!t && NEEDS_REVIEW_RE.test(String(t.category || ''));
+// A missing / empty category also needs review.
+export const isNeedsReview = (t) => !!t && (!String(t.category || '').trim() || NEEDS_REVIEW_RE.test(String(t.category)));
 
 const keyOf = (t) => merchantKey(t.narration || t.merchant || '') || cleanNarration(t.narration || t.merchant || '').slice(0, 24) || 'unknown';
 

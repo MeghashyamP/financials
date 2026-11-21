@@ -11,8 +11,8 @@ let n = 0;
 const tx = (o) => ({ id: `t${++n}`, narration: '', ...o });
 
 test('bank card-bill payment pairs with the card statement credit, nearest date wins', () => {
-    const bank1 = tx({ date: '2026-10-05', amount: 50000, type: 'neutral', neutralSign: '-', account: 'HDFC Debit Card', category: 'Credit - Card 💳', narration: 'CC PAYMENT HDFC' });
-    const bank2 = tx({ date: '2026-10-20', amount: 50000, type: 'neutral', neutralSign: '-', account: 'HDFC Debit Card', category: 'Credit - Card 💳' });
+    const bank1 = tx({ date: '2026-10-05', amount: 50000, type: 'neutral', neutralSign: '-', account: 'HDFC Debit Card', category: 'Credit - Bill 💳', narration: 'CC PAYMENT HDFC' });
+    const bank2 = tx({ date: '2026-10-20', amount: 50000, type: 'neutral', neutralSign: '-', account: 'HDFC Debit Card', category: 'Credit - Bill 💳' });
     const card1 = tx({ date: '2026-10-06', amount: 50000, type: 'neutral', neutralSign: '+', account: 'HDFC Credit Card', narration: 'PAYMENT RECEIVED' });
     const card2 = tx({ date: '2026-10-22', amount: 50000, type: 'neutral', neutralSign: '+', account: 'HDFC Credit Card' });
     const stray = tx({ date: '2026-10-10', amount: 1234, type: 'neutral', neutralSign: '+', account: 'HDFC Credit Card' });
@@ -26,7 +26,7 @@ test('bank card-bill payment pairs with the card statement credit, nearest date 
 });
 
 test('payment more than a week apart, or a different amount, does not match', () => {
-    const bank = tx({ date: '2026-10-01', amount: 100, type: 'neutral', neutralSign: '-', account: 'HDFC Debit Card', category: 'Credit - Card 💳' });
+    const bank = tx({ date: '2026-10-01', amount: 100, type: 'neutral', neutralSign: '-', account: 'HDFC Debit Card', category: 'Credit - Bill 💳' });
     const late = tx({ date: '2026-10-20', amount: 100, type: 'neutral', neutralSign: '+', account: 'HDFC Credit Card' });
     const other = tx({ date: '2026-10-02', amount: 150, type: 'neutral', neutralSign: '+', account: 'HDFC Credit Card' });
     const r = matchCardPayments([bank, late, other], profiles);
@@ -35,7 +35,7 @@ test('payment more than a week apart, or a different amount, does not match', ()
 });
 
 test('a payment rounded to the rupee still matches, a real difference does not', () => {
-    const bank = tx({ date: '2026-10-04', amount: 90000, type: 'neutral', neutralSign: '-', account: 'HDFC Debit Card', category: 'Credit - Card 💳' });
+    const bank = tx({ date: '2026-10-04', amount: 90000, type: 'neutral', neutralSign: '-', account: 'HDFC Debit Card', category: 'Credit - Bill 💳' });
     const card = tx({ date: '2026-10-04', amount: 90003, type: 'neutral', neutralSign: '+', account: 'HDFC Credit Card' });
     assert.equal(matchCardPayments([bank, card], profiles).pairs.length, 1);
     const far = tx({ date: '2026-10-04', amount: 90012, type: 'neutral', neutralSign: '+', account: 'HDFC Credit Card' });
@@ -67,7 +67,7 @@ test('a refund links to the purchase it reverses', () => {
 });
 
 test('lookup table covers both sides of every pair', () => {
-    const bank = tx({ date: '2026-10-05', amount: 10, type: 'neutral', neutralSign: '-', account: 'HDFC Debit Card', category: 'Credit - Card 💳' });
+    const bank = tx({ date: '2026-10-05', amount: 10, type: 'neutral', neutralSign: '-', account: 'HDFC Debit Card', category: 'Credit - Bill 💳' });
     const card = tx({ date: '2026-10-05', amount: 10, type: 'neutral', neutralSign: '+', account: 'HDFC Credit Card' });
     const all = matchAcrossStatements([bank, card], profiles);
     assert.equal(all.byTx[bank.id].otherId, card.id);
