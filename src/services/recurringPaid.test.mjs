@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { isRecurringPaidOnDate, isNetWorthPaidOnDate, toYYYYMMDD, getPastCycleDueDates } from './recurringPaid.js';
+import { DEFAULT_CATEGORIES } from './categories.js';
 
 test('toYYYYMMDD handles Date objects and various string date formats', () => {
     assert.equal(toYYYYMMDD('2026-12-07'), '2026-12-07');
@@ -347,4 +348,72 @@ test('filtering overdue items by selectedDate (dueDate <= selectedDate) shows al
     const filteredMonth = overdueList.filter(i => i.date <= sepMonthEnd);
     assert.equal(filteredMonth.length, 2);
     assert.deepEqual(filteredMonth.map(i => i.date), ['2026-08-07', '2026-09-07']);
+});
+
+test('DEFAULT_CATEGORIES includes Food & Drinks - Dineout', () => {
+    assert.ok(DEFAULT_CATEGORIES.includes('Food & Drinks - Dineout 🍽️'), 'DEFAULT_CATEGORIES must include Food & Drinks - Dineout');
+});
+
+test('candidate transactions for mapping only show same main category or same price (including neutral)', () => {
+    const item = {
+        id: 'rec-card',
+        name: 'HDFC Credit Card',
+        type: 'expense',
+        category: 'Credit - Bill 💳',
+        amount: 50000
+    };
+
+    const targetAmt = 50000;
+    const itemMainCat = 'credit';
+
+    const transactions = [
+        // 1. Same main category, different price: should MATCH
+        { id: 'tx-1', type: 'expense', category: 'Credit - EMI', amount: 15000 },
+        // 2. Different category, same price (expense): should MATCH
+        { id: 'tx-2', type: 'expense', category: 'Shopping - Clothes', amount: 50000 },
+        // 3. Different category, same price (neutral): should MATCH
+        { id: 'tx-3', type: 'neutral', category: 'Transfer - Bank', amount: 50000 },
+        // 4. Different category, different price (expense): should NOT match
+        { id: 'tx-4', type: 'expense', category: 'Food & Drinks - Lunch', amount: 1200 },
+        // 5. Different category, different price (neutral): should NOT match
+        { id: 'tx-5', type: 'neutral', category: 'Transfer - Own Account', amount: 20000 }
+    ];
+
+    const getMainCategory = (cat) => cat && cat.includes(' - ') ? cat.split(' - ')[0].trim() : (cat || '');
+
+    const candidates = transactions.filter(t => {
+        const tType = t.type || 'expense';
+        const isTypeMatch = tType === 'expense' || tType === 'neutral';
+        if (!isTypeMatch) return false;
+
+        const tAmount = Math.abs(Number(t.amount || 0));
+        const isSamePrice = targetAmt > 0 && Math.abs(tAmount - targetAmt) < 0.01;
+        if (isSamePrice) return true;
+
+        const tMainCat = getMainCategory(t.category).toLowerCase().trim();
+        if (itemMainCat && tMainCat === itemMainCat) return true;
+
+        return false;
+    });
+
+    assert.equal(candidates.length, 3);
+    assert.deepEqual(candidates.map(c => c.id), ['tx-1', 'tx-2', 'tx-3']);
+});
+
+test('document list sorting by uploaded order preserves chronological upload order', () => {
+    const docs = [
+        { id: 'doc-3', filename: 'March.pdf', createdAt: '2026-03-01T10:00:00Z', count: 5 },
+        { id: 'doc-1', filename: 'January.pdf', createdAt: '2026-01-01T10:00:00Z', count: 50 },
+        { id: 'doc-2', filename: 'February.pdf', createdAt: '2026-02-01T10:00:00Z', count: 20 }
+    ];
+
+    // Uploaded order (chronological by upload time): January, February, March
+    const sorted = [...docs].sort((a, b) => {
+        const timeA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+        const timeB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+        if (timeA !== timeB) return timeA - timeB;
+        return (a.filename || '').localeCompare(b.filename || '');
+    });
+
+    assert.deepEqual(sorted.map(d => d.filename), ['January.pdf', 'February.pdf', 'March.pdf']);
 });

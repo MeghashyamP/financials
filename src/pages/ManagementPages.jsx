@@ -1736,7 +1736,7 @@ export const DocumentsPage = ({ documents, transactions, settings, onSyncFolder,
                 size: file.size,
                 status: "stored",
                 source: "upload",
-                createdAt: new Date().toISOString()
+                createdAt: new Date(Date.now() + i * 10).toISOString()
                 // fileData Blob omitted to save local storage space
             });
             uploadCount++;

@@ -237,7 +237,7 @@ export const fetchStateFromDB = async () => {
     // JSON backups and the cloud copy, so truncating it here would drop older records
     // from all of them.
     const sortedTransactions = [...transactions].sort((a, b) => new Date(b.date) - new Date(a.date));
-    const sortedDocuments = [...documents].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    const sortedDocuments = [...documents].sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
 
     return {
         transactions: sortedTransactions,

@@ -1397,42 +1397,61 @@ const PaymentsSectionWidget = ({ settings, transactions, updateSetting, loadStat
         }).sort((a, b) => new Date(b.date) - new Date(a.date));
     }, [markPaidModalItem, transactions]);
 
-    // Transactions list for multi-transaction mapping mode (includes both direction-matching and neutral transactions)
+    // Transactions list for multi-transaction mapping mode (outflow/inflow)
+    // Shows transactions under the recurring item's main category type, plus all transactions with same price (including neutral)
     const candidateTxList = React.useMemo(() => {
         if (!markPaidModalItem) return [];
         const isIncome = markPaidModalItem.type === "income";
-        const itemMainCat = getMainCategory(markPaidModalItem.category).toLowerCase();
+        const itemMainCat = getMainCategory(markPaidModalItem.category).toLowerCase().trim();
+        const targetAmt = Math.abs(Number(markPaidModalItem.amount || 0));
 
         return (transactions || []).filter(t => {
             if (t.linkedRecurringId && (!selectedMapTxIds.includes(t.id) && t.linkedRecurringId !== markPaidModalItem.id)) return false;
+            
+            // Keep already selected transactions visible
+            if (selectedMapTxIds.includes(t.id)) return true;
+
             const tType = t.type || "expense";
             const isTypeMatch = isIncome
                 ? (tType === "income" || tType === "neutral")
                 : (tType === "expense" || tType === "neutral");
             if (!isTypeMatch) return false;
 
-            const tMainCat = getMainCategory(t.category).toLowerCase();
-            // Category match: same main category, or any neutral transaction (transfers, card payments, settlements)
-            if (itemMainCat && itemMainCat !== "general" && tMainCat === itemMainCat) {
-                return true;
+            const tAmount = Math.abs(Number(t.amount || 0));
+            const isSamePrice = targetAmt > 0 && Math.abs(tAmount - targetAmt) < 0.01;
+
+            // 1. Show all transactions with same price (includes neutral transactions as well)
+            if (isSamePrice) return true;
+
+            // 2. Show transactions under its main category type
+            const tMainCat = getMainCategory(t.category).toLowerCase().trim();
+            if (itemMainCat && itemMainCat !== "recurring bill") {
+                if (tMainCat === itemMainCat) {
+                    return true;
+                }
+            } else if (!itemMainCat) {
+                // If recurring item has no category, allow general/uncategorized transactions
+                if (!tMainCat || tMainCat === "general" || tMainCat === "others") {
+                    return true;
+                }
             }
-            if (tType === "neutral") {
-                return true;
-            }
-            if (!itemMainCat || itemMainCat === "general") {
-                return true;
-            }
-            if (selectedMapTxIds.includes(t.id)) {
-                return true;
-            }
+
             return false;
         }).sort((a, b) => {
             const aSelected = selectedMapTxIds.includes(a.id) ? 1 : 0;
             const bSelected = selectedMapTxIds.includes(b.id) ? 1 : 0;
             if (aSelected !== bSelected) return bSelected - aSelected;
-            const aCatMatch = getMainCategory(a.category).toLowerCase() === itemMainCat ? 1 : 0;
-            const bCatMatch = getMainCategory(b.category).toLowerCase() === itemMainCat ? 1 : 0;
+
+            const aAmount = Math.abs(Number(a.amount || 0));
+            const bAmount = Math.abs(Number(b.amount || 0));
+            const aSamePrice = targetAmt > 0 && Math.abs(aAmount - targetAmt) < 0.01 ? 1 : 0;
+            const bSamePrice = targetAmt > 0 && Math.abs(bAmount - targetAmt) < 0.01 ? 1 : 0;
+            if (aSamePrice !== bSamePrice) return bSamePrice - aSamePrice;
+
+            const aCatMatch = (itemMainCat && getMainCategory(a.category).toLowerCase().trim() === itemMainCat) ? 1 : 0;
+            const bCatMatch = (itemMainCat && getMainCategory(b.category).toLowerCase().trim() === itemMainCat) ? 1 : 0;
             if (aCatMatch !== bCatMatch) return bCatMatch - aCatMatch;
+
             return new Date(b.date) - new Date(a.date);
         });
     }, [markPaidModalItem, transactions, selectedMapTxIds]);
@@ -2423,7 +2442,7 @@ const PaymentsSectionWidget = ({ settings, transactions, updateSetting, loadStat
                                         <div style={{ maxHeight: '180px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '6px', marginBottom: '8px' }}>
                                             {candidateTxList.length === 0 ? (
                                                 <div style={{ padding: '16px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.8rem' }}>
-                                                    No existing {isIncome ? "inflow" : "outflow"} or neutral transactions found.
+                                                    No unmapped transactions found under "{getMainCategory(markPaidModalItem.category) || 'General'}" or matching {formatCurrency(markPaidModalItem.amount)}.
                                                 </div>
                                             ) : (
                                                 candidateTxList.map(tx => {

@@ -427,6 +427,7 @@ const AppInner = ({ privacy }) => {
                     docMap.set(t.documentId, {
                         id: t.documentId,
                         filename: `Statement (${t.account || "Imported"})`,
+                        createdAt: t.createdAt || t.date,
                         source: "import"
                     });
                 }
@@ -437,8 +438,10 @@ const AppInner = ({ privacy }) => {
             count: counts.get(doc.id) || 0
         }));
         list.sort((a, b) => {
-            if (b.count !== a.count) return b.count - a.count;
-            return String(b.createdAt || '').localeCompare(String(a.createdAt || ''));
+            const timeA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+            const timeB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+            if (timeA !== timeB) return timeA - timeB;
+            return (a.filename || "").localeCompare(b.filename || "");
         });
         return list;
     }, [documents, settings?.statements, transactions]);

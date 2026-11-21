@@ -153,6 +153,7 @@ const RULES = [
 
     // ── food (delivery first, then eateries) ──
     R('Food & Drinks - Delivery', ['swiggy', 'zomato', 'eatsure', 'magicpin', 'faasos', 'boxeight'], []),
+    R('Food & Drinks - Dineout', ['dineout', 'eazydiner', 'district'], ['dineout|eazydiner']),
     R('Food & Drinks - Fastfood', ['dominos', 'mcdonald', 'mcdonalds', 'kfc', 'burgerking', 'subway', 'pizzahut', 'dunkin', 'wendys'], ['burger|pizza|momos']),
     R('Food & Drinks - Cafes', ['starbucks', 'cafecoffeeday', 'thirdwave', 'blueTokai', 'chaayos', 'chaipoint'], ['coffee|chai|tea|cafe']),
     R('Food & Drinks - Sweets', ['sweets', 'mithai', 'haldiram', 'icecream', 'baskinrobbins'], []),
