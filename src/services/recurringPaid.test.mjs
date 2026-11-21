@@ -166,3 +166,67 @@ test('deleted transaction causes paid bill instance to revert to unpaid', () => 
     });
     assert.equal(isPaid, false, 'If backing transaction was deleted, recurring item must not be marked paid');
 });
+
+test('partially paid recurring item with multiple linked transactions', () => {
+    const recurringItem = {
+        id: 'rec-rent',
+        name: 'House Rent',
+        amount: 10000,
+        monthlyDays: 5,
+        cadence: 'monthly'
+    };
+
+    const tx1 = {
+        id: 'tx-1',
+        merchant: 'House Rent',
+        date: '2026-11-05',
+        amount: 6000,
+        scheduledDate: '2026-11-05',
+        linkedRecurringId: 'rec-rent'
+    };
+
+    const tx2 = {
+        id: 'tx-2',
+        merchant: 'House Rent',
+        date: '2026-11-05',
+        amount: 4000,
+        scheduledDate: '2026-11-05',
+        linkedRecurringId: 'rec-rent'
+    };
+
+    // Both linked: sum is 10000 -> fully paid
+    const isFullyPaid = isRecurringPaidOnDate({
+        recurringItem,
+        targetDateStr: '2026-11-05',
+        viewMonthPrefix: '2026-11',
+        transactions: [tx1, tx2],
+        billInstances: []
+    });
+    assert.equal(isFullyPaid, true, 'When sum matches target amount, recurring item is paid');
+
+    // tx1 unlinked: remaining tx2 is only 4000 -> NOT paid
+    const isPartiallyPaid = isRecurringPaidOnDate({
+        recurringItem,
+        targetDateStr: '2026-11-05',
+        viewMonthPrefix: '2026-11',
+        transactions: [tx2],
+        billInstances: []
+    });
+    assert.equal(isPartiallyPaid, false, 'When remaining linked sum is less than target amount, recurring item is not paid');
+
+    // Bill instance marked pending with remaining amount 6000 -> NOT paid
+    const isPendingInstPaid = isRecurringPaidOnDate({
+        recurringItem,
+        targetDateStr: '2026-11-05',
+        viewMonthPrefix: '2026-11',
+        transactions: [tx2],
+        billInstances: [{
+            id: 'bi-pending-1',
+            recurringId: 'rec-rent',
+            dueDate: '2026-11-05',
+            status: 'pending',
+            amount: 6000
+        }]
+    });
+    assert.equal(isPendingInstPaid, false, 'Pending bill instance must not be treated as paid');
+});

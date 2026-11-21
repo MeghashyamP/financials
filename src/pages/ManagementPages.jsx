@@ -1623,7 +1623,7 @@ export const RecurringPage = ({
 // --- SUB-COMPONENT: Create / Edit Recurring Transaction Modal ---
 
 
-export const DocumentsPage = ({ documents, transactions, settings, onSyncFolder, showToast, loadState, onDeleteDocument, updateSetting }) => {
+export const DocumentsPage = ({ documents, transactions, settings, onSyncFolder, showToast, loadState, onDeleteDocument, updateSetting, onViewDocumentTransactions }) => {
     const [docToDelete, setDocToDelete] = React.useState(null);
     const [deleteStep, setDeleteStep] = React.useState(1);
 
@@ -1744,36 +1744,65 @@ export const DocumentsPage = ({ documents, transactions, settings, onSyncFolder,
                                     <th>Filename</th>
                                     <th>Source</th>
                                     <th>Status</th>
+                                    <th style={{ textAlign: 'center' }}>Transactions</th>
                                     <th>Uploaded Date & Time</th>
                                     <th style={{ width: '60px' }}></th>
                                 </tr>
                             </thead>
                             <tbody>
-                                {documents.map(d => (
-                                    <tr key={d.id}>
-                                        <td style={{ fontWeight: 600 }}>{d.filename}</td>
-                                        <td style={{ textTransform: 'capitalize' }}>{d.source === "google-drive" ? "Folder Sync" : d.source}</td>
-                                        <td>
-                                            <span className={`badge badge-${d.status}`}>
-                                                {d.status}
-                                            </span>
-                                        </td>
-                                        <td>{formatDateTime(d.createdAt, settings.dateFormat)}</td>
-                                        <td style={{ textAlign: 'right' }}>
-                                            <button
-                                                className="btn btn-secondary btn-sm"
-                                                style={{ border: 'none', color: 'var(--danger)' }}
-                                                onClick={() => {
-                                                    setDocToDelete(d);
-                                                    setDeleteStep(1);
-                                                }}
-                                                title="Delete File"
-                                            >
-                                                <Icon name="trash" />
-                                            </button>
-                                        </td>
-                                    </tr>
-                                ))}
+                                {documents.map(d => {
+                                    const count = transactions ? transactions.filter(t => t.documentId === d.id).length : 0;
+                                    return (
+                                        <tr key={d.id}>
+                                            <td style={{ fontWeight: 600 }}>{d.filename}</td>
+                                            <td style={{ textTransform: 'capitalize' }}>{d.source === "google-drive" ? "Folder Sync" : d.source}</td>
+                                            <td>
+                                                <span className={`badge badge-${d.status}`}>
+                                                    {d.status}
+                                                </span>
+                                            </td>
+                                            <td style={{ textAlign: 'center' }}>
+                                                {count > 0 ? (
+                                                    <button
+                                                        className="btn btn-secondary btn-sm"
+                                                        style={{
+                                                            fontSize: '0.78rem',
+                                                            padding: '3px 10px',
+                                                            borderRadius: '6px',
+                                                            display: 'inline-flex',
+                                                            alignItems: 'center',
+                                                            gap: '5px',
+                                                            cursor: 'pointer',
+                                                            color: 'var(--primary)',
+                                                            background: 'var(--primary-light, #EEF2FF)',
+                                                            border: '1px solid #C7D2FE'
+                                                        }}
+                                                        onClick={() => onViewDocumentTransactions && onViewDocumentTransactions(d.id)}
+                                                        title={`View ${count} transactions imported from "${d.filename}"`}
+                                                    >
+                                                        <span>🔍 {count} {count === 1 ? 'txn' : 'txns'}</span>
+                                                    </button>
+                                                ) : (
+                                                    <span style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>0 txns</span>
+                                                )}
+                                            </td>
+                                            <td>{formatDateTime(d.createdAt, settings.dateFormat)}</td>
+                                            <td style={{ textAlign: 'right' }}>
+                                                <button
+                                                    className="btn btn-secondary btn-sm"
+                                                    style={{ border: 'none', color: 'var(--danger)' }}
+                                                    onClick={() => {
+                                                        setDocToDelete(d);
+                                                        setDeleteStep(1);
+                                                    }}
+                                                    title="Delete File"
+                                                >
+                                                    <Icon name="trash" />
+                                                </button>
+                                            </td>
+                                        </tr>
+                                    );
+                                })}
                             </tbody>
                         </table>
                     </div>

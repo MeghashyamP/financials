@@ -47,7 +47,7 @@ export const isRecurringPaidOnDate = ({
         if (monthBillInst.status === 'paid') {
             // Verify that a corresponding payment transaction actually exists in transactions
             const hasBackingTx = (transactions || []).some(t => {
-                if (!t) return false;
+                if (!t || t.pendingMapping) return false;
                 if (monthBillInst.linkedTxId && t.id === monthBillInst.linkedTxId) {
                     return true;
                 }
@@ -71,9 +71,10 @@ export const isRecurringPaidOnDate = ({
 
     // 2. Check transactions
     const flexDays = Number(recurringItem.dateFlexDays) || 0;
+    const targetAmt = Math.abs(Number(recurringItem.estimatedAmount || recurringItem.amount || 0));
 
-    return (transactions || []).some(t => {
-        if (!t) return false;
+    const matchingTxs = (transactions || []).filter(t => {
+        if (!t || t.pendingMapping) return false;
         const tDate = toYYYYMMDD(t.date);
         if (!tDate) return false;
 
@@ -109,6 +110,16 @@ export const isRecurringPaidOnDate = ({
 
         return false;
     });
+
+    if (matchingTxs.length === 0) return false;
+    if (targetAmt > 0) {
+        const allHaveAmount = matchingTxs.every(t => t.amount !== undefined && t.amount !== null);
+        if (allHaveAmount) {
+            const matchingSum = matchingTxs.reduce((acc, t) => acc + Math.abs(Number(t.amount || 0)), 0);
+            return matchingSum >= targetAmt - 0.01;
+        }
+    }
+    return true;
 };
 
 export const isNetWorthPaidOnDate = ({

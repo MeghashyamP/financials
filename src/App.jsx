@@ -389,11 +389,72 @@ const AppInner = ({ privacy }) => {
     const [txNarrationFilter, setTxNarrationFilter] = React.useState("");
     const [txAmountFilter, setTxAmountFilter] = React.useState("");
     const [txNotesFilter, setTxNotesFilter] = React.useState("");
+    const [txDocumentFilter, setTxDocumentFilter] = React.useState("all");
     const [activeTxPopover, setActiveTxPopover] = React.useState(null);
     const [txCustomFromDate, setTxCustomFromDate] = React.useState("");
     const [txCustomToDate, setTxCustomToDate] = React.useState("");
     const [txSortField, setTxSortField] = React.useState("date");
     const [txSortDirection, setTxSortDirection] = React.useState("desc");
+
+    // Gather available documents and transaction counts for document filtering
+    const documentOptions = React.useMemo(() => {
+        const docMap = new Map();
+        (documents || []).forEach(d => {
+            if (d && d.id) {
+                docMap.set(d.id, {
+                    id: d.id,
+                    filename: d.filename || "Untitled Document",
+                    createdAt: d.createdAt,
+                    source: d.source
+                });
+            }
+        });
+        (settings?.statements || []).forEach(s => {
+            if (s && s.documentId && !docMap.has(s.documentId)) {
+                docMap.set(s.documentId, {
+                    id: s.documentId,
+                    filename: s.fileName || `${s.account || 'Imported'} Statement`,
+                    createdAt: s.importedAt,
+                    source: "statement"
+                });
+            }
+        });
+        const counts = new Map();
+        (transactions || []).forEach(t => {
+            if (t && t.documentId) {
+                counts.set(t.documentId, (counts.get(t.documentId) || 0) + 1);
+                if (!docMap.has(t.documentId)) {
+                    docMap.set(t.documentId, {
+                        id: t.documentId,
+                        filename: `Statement (${t.account || "Imported"})`,
+                        source: "import"
+                    });
+                }
+            }
+        });
+        const list = Array.from(docMap.values()).map(doc => ({
+            ...doc,
+            count: counts.get(doc.id) || 0
+        }));
+        list.sort((a, b) => {
+            if (b.count !== a.count) return b.count - a.count;
+            return String(b.createdAt || '').localeCompare(String(a.createdAt || ''));
+        });
+        return list;
+    }, [documents, settings?.statements, transactions]);
+
+    const manualTxCount = React.useMemo(() => {
+        return (transactions || []).filter(t => !t.documentId).length;
+    }, [transactions]);
+
+    const handleViewDocumentTransactions = (docId) => {
+        setTxDocumentFilter(docId);
+        setTxCategoryFilter([]);
+        setTxTypeFilter([]);
+        setTxNarrationFilter(""); setTxAccountFilter([]); setTxTagFilter([]);
+        setTxAmountFilter(""); setTxNotesFilter(""); setTxSearch("");
+        handleNavigatePage("transactions");
+    };
 
     const handleTxSort = (field) => {
         if (txSortField !== field) {
@@ -763,7 +824,9 @@ const AppInner = ({ privacy }) => {
                 createdAt: t.createdAt || now,
                 documentId: t.documentId || null,
                 replaceTargetId: t.replaceTargetId || null,
-                linkedRecurringId: t.linkedRecurringId || null
+                linkedRecurringId: t.linkedRecurringId || null,
+                scheduledDate: t.scheduledDate || null,
+                pendingMapping: Boolean(t.pendingMapping)
             };
 
             const finalized = processImportedTransaction(item, rules, availableCats);
@@ -828,20 +891,55 @@ const AppInner = ({ privacy }) => {
             // If the deleted transaction was linked to a recurring payment or created from Dashboard
             if (txToDelete && (txToDelete.linkedRecurringId || txToDelete.source === "dashboard" || (txToDelete.notes && txToDelete.notes.includes("from Dashboard")))) {
                 const recId = txToDelete.linkedRecurringId;
-
-                // 1. Clean up bill instances
+                const sched = txToDelete.scheduledDate || txToDelete.date;
+                const schedMonth = sched ? sched.slice(0, 7) : "";
                 const currentBillInstances = settings.billInstances || [];
-                const updatedInstances = currentBillInstances.filter(b => {
-                    if (b.linkedTxId === id) return false;
-                    if (recId && b.recurringId === recId && b.status === 'paid') {
-                        const sched = txToDelete.scheduledDate || txToDelete.date;
-                        if (b.dueDate === sched || (sched && b.dueDate && b.dueDate.startsWith(sched.slice(0, 7)))) {
-                            return false;
+
+                const remainingLinked = recId ? (transactions || []).filter(t => t.id !== id && !t.pendingMapping && t.linkedRecurringId === recId && (
+                    t.scheduledDate
+                        ? (t.scheduledDate === sched || (schedMonth && t.scheduledDate.startsWith(schedMonth)))
+                        : (t.date === sched || (schedMonth && t.date.startsWith(schedMonth)))
+                )) : [];
+
+                const rItem = recId ? (settings.recurring || []).find(r => r && r.id === recId) : null;
+                const targetAmt = rItem ? Math.abs(Number(rItem.estimatedAmount || rItem.amount || 0)) : 0;
+                const remainingSum = remainingLinked.reduce((acc, t) => acc + Math.abs(Number(t.amount || 0)), 0);
+                const remainingUnpaid = Number(Math.max(0, targetAmt - remainingSum).toFixed(2));
+
+                // 1. Clean up or update bill instances
+                let updatedInstances = currentBillInstances;
+                if (remainingLinked.length > 0 && remainingUnpaid > 0) {
+                    let foundBi = false;
+                    updatedInstances = currentBillInstances.map(b => {
+                        if (recId && b.recurringId === recId && (b.dueDate === sched || (schedMonth && b.dueDate && b.dueDate.startsWith(schedMonth)))) {
+                            foundBi = true;
+                            return { ...b, status: 'pending', amount: remainingUnpaid, linkedTxId: remainingLinked[0]?.id || null };
                         }
+                        return b;
+                    });
+                    if (!foundBi && sched) {
+                        updatedInstances.push({
+                            id: crypto.randomUUID(),
+                            recurringId: recId,
+                            name: rItem?.name || txToDelete.merchant || "Recurring Bill",
+                            amount: remainingUnpaid,
+                            dueDate: sched,
+                            status: 'pending',
+                            linkedTxId: remainingLinked[0]?.id || null
+                        });
                     }
-                    return true;
-                });
-                if (updatedInstances.length !== currentBillInstances.length) {
+                } else {
+                    updatedInstances = currentBillInstances.filter(b => {
+                        if (b.linkedTxId === id) return false;
+                        if (recId && b.recurringId === recId && (b.status === 'paid' || b.status === 'pending')) {
+                            if (b.dueDate === sched || (schedMonth && b.dueDate && b.dueDate.startsWith(schedMonth))) {
+                                return false;
+                            }
+                        }
+                        return true;
+                    });
+                }
+                if (JSON.stringify(updatedInstances) !== JSON.stringify(currentBillInstances)) {
                     await updateSetting("billInstances", updatedInstances);
                 }
 
@@ -894,6 +992,7 @@ const AppInner = ({ privacy }) => {
     const handleDeleteDocument = async (docId) => {
         try {
             await deleteDocumentAndTransactionsFromDB(docId);
+            if (txDocumentFilter === docId) setTxDocumentFilter("all");
             showToast("File and associated transactions deleted successfully");
             await loadState();
         } catch (e) {
@@ -2348,6 +2447,35 @@ const AppInner = ({ privacy }) => {
                                     <option value="neutral">Neutral</option>
                                 </select>
 
+                                {/* Document Filter */}
+                                <select
+                                    className="form-control"
+                                    style={{
+                                        height: '34px',
+                                        fontSize: '0.83rem',
+                                        padding: '0 8px',
+                                        flexShrink: 0,
+                                        maxWidth: '185px',
+                                        fontWeight: txDocumentFilter !== 'all' ? 700 : 400,
+                                        color: txDocumentFilter !== 'all' ? 'var(--primary)' : 'inherit',
+                                        borderColor: txDocumentFilter !== 'all' ? 'var(--primary)' : 'var(--border-color)',
+                                        background: txDocumentFilter !== 'all' ? 'var(--primary-light, #EEF2FF)' : 'var(--card-bg)'
+                                    }}
+                                    value={txDocumentFilter}
+                                    onChange={(e) => setTxDocumentFilter(e.target.value)}
+                                    title="Filter transactions by imported document / statement"
+                                >
+                                    <option value="all">📄 All Documents</option>
+                                    {documentOptions.map(doc => (
+                                        <option key={doc.id} value={doc.id}>
+                                            📄 {doc.filename} ({doc.count})
+                                        </option>
+                                    ))}
+                                    {manualTxCount > 0 && (
+                                        <option value="manual">✍️ Manual Entry ({manualTxCount})</option>
+                                    )}
+                                </select>
+
                                 {/* Import */}
                                 <button className="btn btn-secondary" style={{ height: '34px', padding: '0 12px', flexShrink: 0, display: 'flex', alignItems: 'center', gap: '5px', fontSize: '0.83rem' }} onClick={() => setShowImportModal(true)}>
                                     <Icon name="download" />
@@ -2493,6 +2621,9 @@ const AppInner = ({ privacy }) => {
                             transactions={filteredTx}
                             allTransactions={transactions}
                             settings={settings}
+                            tags={tags}
+                            onAddTag={saveTagInDB}
+                            onAddTransactions={handleAddTransactions}
                             setActivePage={handleNavigatePage}
                             updateSetting={updateSetting}
                             loadState={loadState}
@@ -2503,6 +2634,10 @@ const AppInner = ({ privacy }) => {
                     {activePage === "transactions" && (
                         <TransactionsPage
                             transactions={filteredTx}
+                            allTransactions={transactions}
+                            documents={documents}
+                            documentFilter={txDocumentFilter}
+                            setDocumentFilter={setTxDocumentFilter}
                             settings={settings}
                             onDelete={handleDeleteTransaction}
                             onPatch={handlePatchTransaction}
@@ -2595,6 +2730,7 @@ const AppInner = ({ privacy }) => {
                             loadState={loadState}
                             onDeleteDocument={handleDeleteDocument}
                             updateSetting={updateSetting}
+                            onViewDocumentTransactions={handleViewDocumentTransactions}
                         />
                     )}
                     {activePage === "reports" && (

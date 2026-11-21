@@ -4,10 +4,11 @@ import {
     ModernDateFilterPicker, PeriodSelectOptions, getContrastTextColor,
     formatCategorySubIconFirst, calculatePeriodDateRange, getCurrencySymbol,
     getOccurrencesInPeriod, NET_WORTH_GROUPS, getAnchorDayOfMonth, getAnchorDayForRecurring,
-    shiftDateByCadence, netWorthMonthsPerCycle, DatePickerField
+    shiftDateByCadence, netWorthMonthsPerCycle, DatePickerField, useEscapeKey
 } from '../utils.jsx';
-import { updateTransactionInDB, deleteTransactionFromDB } from '../store.js';
+import { updateTransactionInDB, deleteTransactionFromDB, saveTransactionsInDB, saveTagInDB } from '../store.js';
 import { LogBillInstanceModal } from '../components/modals/PlanningModals.jsx';
+import { AddEntryModal } from '../components/modals/TransactionModals.jsx';
 
 import { stripTrailingBrackets } from '../services/importDedupe.js';
 
@@ -26,7 +27,7 @@ const MONTHS = [
     "July", "August", "September", "October", "November", "December"
 ];
 
-export const DashboardPage = ({ transactions, allTransactions, settings, setActivePage, updateSetting, loadState, showToast, setTxCategoryFilter, onViewCategoryTransactions }) => {
+export const DashboardPage = ({ transactions, allTransactions, settings, setActivePage, updateSetting, loadState, showToast, setTxCategoryFilter, onViewCategoryTransactions, tags, onAddTag, onAddTransactions }) => {
     const expenseTx = transactions.filter(t => t.type === "expense");
     const incomeTx = transactions.filter(t => t.type === "income");
     const fullTx = allTransactions || transactions;
@@ -76,6 +77,9 @@ export const DashboardPage = ({ transactions, allTransactions, settings, setActi
                 <PaymentsSectionWidget
                     settings={settings}
                     transactions={fullTx}
+                    tags={tags}
+                    onAddTag={onAddTag}
+                    onAddTransactions={onAddTransactions}
                     updateSetting={updateSetting}
                     loadState={loadState}
                     showToast={showToast}
@@ -376,7 +380,7 @@ const isRecurringPaidOnDate = ({
         if (monthBillInst.status === 'paid') {
             // Verify that a corresponding payment transaction actually exists in transactions
             const hasBackingTx = (transactions || []).some(t => {
-                if (!t) return false;
+                if (!t || t.pendingMapping) return false;
                 if (monthBillInst.linkedTxId && t.id === monthBillInst.linkedTxId) {
                     return true;
                 }
@@ -400,9 +404,10 @@ const isRecurringPaidOnDate = ({
 
     // 2. Check transactions
     const flexDays = Number(recurringItem.dateFlexDays) || 0;
+    const targetAmt = Math.abs(Number(recurringItem.estimatedAmount || recurringItem.amount || 0));
 
-    return (transactions || []).some(t => {
-        if (!t) return false;
+    const matchingTxs = (transactions || []).filter(t => {
+        if (!t || t.pendingMapping) return false;
         const tDate = toYYYYMMDD(t.date);
         if (!tDate) return false;
 
@@ -438,6 +443,16 @@ const isRecurringPaidOnDate = ({
 
         return false;
     });
+
+    if (matchingTxs.length === 0) return false;
+    if (targetAmt > 0) {
+        const allHaveAmount = matchingTxs.every(t => t.amount !== undefined && t.amount !== null);
+        if (allHaveAmount) {
+            const matchingSum = matchingTxs.reduce((acc, t) => acc + Math.abs(Number(t.amount || 0)), 0);
+            return matchingSum >= targetAmt - 0.01;
+        }
+    }
+    return true;
 };
 
 const isNetWorthPaidOnDate = ({
@@ -452,7 +467,7 @@ const isNetWorthPaidOnDate = ({
     const targetObj = new Date(targetDateStr + "T00:00:00");
 
     return (transactions || []).some(t => {
-        if (!t) return false;
+        if (!t || t.pendingMapping) return false;
         const tDate = toYYYYMMDD(t.date);
         if (!tDate) return false;
 
@@ -711,17 +726,31 @@ const PaymentsCalendarWidget = ({ settings, transactions, selectedDay, setSelect
 };
 
 // --- SUB-COMPONENT: Payments section with Upcoming, Overdue, and Paid filters ---
-const PaymentsSectionWidget = ({ settings, transactions, updateSetting, loadState, showToast, selectedDay, setSelectedDay, viewDate }) => {
+const PaymentsSectionWidget = ({ settings, transactions, updateSetting, loadState, showToast, selectedDay, setSelectedDay, viewDate, tags, onAddTag, onAddTransactions }) => {
     const [filter, setFilter] = React.useState("upcoming");
     const [markPaidModalItem, setMarkPaidModalItem] = React.useState(null);
     const [loggingBillItem, setLoggingBillItem] = React.useState(null);
     const [selectedTxIdToLink, setSelectedTxIdToLink] = React.useState(null);
     const [isMappingMode, setIsMappingMode] = React.useState(false);
     const [selectedMapTxIds, setSelectedMapTxIds] = React.useState([]);
+    const [newTxModalData, setNewTxModalData] = React.useState(null);
     const [unmarkConfirmItem, setUnmarkConfirmItem] = React.useState(null);
     const [unmarkLinkedTxs, setUnmarkLinkedTxs] = React.useState([]);
     const [createdDateOption, setCreatedDateOption] = React.useState("due_date");
     const [customCreatedDate, setCustomCreatedDate] = React.useState("");
+    const [sessionCreatedTxIds, setSessionCreatedTxIds] = React.useState([]);
+    const sessionCreatedTxIdsRef = React.useRef(sessionCreatedTxIds);
+    sessionCreatedTxIdsRef.current = sessionCreatedTxIds;
+
+    React.useEffect(() => {
+        return () => {
+            if (sessionCreatedTxIdsRef.current && sessionCreatedTxIdsRef.current.length > 0) {
+                for (const id of sessionCreatedTxIdsRef.current) {
+                    deleteTransactionFromDB(id);
+                }
+            }
+        };
+    }, []);
 
     // Self-heal: automatically remove orphaned bill instances marked 'paid' whose backing transaction was deleted
     React.useEffect(() => {
@@ -1041,7 +1070,7 @@ const PaymentsSectionWidget = ({ settings, transactions, updateSetting, loadStat
     }, [settings.recurring, settings.networthItems, settings.billInstances, viewYear, viewMonth]);
 
     const paidItems = React.useMemo(() => {
-        const list = (transactions || []).filter(t => t.linkedRecurringId || t.linkTo || t.source === "recurring" || (t.notes && t.notes.includes("Marked as paid")));
+        const list = (transactions || []).filter(t => !t.pendingMapping && (t.linkedRecurringId || t.linkTo || t.source === "recurring" || (t.notes && t.notes.includes("Marked as paid"))));
         return list.sort((a, b) => {
             const dateA = toYYYYMMDD(a.date);
             const dateB = toYYYYMMDD(b.date);
@@ -1149,77 +1178,201 @@ const PaymentsSectionWidget = ({ settings, transactions, updateSetting, loadStat
         }
     }, [selectedDayStr, viewYear, viewMonth, filteredUpcoming.length, filteredOverdue.length, filteredPaid.length, todayStr]);
 
-    // Handle Escape key to close Mark Paid modal and Unmark Confirm modal
-    React.useEffect(() => {
-        const handleKeyDown = (e) => {
-            if (e.key === "Escape") {
-                if (markPaidModalItem) {
-                    setMarkPaidModalItem(null);
-                    setSelectedTxIdToLink(null);
-                    setIsMappingMode(false);
-                    setSelectedMapTxIds([]);
+    const handleBackFromMapping = async () => {
+        try {
+            if (sessionCreatedTxIds.length > 0) {
+                for (const id of sessionCreatedTxIds) {
+                    await deleteTransactionFromDB(id);
                 }
-                if (unmarkConfirmItem) {
-                    setUnmarkConfirmItem(null);
-                    setUnmarkLinkedTxs([]);
+                setSessionCreatedTxIds([]);
+                if (typeof loadState === "function") {
+                    await loadState();
                 }
             }
-        };
-        window.addEventListener("keydown", handleKeyDown);
-        return () => window.removeEventListener("keydown", handleKeyDown);
-    }, [markPaidModalItem, unmarkConfirmItem]);
+        } catch (err) {
+            console.error("Error deleting session-created transactions on back:", err);
+        } finally {
+            setSelectedMapTxIds([]);
+            setIsMappingMode(false);
+            setNewTxModalData(null);
+        }
+    };
 
-    // Candidate matching transactions for Mark Paid modal (exact same date and amount)
+    const handleCloseMarkPaidModal = async () => {
+        try {
+            if (sessionCreatedTxIds.length > 0) {
+                for (const id of sessionCreatedTxIds) {
+                    await deleteTransactionFromDB(id);
+                }
+                setSessionCreatedTxIds([]);
+                if (typeof loadState === "function") {
+                    await loadState();
+                }
+            }
+        } catch (err) {
+            console.error("Error deleting session-created transactions on modal close:", err);
+        } finally {
+            setSessionCreatedTxIds([]);
+            setMarkPaidModalItem(null);
+            setSelectedTxIdToLink(null);
+            setIsMappingMode(false);
+            setSelectedMapTxIds([]);
+            setCreatedDateOption("due_date");
+            setCustomCreatedDate("");
+            setNewTxModalData(null);
+        }
+    };
+
+    // Close modals in strict LIFO order on Escape key
+    useEscapeKey(unmarkConfirmItem ? () => { setUnmarkConfirmItem(null); setUnmarkLinkedTxs([]); } : null);
+    useEscapeKey(markPaidModalItem && isMappingMode && !newTxModalData ? handleBackFromMapping : null);
+    useEscapeKey(markPaidModalItem && !isMappingMode && !newTxModalData ? handleCloseMarkPaidModal : null);
+
+    // Candidate matching transactions for Mark Paid modal (exact same date and amount, including neutral)
     const candidateMatches = React.useMemo(() => {
         if (!markPaidModalItem) return [];
+        const isIncome = markPaidModalItem.type === "income";
         const itemDateStr = markPaidModalItem.date;
         const itemAmount = Math.abs(Number(markPaidModalItem.amount));
         return (transactions || []).filter(t => {
             if (t.linkedRecurringId) return false;
+            const tType = t.type || "expense";
+            const isTypeMatch = isIncome
+                ? (tType === "income" || tType === "neutral")
+                : (tType === "expense" || tType === "neutral");
+            if (!isTypeMatch) return false;
             const tDateStr = toYYYYMMDD(t.date);
             const tAmount = Math.abs(Number(t.amount));
             return tDateStr === itemDateStr && Math.abs(tAmount - itemAmount) < 0.01;
         });
     }, [markPaidModalItem, transactions]);
 
-    // Unmapped transactions matching exact amount across all dates (for same price suggestion)
+    // Unmapped transactions matching exact amount across all dates (outflow includes expense + neutral; inflow includes income + neutral)
     const samePriceMatches = React.useMemo(() => {
         if (!markPaidModalItem) return [];
-        const itemType = markPaidModalItem.type || "expense";
+        const isIncome = markPaidModalItem.type === "income";
         const itemAmount = Math.abs(Number(markPaidModalItem.amount || 0));
         if (itemAmount <= 0) return [];
         return (transactions || []).filter(t => {
             if (t.linkedRecurringId) return false;
             const tType = t.type || "expense";
-            if (tType !== itemType) return false;
+            const isTypeMatch = isIncome
+                ? (tType === "income" || tType === "neutral")
+                : (tType === "expense" || tType === "neutral");
+            if (!isTypeMatch) return false;
             const tAmount = Math.abs(Number(t.amount || 0));
             return Math.abs(tAmount - itemAmount) < 0.01;
         }).sort((a, b) => new Date(b.date) - new Date(a.date));
     }, [markPaidModalItem, transactions]);
 
-    // Transactions list for multi-transaction mapping mode (type and main category matched, excluding already mapped transactions)
+    // Transactions list for multi-transaction mapping mode (includes both direction-matching and neutral transactions)
     const candidateTxList = React.useMemo(() => {
         if (!markPaidModalItem) return [];
-        const itemType = markPaidModalItem.type || "expense";
+        const isIncome = markPaidModalItem.type === "income";
         const itemMainCat = getMainCategory(markPaidModalItem.category).toLowerCase();
 
         return (transactions || []).filter(t => {
-            if (t.linkedRecurringId) return false;
+            if (t.linkedRecurringId && (!selectedMapTxIds.includes(t.id) && t.linkedRecurringId !== markPaidModalItem.id)) return false;
             const tType = t.type || "expense";
-            if (tType !== itemType) return false;
+            const isTypeMatch = isIncome
+                ? (tType === "income" || tType === "neutral")
+                : (tType === "expense" || tType === "neutral");
+            if (!isTypeMatch) return false;
+
             const tMainCat = getMainCategory(t.category).toLowerCase();
-            if (itemMainCat && itemMainCat !== "general" && tMainCat) {
-                return tMainCat === itemMainCat;
+            // Category match: same main category, or any neutral transaction (transfers, card payments, settlements)
+            if (itemMainCat && itemMainCat !== "general" && tMainCat === itemMainCat) {
+                return true;
             }
-            return true;
-        }).sort((a, b) => new Date(b.date) - new Date(a.date));
-    }, [markPaidModalItem, transactions]);
+            if (tType === "neutral") {
+                return true;
+            }
+            if (!itemMainCat || itemMainCat === "general") {
+                return true;
+            }
+            if (selectedMapTxIds.includes(t.id)) {
+                return true;
+            }
+            return false;
+        }).sort((a, b) => {
+            const aSelected = selectedMapTxIds.includes(a.id) ? 1 : 0;
+            const bSelected = selectedMapTxIds.includes(b.id) ? 1 : 0;
+            if (aSelected !== bSelected) return bSelected - aSelected;
+            const aCatMatch = getMainCategory(a.category).toLowerCase() === itemMainCat ? 1 : 0;
+            const bCatMatch = getMainCategory(b.category).toLowerCase() === itemMainCat ? 1 : 0;
+            if (aCatMatch !== bCatMatch) return bCatMatch - aCatMatch;
+            return new Date(b.date) - new Date(a.date);
+        });
+    }, [markPaidModalItem, transactions, selectedMapTxIds]);
 
     const selectedMapSum = React.useMemo(() => {
-        return candidateTxList
+        return (transactions || [])
             .filter(t => selectedMapTxIds.includes(t.id))
             .reduce((acc, t) => acc + Math.abs(Number(t.amount || 0)), 0);
-    }, [candidateTxList, selectedMapTxIds]);
+    }, [transactions, selectedMapTxIds]);
+
+    const handleOpenAddTxModalForRemaining = () => {
+        if (!markPaidModalItem) return;
+        const isIncome = markPaidModalItem.type === "income";
+        const targetAmt = Math.abs(Number(markPaidModalItem.amount || 0));
+        const remainingAmt = Number(Math.max(0, targetAmt - selectedMapSum).toFixed(2));
+        const defaultAccount = (markPaidModalItem.account && (settings.accounts || []).includes(markPaidModalItem.account))
+            ? markPaidModalItem.account
+            : ((settings.accounts || []).includes("Bank 1")
+                ? "Bank 1"
+                : ((settings.accounts || []).find(a => (settings.accountProfiles || {})[a]?.type === "bank") || (settings.accounts || [])[0] || "Bank 1"));
+
+        setNewTxModalData({
+            type: markPaidModalItem.type || (isIncome ? "income" : "expense"),
+            amount: remainingAmt > 0 ? remainingAmt : "",
+            narration: markPaidModalItem.name || "",
+            merchant: markPaidModalItem.name || "",
+            category: markPaidModalItem.category || (isIncome ? "Income - Other" : "General"),
+            account: defaultAccount,
+            date: markPaidModalItem.date || todayStr,
+            source: "dashboard"
+        });
+    };
+
+    const handleSaveNewTxFromModal = async (newTxData) => {
+        try {
+            const isIncome = markPaidModalItem.type === "income";
+            const dateFormatted = formatDate(todayStr, settings.dateFormat);
+            const txId = newTxData.id || ((typeof crypto !== "undefined" && crypto.randomUUID) ? crypto.randomUUID() : `tx_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`);
+            const noteMsg = newTxData.notes || `Created partial ${isIncome ? "Inflow" : "Outflow"} for "${markPaidModalItem.name}" from Dashboard on ${dateFormatted}`;
+
+            const fullTx = {
+                ...newTxData,
+                id: txId,
+                linkedRecurringId: null,
+                pendingMapping: true,
+                scheduledDate: newTxData.date || markPaidModalItem.date || todayStr,
+                source: "dashboard",
+                notes: noteMsg
+            };
+
+            if (typeof onAddTransactions === "function") {
+                await onAddTransactions([fullTx]);
+            } else {
+                await saveTransactionsInDB([fullTx]);
+                if (typeof loadState === "function") {
+                    await loadState();
+                }
+            }
+
+            setSessionCreatedTxIds(prev => prev.includes(txId) ? prev : [...prev, txId]);
+            setSelectedMapTxIds(prev => prev.includes(txId) ? prev : [...prev, txId]);
+            setNewTxModalData(null);
+            if (typeof showToast === "function") {
+                showToast(`Created & selected ${formatCurrency(fullTx.amount)} transaction`);
+            }
+        } catch (err) {
+            console.error("Error creating transaction in mapping modal:", err);
+            if (typeof showToast === "function") {
+                showToast("Failed to create transaction: " + (err?.message || "unknown error"), "error");
+            }
+        }
+    };
 
     const confirmMarkPaid = async (item, txIdToLink, creationDateOverride) => {
         try {
@@ -1230,7 +1383,7 @@ const PaymentsSectionWidget = ({ settings, transactions, updateSetting, loadStat
 
             if (linkIds.length > 0) {
                 for (const id of linkIds) {
-                    const existingTx = transactions.find(t => t.id === id);
+                    const existingTx = (transactions || []).find(t => t.id === id);
                     if (existingTx) {
                         const noteMsg = `Linked ${isIncome ? "Inflow" : "Outflow"} from Dashboard on ${dateFormatted}`;
                         const updatedTx = {
@@ -1239,18 +1392,29 @@ const PaymentsSectionWidget = ({ settings, transactions, updateSetting, loadStat
                             scheduledDate: existingTx.scheduledDate || item.date || todayStr,
                             notes: existingTx.notes ? (existingTx.notes.includes("from Dashboard") ? existingTx.notes : `${existingTx.notes} (${noteMsg})`) : noteMsg
                         };
+                        delete updatedTx.pendingMapping;
                         await updateTransactionInDB(updatedTx);
                     }
                 }
+                // If any transactions were created in this session but then deselected by the user, delete them
+                if (sessionCreatedTxIds.length > 0) {
+                    const unusedSessionTxIds = sessionCreatedTxIds.filter(id => !linkIds.includes(id));
+                    for (const unusedId of unusedSessionTxIds) {
+                        await deleteTransactionFromDB(unusedId);
+                    }
+                }
+                setSessionCreatedTxIds([]);
             } else {
                 const noteMsg = `Created ${isIncome ? "Inflow" : "Outflow"} from Dashboard on ${dateFormatted}`;
                 // Temporary entry: when the real statement row arrives it replaces this one (services/importDedupe.js).
                 // `scheduledDate` is when the payment was due, so a late tick still matches the right statement row.
                 const accountList = settings.accounts || [];
                 const accountProfiles = settings.accountProfiles || {};
-                const payFrom = accountList.includes("Bank 1")
-                    ? "Bank 1"
-                    : (accountList.find(a => accountProfiles[a]?.type === "bank") || accountList[0] || "Bank 1");
+                const payFrom = (item.account && accountList.includes(item.account))
+                    ? item.account
+                    : (accountList.includes("Bank 1")
+                        ? "Bank 1"
+                        : (accountList.find(a => accountProfiles[a]?.type === "bank") || accountList[0] || "Bank 1"));
                 createdTxId = crypto.randomUUID();
                 const txDate = creationDateOverride || (createdDateOption === "due_date" ? (item.date || todayStr) : (createdDateOption === "today" ? todayStr : (customCreatedDate || item.date || todayStr)));
                 const newTx = {
@@ -1259,7 +1423,7 @@ const PaymentsSectionWidget = ({ settings, transactions, updateSetting, loadStat
                     merchant: item.name,
                     narration: item.name,
                     amount: item.amount,
-                    type: item.type || "expense",
+                    type: item.type || (isIncome ? "income" : "expense"),
                     category: item.category || "Subscriptions",
                     account: payFrom,
                     linkedRecurringId: item.id,
@@ -1275,10 +1439,13 @@ const PaymentsSectionWidget = ({ settings, transactions, updateSetting, loadStat
 
             // Advance schedule on item or mark bill instance paid
             if (item.kind === "recurring") {
+                const rTemplate = (settings.recurring || []).find(r => r.id === item.id);
+                const fullTemplateAmount = rTemplate ? Math.abs(Number(rTemplate.estimatedAmount || rTemplate.amount || 0)) : Math.abs(Number(item.amount || 0));
+
                 if (item.hasBillInstance && item.billInstanceId) {
                     const updatedInstances = (settings.billInstances || []).map(b => {
                         if (b.id === item.billInstanceId) {
-                            return { ...b, status: 'paid', linkedTxId: effectiveLinkedTxId };
+                            return { ...b, status: 'paid', amount: fullTemplateAmount, linkedTxId: effectiveLinkedTxId };
                         }
                         return b;
                     });
@@ -1288,7 +1455,7 @@ const PaymentsSectionWidget = ({ settings, transactions, updateSetting, loadStat
                         id: crypto.randomUUID(),
                         recurringId: item.id,
                         name: item.name,
-                        amount: item.amount,
+                        amount: fullTemplateAmount,
                         dueDate: item.date,
                         status: 'paid',
                         linkedTxId: effectiveLinkedTxId
@@ -1353,16 +1520,169 @@ const PaymentsSectionWidget = ({ settings, transactions, updateSetting, loadStat
             }
 
             if (typeof showToast === "function") {
-                const actionLabel = linkIds.length > 0 ? "Linked" : "Created";
+                const actionLabel = linkIds.length > 0 ? `Linked ${linkIds.length} txn${linkIds.length > 1 ? 's' : ''}` : "Created";
                 const typeLabel = isIncome ? "Inflow" : "Outflow";
                 showToast(`${actionLabel} ${typeLabel} for "${item.name}" from Dashboard on ${dateFormatted}`);
             }
         } catch (e) {
         } finally {
+            setSessionCreatedTxIds([]);
             setMarkPaidModalItem(null);
             setSelectedTxIdToLink(null);
             setIsMappingMode(false);
             setSelectedMapTxIds([]);
+            setNewTxModalData(null);
+        }
+    };
+
+    const executeUnlinkSingle = async (txToUnlink, allLinkedTxs) => {
+        try {
+            const linkedRecId = txToUnlink.linkedRecurringId;
+            const targetDueDate = txToUnlink.scheduledDate || toYYYYMMDD(txToUnlink.date);
+            const isNewlyCreated = txToUnlink.notes && (txToUnlink.notes.includes("Created Inflow from Dashboard") || txToUnlink.notes.includes("Created Outflow from Dashboard") || txToUnlink.notes.startsWith("Created "));
+
+            // 1. Unlink or delete this specific transaction
+            if (isNewlyCreated) {
+                await deleteTransactionFromDB(txToUnlink.id);
+            } else {
+                let cleanedNotes = (txToUnlink.notes || "")
+                    .replace(/\(Linked (Inflow|Outflow) from Dashboard on [^)]+\)/g, "")
+                    .replace(/Linked (Inflow|Outflow) from Dashboard on [^\n\r.]*/g, "")
+                    .replace(/\(Created (Inflow|Outflow) from Dashboard on [^)]+\)/g, "")
+                    .replace(/Created (Inflow|Outflow) from Dashboard on [^\n\r.]*/g, "")
+                    .trim();
+
+                const updatedTx = {
+                    ...txToUnlink,
+                    linkedRecurringId: null,
+                    scheduledDate: null,
+                    notes: cleanedNotes
+                };
+                await updateTransactionInDB(updatedTx);
+            }
+
+            // 2. Identify remaining linked transactions
+            const remainingTxs = (allLinkedTxs || []).filter(t => t.id !== txToUnlink.id);
+            const remainingSum = remainingTxs.reduce((sum, t) => sum + Math.abs(Number(t.amount || 0)), 0);
+
+            // 3. Find recurring item & target amount
+            const rItem = (settings.recurring || []).find(r => r && r.id === linkedRecId);
+            const nwItem = (settings.networthItems || []).find(it => it && it.id === linkedRecId);
+            const fullTargetAmount = rItem
+                ? Math.abs(Number(rItem.estimatedAmount || rItem.amount || 0))
+                : (nwItem ? Math.abs(Number(nwItem.incomeExpense || 0)) : (remainingSum + Math.abs(Number(txToUnlink.amount || 0))));
+
+            const remainingUnpaid = Number(Math.max(0, fullTargetAmount - remainingSum).toFixed(2));
+
+            // 4. Update or create billInstance with status: 'pending' and amount: remainingUnpaid
+            const existingInstances = settings.billInstances || [];
+            const targetMonthPrefix = targetDueDate ? targetDueDate.slice(0, 7) : "";
+            const biIndex = existingInstances.findIndex(b => b && b.recurringId === linkedRecId && (b.dueDate === targetDueDate || (targetMonthPrefix && b.dueDate && b.dueDate.startsWith(targetMonthPrefix))));
+
+            if (remainingUnpaid > 0) {
+                if (biIndex !== -1) {
+                    const updatedInstances = existingInstances.map((b, idx) => {
+                        if (idx === biIndex) {
+                            return {
+                                ...b,
+                                status: 'pending',
+                                amount: remainingUnpaid,
+                                dueDate: targetDueDate,
+                                linkedTxId: remainingTxs[0]?.id || null
+                            };
+                        }
+                        return b;
+                    });
+                    await updateSetting("billInstances", updatedInstances);
+                } else {
+                    const newBillInst = {
+                        id: crypto.randomUUID(),
+                        recurringId: linkedRecId,
+                        name: rItem?.name || nwItem?.name || txToUnlink.merchant || "Recurring Bill",
+                        amount: remainingUnpaid,
+                        dueDate: targetDueDate,
+                        status: 'pending',
+                        linkedTxId: remainingTxs[0]?.id || null
+                    };
+                    await updateSetting("billInstances", [...existingInstances, newBillInst]);
+                }
+
+                // 5. Rewind recurring nextDate if it was shifted past targetDueDate
+                if (rItem && rItem.nextDate && rItem.nextDate > targetDueDate) {
+                    const updatedList = (settings.recurring || []).map(r => {
+                        if (!r || r.id !== linkedRecId) return r;
+                        const prevDate = shiftDateByCadence(r.nextDate, r.cadence, -1, {
+                            anchorDay: getAnchorDayForRecurring(r),
+                            intervalDays: r.customIntervalDays
+                        });
+                        return { ...r, nextDate: prevDate };
+                    });
+                    await updateSetting("recurring", updatedList);
+                }
+
+                if (nwItem && nwItem.nextDueDate && nwItem.nextDueDate > targetDueDate) {
+                    const updatedList = (settings.networthItems || []).map(it => {
+                        if (!it || it.id !== linkedRecId) return it;
+                        const prevDueDate = shiftDateByCadence(it.nextDueDate, "monthly", -netWorthMonthsPerCycle(it.frequencyPerYear));
+                        return { ...it, nextDueDate: prevDueDate };
+                    });
+                    await updateSetting("networthItems", updatedList);
+                }
+            } else {
+                // If remaining linked transactions still cover the full amount
+                if (biIndex !== -1) {
+                    const updatedInstances = existingInstances.map((b, idx) => {
+                        if (idx === biIndex) {
+                            return {
+                                ...b,
+                                status: 'paid',
+                                amount: remainingSum,
+                                linkedTxId: remainingTxs[0]?.id || null
+                            };
+                        }
+                        return b;
+                    });
+                    await updateSetting("billInstances", updatedInstances);
+                }
+            }
+
+            // 6. Net worth adjustment for the unlinked amount
+            const unlinkedAmt = Math.abs(Number(txToUnlink.amount || 0));
+            if (nwItem && unlinkedAmt > 0) {
+                if (nwItem.syncMode === "amortizing" || nwItem.syncMode === "loan_principal") {
+                    const updatedNw = (settings.networthItems || []).map(nw => nw.id === nwItem.id ? { ...nw, value: Number(nw.value || 0) + unlinkedAmt } : nw);
+                    await updateSetting("networthItems", updatedNw);
+                } else if (nwItem.syncMode === "sip" || nwItem.syncMode === "investment_sip" || (NET_WORTH_GROUPS.find(g => g.key === nwItem.category)?.kind === "investment" && nwItem.syncMode !== "revolving")) {
+                    const updatedNw = (settings.networthItems || []).map(nw => {
+                        if (nw.id === nwItem.id) {
+                            const newInvested = Math.max(0, Number(nw.invested || 0) - unlinkedAmt);
+                            const newValue = Math.max(0, Number(nw.value || 0) - unlinkedAmt);
+                            return { ...nw, invested: newInvested, value: newValue };
+                        }
+                        return nw;
+                    });
+                    await updateSetting("networthItems", updatedNw);
+                }
+            }
+
+            if (typeof loadState === "function") {
+                await loadState();
+            }
+
+            if (typeof showToast === "function") {
+                const itemName = rItem?.name || nwItem?.name || txToUnlink.merchant || "Payment";
+                const isOverdue = targetDueDate < todayStr;
+                const dest = isOverdue ? "Overdue" : "Upcoming";
+                showToast(`Unlinked "${txToUnlink.merchant || txToUnlink.narration}". "${itemName}" moved to ${dest} with remaining amount of ${formatCurrency(remainingUnpaid)}.`);
+            }
+        } catch (err) {
+            console.error("Error unlinking single transaction:", err);
+            if (typeof showToast === "function") {
+                showToast("Failed to unlink transaction: " + (err?.message || "unknown error"), "error");
+            }
+        } finally {
+            setUnmarkConfirmItem(null);
+            setUnmarkLinkedTxs([]);
         }
     };
 
@@ -1400,7 +1720,7 @@ const PaymentsSectionWidget = ({ settings, transactions, updateSetting, loadStat
                 const updatedInstances = (settings.billInstances || []).filter(b => {
                     const isLinked = b.linkedTxId && targetIds.includes(b.linkedTxId);
                     if (isLinked) return false;
-                    if (linkedRecId && b.recurringId === linkedRecId && b.status === 'paid') {
+                    if (linkedRecId && b.recurringId === linkedRecId && (b.status === 'paid' || b.status === 'pending')) {
                         const matchesAnyTx = targetList.some(t => {
                             const sched = t.scheduledDate || t.date;
                             return b.dueDate === sched || (sched && b.dueDate && b.dueDate.startsWith(sched.slice(0, 7)));
@@ -1432,7 +1752,7 @@ const PaymentsSectionWidget = ({ settings, transactions, updateSetting, loadStat
                     const currentNwItems = settings.networthItems || [];
                     const nwItem = currentNwItems.find(nw => nw && nw.linkedRecurringId === linkedRecId);
                     if (nwItem) {
-                        const unmarkAmount = Number(primaryTx?.amount || targetList[0]?.amount || rItem.amount || 0);
+                        const unmarkAmount = targetList.reduce((acc, t) => acc + Math.abs(Number(t.amount || 0)), 0);
                         if (unmarkAmount > 0) {
                             if (nwItem.syncMode === "amortizing" || nwItem.syncMode === "loan_principal") {
                                 const updatedNw = currentNwItems.map(nw => nw.id === nwItem.id ? { ...nw, value: Number(nw.value || 0) + unmarkAmount } : nw);
@@ -1470,13 +1790,13 @@ const PaymentsSectionWidget = ({ settings, transactions, updateSetting, loadStat
             if (typeof showToast === "function") {
                 const nameLabel = primaryTx?.merchant || primaryTx?.narration || "Payment";
                 if (targetList.length > 1) {
-                    showToast(`Unmarked payment "${nameLabel}" and unlinked ${targetList.length} transactions.`);
+                    showToast(`Unmarked payment "${nameLabel}" and unlinked all ${targetList.length} transactions.`);
                 } else {
                     const isNewlyCreated = primaryTx?.notes && (primaryTx.notes.includes("Created Inflow from Dashboard") || primaryTx.notes.includes("Created Outflow from Dashboard") || primaryTx.notes.startsWith("Created "));
                     if (isNewlyCreated) {
                         showToast(`Deleted transaction "${nameLabel}" and unmarked as paid.`);
                     } else {
-                        showToast(`Unlinked transaction "${nameLabel}" and cleaned notes.`);
+                        showToast(`Unlinked transaction "${nameLabel}".`);
                     }
                 }
             }
@@ -1490,15 +1810,25 @@ const PaymentsSectionWidget = ({ settings, transactions, updateSetting, loadStat
 
     const handleUnmarkPaid = (tx) => {
         const linkedRecId = tx.linkedRecurringId;
-        const txDateStr = toYYYYMMDD(tx.date);
+        const schedDate = tx.scheduledDate || toYYYYMMDD(tx.date);
+        const schedMonth = schedDate ? schedDate.slice(0, 7) : "";
 
-        const relatedTxs = (linkedRecId && txDateStr)
-            ? (transactions || []).filter(t => t.linkedRecurringId === linkedRecId && toYYYYMMDD(t.date) === txDateStr)
+        const relatedTxs = linkedRecId
+            ? (transactions || []).filter(t => !t.pendingMapping && t.linkedRecurringId === linkedRecId && (
+                t.scheduledDate
+                    ? (t.scheduledDate === schedDate || (schedMonth && t.scheduledDate.startsWith(schedMonth)))
+                    : (schedMonth && toYYYYMMDD(t.date).startsWith(schedMonth))
+            ))
             : [tx];
         const finalTxs = relatedTxs.length > 0 ? relatedTxs : [tx];
+        const sortedTxs = [...finalTxs].sort((a, b) => {
+            if (a.id === tx.id) return -1;
+            if (b.id === tx.id) return 1;
+            return new Date(b.date) - new Date(a.date);
+        });
 
         setUnmarkConfirmItem(tx);
-        setUnmarkLinkedTxs(finalTxs);
+        setUnmarkLinkedTxs(sortedTxs);
     };
 
     return (
@@ -1585,7 +1915,7 @@ const PaymentsSectionWidget = ({ settings, transactions, updateSetting, loadStat
                                             className="btn btn-secondary btn-sm"
                                             style={{ width: '26px', height: '26px', padding: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', borderRadius: '50%', background: '#EEF2FF', color: '#4F46E5', border: '1.5px solid #C7D2FE', cursor: 'pointer', flexShrink: 0, boxShadow: '0 1px 3px rgba(79, 70, 229, 0.15)' }}
                                             title="Mark as Paid"
-                                            onClick={() => { setMarkPaidModalItem(item); setSelectedTxIdToLink(null); setCreatedDateOption("due_date"); setCustomCreatedDate(item.date || todayStr); }}
+                                            onClick={() => { setMarkPaidModalItem(item); setSelectedTxIdToLink(null); setCreatedDateOption("due_date"); setCustomCreatedDate(item.date || todayStr); setNewTxModalData(null); }}
                                         >
                                             <Icon name="check" />
                                         </button>
@@ -1646,7 +1976,7 @@ const PaymentsSectionWidget = ({ settings, transactions, updateSetting, loadStat
                                         className="btn btn-primary btn-sm"
                                         style={{ width: '26px', height: '26px', padding: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', borderRadius: '50%', background: '#FEE2E2', color: '#DC2626', border: '1.5px solid #FCA5A5', cursor: 'pointer', flexShrink: 0, boxShadow: '0 1px 3px rgba(220, 38, 38, 0.15)' }}
                                         title="Mark as Paid"
-                                        onClick={() => { setMarkPaidModalItem(item); setSelectedTxIdToLink(null); setCreatedDateOption("due_date"); setCustomCreatedDate(item.date || todayStr); }}
+                                        onClick={() => { setMarkPaidModalItem(item); setSelectedTxIdToLink(null); setCreatedDateOption("due_date"); setCustomCreatedDate(item.date || todayStr); setNewTxModalData(null); }}
                                     >
                                         <Icon name="check" />
                                     </button>
@@ -1709,6 +2039,9 @@ const PaymentsSectionWidget = ({ settings, transactions, updateSetting, loadStat
                 const isIncome = markPaidModalItem.type === "income";
                 const targetAmt = Math.abs(Number(markPaidModalItem.amount || 0));
                 const sumMatches = Math.abs(selectedMapSum - targetAmt) < 0.01;
+                const remainingAmt = Number(Math.max(0, targetAmt - selectedMapSum).toFixed(2));
+                const hasRemaining = selectedMapSum < targetAmt && remainingAmt > 0.009;
+
                 const exactDateMatch = samePriceMatches.find(t => toYYYYMMDD(t.date) === markPaidModalItem.date);
                 const effectiveSelectedTxId = selectedTxIdToLink === null
                     ? (exactDateMatch ? exactDateMatch.id : (samePriceMatches[0]?.id || "__create_new__"))
@@ -1721,7 +2054,7 @@ const PaymentsSectionWidget = ({ settings, transactions, updateSetting, loadStat
                         : (customCreatedDate || markPaidModalItem.date || todayStr));
 
                 return (
-                    <div className="modal-overlay" onClick={() => { setMarkPaidModalItem(null); setSelectedTxIdToLink(null); setIsMappingMode(false); setSelectedMapTxIds([]); setCreatedDateOption("due_date"); setCustomCreatedDate(""); }}>
+                    <div className="modal-overlay" onClick={handleCloseMarkPaidModal}>
                         <div className="modal-container" style={{ maxWidth: '520px' }} onClick={(e) => e.stopPropagation()}>
                             <div className="modal-header">
                                 <h3 className="modal-title">
@@ -1730,7 +2063,7 @@ const PaymentsSectionWidget = ({ settings, transactions, updateSetting, loadStat
                                         : (isIncome ? "Mark Inflow as Received" : "Mark Outflow as Paid")
                                     }
                                 </h3>
-                                <button className="modal-close-btn" onClick={() => { setMarkPaidModalItem(null); setSelectedTxIdToLink(null); setIsMappingMode(false); setSelectedMapTxIds([]); setCreatedDateOption("due_date"); setCustomCreatedDate(""); }}>
+                                <button className="modal-close-btn" onClick={handleCloseMarkPaidModal}>
                                     <Icon name="close" />
                                 </button>
                             </div>
@@ -1760,6 +2093,9 @@ const PaymentsSectionWidget = ({ settings, transactions, updateSetting, loadStat
                                                     {samePriceMatches.map(tx => {
                                                         const isChecked = effectiveSelectedTxId === tx.id;
                                                         const isExactDate = toYYYYMMDD(tx.date) === markPaidModalItem.date;
+                                                        const isNeutralTx = tx.type === "neutral";
+                                                        const txSign = isNeutralTx ? (tx.neutralSign === "+" ? "+" : "-") : (isIncome ? "+" : "-");
+                                                        const txColor = isNeutralTx ? "var(--info, #2563EB)" : (isIncome ? '#059669' : '#DC2626');
                                                         return (
                                                             <label
                                                                 key={tx.id}
@@ -1785,6 +2121,11 @@ const PaymentsSectionWidget = ({ settings, transactions, updateSetting, loadStat
                                                                                 Exact Date
                                                                             </span>
                                                                         )}
+                                                                        {isNeutralTx && (
+                                                                            <span style={{ fontSize: '0.68rem', padding: '1px 6px', borderRadius: '4px', background: '#DBEAFE', color: '#1E40AF', fontWeight: 700 }}>
+                                                                                Neutral
+                                                                            </span>
+                                                                        )}
                                                                     </div>
                                                                     <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)', display: 'flex', gap: '8px' }}>
                                                                         <span>{formatDate(tx.date, settings.dateFormat)}</span>
@@ -1792,7 +2133,9 @@ const PaymentsSectionWidget = ({ settings, transactions, updateSetting, loadStat
                                                                         <span>• {tx.account || "Account"}</span>
                                                                     </div>
                                                                 </div>
-                                                                <span style={{ fontWeight: 700, fontSize: '0.86rem', color: isIncome ? '#059669' : '#DC2626', whiteSpace: 'nowrap' }}>{`${isIncome ? '+' : '-'}${formatCurrency(tx.amount)}`}</span>
+                                                                <span style={{ fontWeight: 700, fontSize: '0.86rem', color: txColor, whiteSpace: 'nowrap' }}>
+                                                                    {`${txSign}${formatCurrency(tx.amount)}`}
+                                                                </span>
                                                             </label>
                                                         );
                                                     })}
@@ -1888,24 +2231,40 @@ const PaymentsSectionWidget = ({ settings, transactions, updateSetting, loadStat
                                                 {sumMatches ? (
                                                     <span style={{ background: '#D1FAE5', color: '#065F46', fontWeight: 700, padding: '2px 8px', borderRadius: '10px', fontSize: '0.74rem' }}>✓ Sum Matches!</span>
                                                 ) : selectedMapSum < targetAmt ? (
-                                                    <span style={{ background: '#FEF3C7', color: '#92400E', fontWeight: 600, padding: '2px 8px', borderRadius: '10px', fontSize: '0.74rem' }}>Remaining: {formatCurrency(targetAmt - selectedMapSum)}</span>
+                                                    <span style={{ background: '#FEF3C7', color: '#92400E', fontWeight: 600, padding: '2px 8px', borderRadius: '10px', fontSize: '0.74rem' }}>Remaining: {formatCurrency(remainingAmt)}</span>
                                                 ) : (
                                                     <span style={{ background: '#FEE2E2', color: '#991B1B', fontWeight: 600, padding: '2px 8px', borderRadius: '10px', fontSize: '0.74rem' }}>Exceeds by: {formatCurrency(selectedMapSum - targetAmt)}</span>
                                                 )}
                                             </div>
                                         </div>
 
-                                        <p style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-main)', marginBottom: '8px' }}>
-                                            Select existing transaction(s) under <strong>{getMainCategory(markPaidModalItem.category) || markPaidModalItem.category || "General"}</strong>:
-                                        </p>
-                                        <div style={{ maxHeight: '200px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '6px', marginBottom: '8px' }}>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                                            <p style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-main)', margin: 0 }}>
+                                                Select existing {isIncome ? "inflow" : "outflow"} or neutral transaction(s):
+                                            </p>
+                                            <button
+                                                type="button"
+                                                className="btn btn-secondary btn-sm"
+                                                style={{ fontSize: '0.74rem', padding: '3px 8px', display: 'inline-flex', alignItems: 'center', gap: '4px', cursor: 'pointer' }}
+                                                onClick={handleOpenAddTxModalForRemaining}
+                                                title="Open full transaction form to create a new transaction"
+                                            >
+                                                <Icon name="plus" />
+                                                <span>Create New Transaction</span>
+                                            </button>
+                                        </div>
+
+                                        <div style={{ maxHeight: '180px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '6px', marginBottom: '8px' }}>
                                             {candidateTxList.length === 0 ? (
                                                 <div style={{ padding: '16px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.8rem' }}>
-                                                    No existing {isIncome ? "inflow" : "outflow"} transactions found in category <strong>"{getMainCategory(markPaidModalItem.category) || markPaidModalItem.category || "General"}"</strong>.
+                                                    No existing {isIncome ? "inflow" : "outflow"} or neutral transactions found.
                                                 </div>
                                             ) : (
                                                 candidateTxList.map(tx => {
                                                     const isChecked = selectedMapTxIds.includes(tx.id);
+                                                    const isNeutralTx = tx.type === "neutral";
+                                                    const txSign = isNeutralTx ? (tx.neutralSign === "+" ? "+" : "-") : (isIncome ? "+" : "-");
+                                                    const txColor = isNeutralTx ? "var(--info, #2563EB)" : (isIncome ? '#059669' : '#DC2626');
                                                     return (
                                                         <label
                                                             key={tx.id}
@@ -1925,18 +2284,64 @@ const PaymentsSectionWidget = ({ settings, transactions, updateSetting, loadStat
                                                                 }}
                                                             />
                                                             <div style={{ flex: 1, minWidth: 0 }}>
-                                                                <div style={{ fontWeight: 600, fontSize: '0.82rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{tx.merchant || tx.narration || "Transaction"}</div>
+                                                                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                                                    <span style={{ fontWeight: 600, fontSize: '0.82rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                                                        {tx.merchant || tx.narration || "Transaction"}
+                                                                    </span>
+                                                                    {isNeutralTx && (
+                                                                        <span style={{ fontSize: '0.68rem', padding: '1px 6px', borderRadius: '4px', background: '#DBEAFE', color: '#1E40AF', fontWeight: 700 }}>
+                                                                            Neutral
+                                                                        </span>
+                                                                    )}
+                                                                </div>
                                                                 <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', display: 'flex', gap: '6px' }}>
                                                                     <span>{formatDate(tx.date, settings.dateFormat)}</span>
                                                                     <span>• {tx.category || "General"}</span>
+                                                                    <span>• {tx.account || "Account"}</span>
                                                                 </div>
                                                             </div>
-                                                            <span style={{ fontWeight: 700, fontSize: '0.84rem', color: isIncome ? '#059669' : '#DC2626', whiteSpace: 'nowrap' }}>{`${isIncome ? '+' : '-'}${formatCurrency(tx.amount)}`}</span>
+                                                            <span style={{ fontWeight: 700, fontSize: '0.84rem', color: txColor, whiteSpace: 'nowrap' }}>
+                                                                {`${txSign}${formatCurrency(tx.amount)}`}
+                                                            </span>
                                                         </label>
                                                     );
                                                 })
                                             )}
                                         </div>
+
+                                        {hasRemaining && (
+                                            <div
+                                                style={{
+                                                    marginTop: '8px',
+                                                    padding: '10px 14px',
+                                                    borderRadius: '8px',
+                                                    border: '1.5px dashed var(--primary)',
+                                                    background: 'var(--primary-light)',
+                                                    display: 'flex',
+                                                    alignItems: 'center',
+                                                    justifyContent: 'space-between',
+                                                    gap: '12px'
+                                                }}
+                                            >
+                                                <div style={{ flex: 1, minWidth: 0 }}>
+                                                    <div style={{ fontWeight: 600, fontSize: '0.82rem', color: 'var(--text-main)' }}>
+                                                        Remaining to cover: <strong style={{ color: isIncome ? '#059669' : '#DC2626' }}>{formatCurrency(remainingAmt)}</strong>
+                                                    </div>
+                                                    <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '2px' }}>
+                                                        Open creation popup pre-filled with this balance (you can create one or multiple transactions).
+                                                    </div>
+                                                </div>
+                                                <button
+                                                    type="button"
+                                                    className="btn btn-primary btn-sm"
+                                                    style={{ flexShrink: 0, display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '0.78rem' }}
+                                                    onClick={handleOpenAddTxModalForRemaining}
+                                                >
+                                                    <Icon name="plus" />
+                                                    <span>Create Transaction</span>
+                                                </button>
+                                            </div>
+                                        )}
                                     </>
                                 )}
                             </div>
@@ -1965,7 +2370,7 @@ const PaymentsSectionWidget = ({ settings, transactions, updateSetting, loadStat
                                     </>
                                 ) : (
                                     <>
-                                        <button className="btn btn-secondary btn-sm" onClick={() => setIsMappingMode(false)}>
+                                        <button className="btn btn-secondary btn-sm" onClick={handleBackFromMapping}>
                                             Back
                                         </button>
                                         <button
@@ -1974,7 +2379,10 @@ const PaymentsSectionWidget = ({ settings, transactions, updateSetting, loadStat
                                             style={!sumMatches ? { opacity: 0.5, cursor: 'not-allowed', background: '#94A3B8', borderColor: '#64748B' } : (isIncome ? { background: '#10B981', borderColor: '#059669' } : { background: '#DC2626', borderColor: '#B91C1C', color: '#FFFFFF' })}
                                             onClick={() => confirmMarkPaid(markPaidModalItem, selectedMapTxIds)}
                                         >
-                                            {sumMatches ? `Link Selected (${selectedMapTxIds.length}) Transaction${selectedMapTxIds.length > 1 ? 's' : ''}` : "Sum Must Match Target Amount"}
+                                            {sumMatches
+                                                ? `Link Selected (${selectedMapTxIds.length}) Transaction${selectedMapTxIds.length > 1 ? 's' : ''}`
+                                                : "Sum Must Match Target Amount"
+                                            }
                                         </button>
                                     </>
                                 )}
@@ -1984,45 +2392,112 @@ const PaymentsSectionWidget = ({ settings, transactions, updateSetting, loadStat
                 );
             })()}
 
+            {/* Full Transaction Creation Modal for Mapping Mode */}
+            {newTxModalData && (
+                <AddEntryModal
+                    initialData={newTxModalData}
+                    title={`Create ${markPaidModalItem?.type === "income" ? "Inflow" : "Outflow"} Transaction`}
+                    settings={settings}
+                    tags={tags || []}
+                    onAddTag={onAddTag || (async (tag) => { await saveTagInDB(tag); if (typeof loadState === "function") await loadState(); })}
+                    style={{ zIndex: 2000 }}
+                    onClose={() => setNewTxModalData(null)}
+                    onSave={handleSaveNewTxFromModal}
+                />
+            )}
+
             {/* Double Confirm Unmarking Modal Overlay */}
             {unmarkConfirmItem && (() => {
+                const isMultiLinked = unmarkLinkedTxs.length > 1;
                 const totalSum = unmarkLinkedTxs.reduce((acc, t) => acc + Math.abs(Number(t.amount || 0)), 0);
-                const itemName = unmarkConfirmItem.merchant || unmarkConfirmItem.narration || "Payment Item";
+                const linkedRecId = unmarkConfirmItem.linkedRecurringId;
+                const rItem = (settings.recurring || []).find(r => r && r.id === linkedRecId);
+                const nwItem = (settings.networthItems || []).find(it => it && it.id === linkedRecId);
+                const targetName = rItem?.name || nwItem?.name || unmarkConfirmItem.merchant || unmarkConfirmItem.narration || "Payment Item";
+
+                const clickedTxAmount = Math.abs(Number(unmarkConfirmItem.amount || 0));
+                const remainingTxs = unmarkLinkedTxs.filter(t => t.id !== unmarkConfirmItem.id);
+                const remainingLinkedSum = remainingTxs.reduce((acc, t) => acc + Math.abs(Number(t.amount || 0)), 0);
+
+                const fullTargetAmount = rItem
+                    ? Math.abs(Number(rItem.estimatedAmount || rItem.amount || 0))
+                    : (nwItem ? Math.abs(Number(nwItem.incomeExpense || 0)) : totalSum);
+
+                const remainingUnpaidAmount = Number(Math.max(0, fullTargetAmount - remainingLinkedSum).toFixed(2));
+                const targetDueDate = unmarkConfirmItem.scheduledDate || toYYYYMMDD(unmarkConfirmItem.date);
+                const isOverdue = targetDueDate < todayStr;
+                const destinationSection = isOverdue ? "Overdue" : "Upcoming";
 
                 return (
                     <div className="modal-overlay" onClick={() => { setUnmarkConfirmItem(null); setUnmarkLinkedTxs([]); }}>
-                        <div className="modal-container" style={{ maxWidth: '520px' }} onClick={(e) => e.stopPropagation()}>
+                        <div className="modal-container" style={{ maxWidth: '540px' }} onClick={(e) => e.stopPropagation()}>
                             <div className="modal-header" style={{ padding: '16px 20px', borderBottom: '1px solid var(--border-color)' }}>
                                 <h3 className="modal-title" style={{ color: '#DC2626', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                    ⚠️ Confirm Unmarking Payment
+                                    ⚠️ {isMultiLinked ? "Confirm Unlinking Transaction" : "Confirm Unmarking Payment"}
                                 </h3>
                                 <button className="modal-close-btn" onClick={() => { setUnmarkConfirmItem(null); setUnmarkLinkedTxs([]); }}>
                                     <Icon name="close" />
                                 </button>
                             </div>
                             <div className="modal-body" style={{ padding: '20px' }}>
-                                <div style={{ background: '#FEF2F2', border: '1px solid #FCA5A5', borderRadius: '10px', padding: '14px', marginBottom: '16px', fontSize: '0.86rem', color: '#991B1B' }}>
-                                    This recurring payment for <strong>"{itemName}"</strong> is linked to <strong>{unmarkLinkedTxs.length} transaction{unmarkLinkedTxs.length > 1 ? 's' : ''}</strong> (Total: <strong>{formatCurrency(totalSum)}</strong>).
-                                    <div style={{ marginTop: '6px' }}>
-                                        Unmarking will move this item back to <strong>Upcoming / Overdue</strong> and <strong>{unmarkLinkedTxs.length > 1 ? `unlink/delete all ${unmarkLinkedTxs.length} linked transactions` : 'unlink/delete the linked transaction'}</strong>.
+                                {isMultiLinked ? (
+                                    <div style={{ background: '#FEF2F2', border: '1px solid #FCA5A5', borderRadius: '10px', padding: '14px', marginBottom: '16px', fontSize: '0.86rem', color: '#991B1B' }}>
+                                        <div>
+                                            This recurring payment for <strong>"{targetName}"</strong> (Target: <strong>{formatCurrency(fullTargetAmount)}</strong>) is linked to <strong>{unmarkLinkedTxs.length} transactions</strong> (Total: <strong>{formatCurrency(totalSum)}</strong>).
+                                        </div>
+                                        <div style={{ marginTop: '8px', padding: '8px 10px', background: '#FFFFFF', borderRadius: '6px', border: '1px solid #FECACA', color: '#7F1D1D', fontSize: '0.82rem' }}>
+                                            Unlinking <strong>"{unmarkConfirmItem.narration || unmarkConfirmItem.merchant}"</strong> ({formatCurrency(clickedTxAmount)}) will leave {remainingTxs.length} transaction{remainingTxs.length > 1 ? 's' : ''} ({formatCurrency(remainingLinkedSum)}) linked, and move <strong>"{targetName}"</strong> to <strong>{destinationSection}</strong> with the remaining amount of <strong>{formatCurrency(remainingUnpaidAmount)}</strong>.
+                                        </div>
                                     </div>
-                                </div>
+                                ) : (
+                                    <div style={{ background: '#FEF2F2', border: '1px solid #FCA5A5', borderRadius: '10px', padding: '14px', marginBottom: '16px', fontSize: '0.86rem', color: '#991B1B' }}>
+                                        This recurring payment for <strong>"{targetName}"</strong> is linked to <strong>1 transaction</strong> ({formatCurrency(totalSum)}).
+                                        <div style={{ marginTop: '6px' }}>
+                                            Unmarking will move this item back to <strong>{destinationSection}</strong> and unlink/delete the transaction.
+                                        </div>
+                                    </div>
+                                )}
 
                                 <p style={{ fontSize: '0.84rem', fontWeight: 600, color: 'var(--text-main)', marginBottom: '8px' }}>
-                                    Linked Transaction{unmarkLinkedTxs.length > 1 ? 's' : ''} to be Unlinked / Deleted:
+                                    {isMultiLinked ? "Linked Transactions for this occurrence:" : "Linked Transaction to be Unlinked / Deleted:"}
                                 </p>
 
                                 <div style={{ maxHeight: '180px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '6px', marginBottom: '12px', paddingRight: '4px' }}>
                                     {unmarkLinkedTxs.map(t => {
+                                        const isClicked = t.id === unmarkConfirmItem.id;
                                         const isNew = t.notes && (t.notes.includes("Created Inflow from Dashboard") || t.notes.includes("Created Outflow from Dashboard") || t.notes.startsWith("Created "));
 
                                         return (
-                                            <div key={t.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 12px', borderRadius: '8px', background: '#F8FAFC', border: '1px solid #E2E8F0', fontSize: '0.82rem' }}>
+                                            <div
+                                                key={t.id}
+                                                style={{
+                                                    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                                                    padding: '8px 12px', borderRadius: '8px',
+                                                    background: isClicked ? '#FEF2F2' : '#F8FAFC',
+                                                    border: isClicked ? '1.5px solid #DC2626' : '1px solid #E2E8F0',
+                                                    fontSize: '0.82rem'
+                                                }}
+                                            >
                                                 <div>
-                                                    <strong style={{ color: 'var(--text-main)' }}>{t.narration || t.merchant}</strong>
+                                                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                                        <strong style={{ color: 'var(--text-main)' }}>{t.narration || t.merchant}</strong>
+                                                        {isClicked && isMultiLinked && (
+                                                            <span style={{ fontSize: '0.68rem', padding: '1px 6px', borderRadius: '4px', background: '#FEE2E2', color: '#DC2626', fontWeight: 700 }}>
+                                                                Selected to Unlink
+                                                            </span>
+                                                        )}
+                                                    </div>
                                                     <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>
                                                         {formatDate(t.date, settings.dateFormat)} • {t.category || "General"}
-                                                        {isNew ? <span style={{ marginLeft: '6px', color: '#DC2626', fontWeight: 600 }}>(Will be deleted)</span> : <span style={{ marginLeft: '6px', color: '#D97706', fontWeight: 600 }}>(Will be unlinked)</span>}
+                                                        {isClicked ? (
+                                                            <span style={{ marginLeft: '6px', color: '#DC2626', fontWeight: 600 }}>
+                                                                {isNew ? "(Will be deleted)" : "(Will be unlinked)"}
+                                                            </span>
+                                                        ) : (
+                                                            <span style={{ marginLeft: '6px', color: '#059669', fontWeight: 600 }}>
+                                                                (Will stay linked)
+                                                            </span>
+                                                        )}
                                                     </div>
                                                 </div>
                                                 <div style={{ fontWeight: 700, color: t.type === 'income' ? '#059669' : '#DC2626', whiteSpace: 'nowrap' }}>
@@ -2037,13 +2512,32 @@ const PaymentsSectionWidget = ({ settings, transactions, updateSetting, loadStat
                                 <button className="btn btn-secondary btn-sm" onClick={() => { setUnmarkConfirmItem(null); setUnmarkLinkedTxs([]); }}>
                                     Cancel
                                 </button>
-                                <button
-                                    className="btn btn-danger btn-sm"
-                                    style={{ background: '#DC2626', color: '#FFF', fontWeight: 700, padding: '6px 14px', borderRadius: '8px' }}
-                                    onClick={() => executeUnmarkPaid(unmarkLinkedTxs, unmarkConfirmItem)}
-                                >
-                                    Confirm & Unlink ({unmarkLinkedTxs.length})
-                                </button>
+                                {isMultiLinked ? (
+                                    <>
+                                        <button
+                                            className="btn btn-secondary btn-sm"
+                                            style={{ color: '#DC2626', borderColor: '#FCA5A5' }}
+                                            onClick={() => executeUnmarkPaid(unmarkLinkedTxs, unmarkConfirmItem)}
+                                        >
+                                            Unlink All ({unmarkLinkedTxs.length})
+                                        </button>
+                                        <button
+                                            className="btn btn-danger btn-sm"
+                                            style={{ background: '#DC2626', color: '#FFF', fontWeight: 700, padding: '6px 14px', borderRadius: '8px' }}
+                                            onClick={() => executeUnlinkSingle(unmarkConfirmItem, unmarkLinkedTxs)}
+                                        >
+                                            Unlink This ({formatCurrency(clickedTxAmount)})
+                                        </button>
+                                    </>
+                                ) : (
+                                    <button
+                                        className="btn btn-danger btn-sm"
+                                        style={{ background: '#DC2626', color: '#FFF', fontWeight: 700, padding: '6px 14px', borderRadius: '8px' }}
+                                        onClick={() => executeUnmarkPaid(unmarkLinkedTxs, unmarkConfirmItem)}
+                                    >
+                                        Confirm & Unlink
+                                    </button>
+                                )}
                             </div>
                         </div>
                     </div>

@@ -9,6 +9,10 @@ import { EditTransactionModal, TagManagerModal, AddEntryModal, CategoryPickerMod
 
 export const TransactionsPage = ({
     transactions,
+    allTransactions = [],
+    documents = [],
+    documentFilter = "all",
+    setDocumentFilter,
     settings,
     onDelete,
     onPatch,
@@ -41,6 +45,48 @@ export const TransactionsPage = ({
     const accounts = settings.accounts || [];
     const recurringList = (settings?.recurring || []).filter(Boolean);
 
+    // Map document IDs to document objects for quick lookup
+    const documentMap = React.useMemo(() => {
+        const map = new Map();
+        (documents || []).forEach(d => {
+            if (d && d.id) {
+                map.set(d.id, {
+                    id: d.id,
+                    filename: d.filename || "Untitled Document",
+                    createdAt: d.createdAt,
+                    source: d.source
+                });
+            }
+        });
+        (settings?.statements || []).forEach(s => {
+            if (s && s.documentId && !map.has(s.documentId)) {
+                map.set(s.documentId, {
+                    id: s.documentId,
+                    filename: s.fileName || `${s.account || 'Imported'} Statement`,
+                    createdAt: s.importedAt,
+                    source: "statement"
+                });
+            }
+        });
+        (allTransactions || transactions || []).forEach(t => {
+            if (t && t.documentId && !map.has(t.documentId)) {
+                map.set(t.documentId, {
+                    id: t.documentId,
+                    filename: `Statement (${t.account || "Imported"})`,
+                    source: "import"
+                });
+            }
+        });
+        return map;
+    }, [documents, settings?.statements, allTransactions, transactions]);
+
+    const selectedDocName = React.useMemo(() => {
+        if (!documentFilter || documentFilter === "all") return null;
+        if (documentFilter === "manual") return "Manual / Direct Entry";
+        const found = documentMap.get(documentFilter);
+        return found ? found.filename : "Selected Document";
+    }, [documentFilter, documentMap]);
+
     // Handle Escape key for all modals in TransactionsPage
     React.useEffect(() => {
         const handleKeyDown = (e) => {
@@ -56,8 +102,21 @@ export const TransactionsPage = ({
         return () => window.removeEventListener("keydown", handleKeyDown);
     }, [linkModalTx, txToEdit, txToDelete, activeTagTx, categoryPickerTx]);
 
+    // If a documentFilter is active, search across allTransactions so statement transactions
+    // outside the current date filter window are not hidden.
+    const baseList = (documentFilter && documentFilter !== "all" && allTransactions && allTransactions.length > 0)
+        ? allTransactions
+        : transactions;
+
     // 1. Column & field-specific filtering
-    const filteredBase = transactions.filter(t => {
+    const filteredBase = baseList.filter(t => {
+        if (documentFilter && documentFilter !== "all") {
+            if (documentFilter === "manual") {
+                if (t.documentId) return false;
+            } else {
+                if (t.documentId !== documentFilter) return false;
+            }
+        }
         const nf = narrationFilter.toLowerCase().trim();
         if (nf && !((t.narration && t.narration.toLowerCase().includes(nf)) || (t.merchant && t.merchant.toLowerCase().includes(nf)))) {
             return false;
@@ -217,13 +276,60 @@ export const TransactionsPage = ({
     return (
         <div style={{ paddingTop: '4px' }}>
 
+            {/* Active document filter banner */}
+            {selectedDocName && (
+                <div style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    padding: '8px 14px',
+                    marginBottom: '10px',
+                    background: 'var(--primary-light, #EEF2FF)',
+                    border: '1px solid #C7D2FE',
+                    borderRadius: '8px',
+                    fontSize: '0.82rem',
+                    color: '#3730A3'
+                }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <span style={{ fontSize: '1.05rem' }}>📄</span>
+                        <span>
+                            Filtered by Document: <strong>{selectedDocName}</strong> ({sorted.length} {sorted.length === 1 ? 'transaction' : 'transactions'})
+                        </span>
+                    </div>
+                    <button
+                        onClick={() => setDocumentFilter && setDocumentFilter("all")}
+                        style={{
+                            background: 'transparent',
+                            border: 'none',
+                            color: '#4F46E5',
+                            fontWeight: 600,
+                            cursor: 'pointer',
+                            fontSize: '0.8rem',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '4px',
+                            padding: '3px 8px',
+                            borderRadius: '4px'
+                        }}
+                        title="Clear document filter"
+                    >
+                        ✕ Clear filter
+                    </button>
+                </div>
+            )}
+
             {/* Ledger Table */}
             {sorted.length === 0 ? (
                 <div className="empty-state">
                     <Icon name="transactions" currency={settings.currency} />
                     <div className="empty-state-text">
-                        <h3>No Records Matching Filters</h3>
-                        <p>Try refining your search terms or date filter options.</p>
+                        <h3>{selectedDocName ? `No Records Found For "${selectedDocName}"` : "No Records Matching Filters"}</h3>
+                        <p>{selectedDocName ? "Try refining your other filters or clearing the document filter." : "Try refining your search terms or date filter options."}</p>
+                        {selectedDocName && (
+                            <button className="btn btn-secondary btn-sm" style={{ marginTop: '10px' }} onClick={() => setDocumentFilter && setDocumentFilter("all")}>
+                                Clear Document Filter
+                            </button>
+                        )}
                     </div>
                 </div>
             ) : (
@@ -262,6 +368,30 @@ export const TransactionsPage = ({
                                                         <span title="Receipt attached" style={{ marginLeft: '6px', color: 'var(--primary)', cursor: 'pointer' }}>📎</span>
                                                     )}
                                                 </div>
+                                                {t.documentId && documentMap.get(t.documentId) && (
+                                                    <div
+                                                        onClick={() => setDocumentFilter && setDocumentFilter(t.documentId)}
+                                                        title={`Imported from "${documentMap.get(t.documentId).filename}". Click to filter transactions from this document.`}
+                                                        style={{
+                                                            fontSize: '0.71rem',
+                                                            color: documentFilter === t.documentId ? 'var(--primary)' : 'var(--text-muted)',
+                                                            cursor: 'pointer',
+                                                            display: 'inline-flex',
+                                                            alignItems: 'center',
+                                                            gap: '3px',
+                                                            marginTop: '2px',
+                                                            background: documentFilter === t.documentId ? 'var(--primary-light, #EEF2FF)' : 'rgba(0,0,0,0.03)',
+                                                            padding: '1px 6px',
+                                                            borderRadius: '4px',
+                                                            border: documentFilter === t.documentId ? '1px solid var(--primary)' : '1px solid rgba(0,0,0,0.06)'
+                                                        }}
+                                                    >
+                                                        <span>📄</span>
+                                                        <span style={{ maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                                            {documentMap.get(t.documentId).filename}
+                                                        </span>
+                                                    </div>
+                                                )}
                                             </td>
 
                                             <td style={{ textAlign: 'center' }}>
@@ -388,15 +518,25 @@ export const TransactionsPage = ({
                 const isLinkIncome = !isLinkNeutral && (linkModalTx.type === "income" || linkCustomType === "income" || (!linkCustomType && linkCatParent === "Income"));
                 const linkSignStr = isLinkNeutral ? (linkModalTx.neutralSign === '-' ? '-' : '+') : (isLinkIncome ? '+' : '-');
 
-                // Filter recurring templates matching transaction category
+                // Filter recurring templates matching transaction category (or all recurring items if transaction is neutral)
                 const linkCatNorm = (linkModalTx.category || "").trim().toLowerCase();
                 const filteredRecurringList = recurringList.filter(r => {
+                    if (isLinkNeutral) return true;
                     if (!linkCatNorm || linkCatNorm === "general") return true;
                     const rCat = (r.category || "").trim().toLowerCase();
                     if (!rCat) return true;
                     const rCatParent = rCat.split(" - ")[0];
                     const linkCatParentNorm = linkCatNorm.split(" - ")[0];
                     return rCat === linkCatNorm || rCatParent === linkCatParentNorm;
+                }).sort((a, b) => {
+                    if (isLinkNeutral) {
+                        const aCat = (a.category || "").trim().toLowerCase();
+                        const bCat = (b.category || "").trim().toLowerCase();
+                        const aMatch = aCat === linkCatNorm ? 2 : (aCat.startsWith(linkCatNorm) ? 1 : 0);
+                        const bMatch = bCat === linkCatNorm ? 2 : (bCat.startsWith(linkCatNorm) ? 1 : 0);
+                        if (aMatch !== bMatch) return bMatch - aMatch;
+                    }
+                    return (a.name || "").localeCompare(b.name || "");
                 });
 
                 return (
@@ -439,7 +579,10 @@ export const TransactionsPage = ({
                                 </div>
 
                                 <p style={{ fontSize: '0.86rem', fontWeight: 600, color: 'var(--text-main)', marginBottom: '12px' }}>
-                                    Select Recurring Item under <strong>"{linkModalTx.category || "General"}"</strong> to Link:
+                                    {isLinkNeutral
+                                        ? "Select Recurring Item to Link:"
+                                        : <>Select Recurring Item under <strong>"{linkModalTx.category || "General"}"</strong> to Link:</>
+                                    }
                                 </p>
 
                                 <div style={{ maxHeight: '280px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '10px', paddingRight: '4px', marginBottom: '8px' }}>
@@ -497,7 +640,10 @@ export const TransactionsPage = ({
 
                                     {filteredRecurringList.length === 0 ? (
                                         <div style={{ padding: '16px 18px', textAlign: 'center', color: 'var(--text-muted)', background: '#F8FAFC', borderRadius: '10px', border: '1px solid #E2E8F0', fontSize: '0.84rem' }}>
-                                            No recurring templates found in category <strong>"{linkModalTx.category || "General"}"</strong>.
+                                            {isLinkNeutral
+                                                ? "No recurring templates found."
+                                                : <>No recurring templates found in category <strong>"{linkModalTx.category || "General"}"</strong>.</>
+                                            }
                                         </div>
                                     ) : (
                                         filteredRecurringList.map(r => {

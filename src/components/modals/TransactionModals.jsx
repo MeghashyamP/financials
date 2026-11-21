@@ -625,14 +625,15 @@ import {
 
 
         // --- MODAL COMPONENT: Manual Add entry Form ---
-        export const AddEntryModal = ({ onClose, onSave, settings, tags, onAddTag }) => {
+        export const AddEntryModal = ({ onClose, onSave, settings, tags, onAddTag, initialData = {}, title = "Create Transaction", style }) => {
             useEscapeKey(onClose);
-            const [type, setType] = React.useState("expense");
-            const [neutralSign, setNeutralSign] = React.useState("+");
-            const [amount, setAmount] = React.useState("");
-            const [narration, setNarration] = React.useState("");
-            const [refId, setRefId] = React.useState("");
+            const [type, setType] = React.useState(initialData.type || "expense");
+            const [neutralSign, setNeutralSign] = React.useState(initialData.neutralSign || "+");
+            const [amount, setAmount] = React.useState(initialData.amount !== undefined && initialData.amount !== null && initialData.amount !== "" ? String(initialData.amount) : "");
+            const [narration, setNarration] = React.useState(initialData.narration || initialData.merchant || "");
+            const [refId, setRefId] = React.useState(initialData.refId || "");
             const [date, setDate] = React.useState(() => {
+                if (initialData.date) return initialData.date;
                 const now = new Date();
                 const y = now.getFullYear();
                 const m = String(now.getMonth() + 1).padStart(2, '0');
@@ -640,17 +641,21 @@ import {
                 return `${y}-${m}-${d}`;
             });
             const [category, setCategory] = React.useState(() => {
-                const valid = filterCategoriesByType(settings.categories || DEFAULT_CATEGORIES, "expense", settings.categoryTypes);
+                if (initialData.category) return initialData.category;
+                const valid = filterCategoriesByType(settings?.categories || DEFAULT_CATEGORIES, initialData.type || "expense", settings?.categoryTypes);
                 return valid[0] || "Food & Drinks - Breakfast 🍳";
             });
-            const [account, setAccount] = React.useState(settings.accounts?.[0] || "Bank 1");
-            const [selectedTags, setSelectedTags] = React.useState([]);
-            const [notes, setNotes] = React.useState("");
+            const [account, setAccount] = React.useState(() => {
+                if (initialData.account && (settings?.accounts || []).includes(initialData.account)) return initialData.account;
+                return settings?.accounts?.[0] || "Bank 1";
+            });
+            const [selectedTags, setSelectedTags] = React.useState(initialData.tags || []);
+            const [notes, setNotes] = React.useState(initialData.notes || "");
             const [showCategoryPicker, setShowCategoryPicker] = React.useState(false);
 
             const handleTypeChange = (newType) => {
                 setType(newType);
-                const validCats = filterCategoriesByType(settings.categories || DEFAULT_CATEGORIES, newType, settings.categoryTypes);
+                const validCats = filterCategoriesByType(settings?.categories || DEFAULT_CATEGORIES, newType, settings?.categoryTypes);
                 if (!validCats.includes(category)) {
                     setCategory(validCats[0] || "Food & Drinks - Breakfast 🍳");
                 }
@@ -664,12 +669,14 @@ import {
                 const name = newTagName.trim();
                 if (!name) return;
 
-                if (tags.some(t => t.name.toLowerCase() === name.toLowerCase())) {
+                if ((tags || []).some(t => t.name.toLowerCase() === name.toLowerCase())) {
                     setNewTagName("");
                     return;
                 }
 
-                await onAddTag({ name, color: newTagColor, createdAt: new Date().toISOString() });
+                if (typeof onAddTag === "function") {
+                    await onAddTag({ name, color: newTagColor, createdAt: new Date().toISOString() });
+                }
                 setSelectedTags([...selectedTags, name]);
                 setNewTagName("");
             };
@@ -687,6 +694,7 @@ import {
                 if (!amount || isNaN(amount) || parseFloat(amount) <= 0 || !narration) return;
 
                 onSave({
+                    ...initialData,
                     type,
                     neutralSign: type === "neutral" ? neutralSign : undefined,
                     amount: parseFloat(amount),
@@ -698,15 +706,15 @@ import {
                     account,
                     tags: selectedTags,
                     notes,
-                    source: "manual"
+                    source: initialData.source || "manual"
                 });
             };
 
             return (
-                <div className="modal-overlay">
+                <div className="modal-overlay" style={style}>
                     <div className="modal-container">
                         <div className="modal-header">
-                            <h3 className="modal-title" style={{ flex: 1, textAlign: 'center' }}>Create Transaction</h3>
+                            <h3 className="modal-title" style={{ flex: 1, textAlign: 'center' }}>{title}</h3>
                             <button className="modal-close-btn" onClick={onClose}>
                                 <Icon name="close" />
                             </button>

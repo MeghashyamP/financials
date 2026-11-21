@@ -264,6 +264,8 @@ export const useEscapeKey = (onClose) => {
         const handleKeyDown = (e) => {
             if (e.key === "Escape" || e.key === "Esc") {
                 if (escapeStack.length > 0 && escapeStack[escapeStack.length - 1] === onClose) {
+                    e.stopImmediatePropagation();
+                    e.preventDefault();
                     onClose();
                 }
             }
