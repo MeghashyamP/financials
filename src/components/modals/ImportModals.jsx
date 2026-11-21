@@ -948,10 +948,30 @@ import { CategoryPickerModal } from './TransactionModals.jsx';
             const isSkippedByPlan = (item) => ["duplicate", "maybe-duplicate"].includes(planByTemp[item.tempId]?.action);
             const isNeedsAttention = (item) => {
                 if (isSkippedByPlan(item)) return false;
+                if (item._reviewed && !String(item.category || "").toLowerCase().includes("needs review")) return false;
                 const conf = String(item._importConfidence || "").toLowerCase();
-                if (conf === "low" || conf === "medium") return true;
+                if ((conf === "low" || conf === "medium") && item.categorySource !== "manual") return true;
                 const cat = String(item.category || "");
                 return cat.includes("Needs Review") || cat === "Needs review";
+            };
+
+            const isReviewedOrChanged = (item) => {
+                if (item._reviewed || item._modified) return true;
+                const orig = item._initial;
+                if (!orig) return false;
+                return (
+                    item.category !== orig.category ||
+                    item.narration !== orig.narration ||
+                    Number(item.amount) !== Number(orig.amount) ||
+                    item.type !== orig.type ||
+                    item.neutralSign !== orig.neutralSign ||
+                    item.account !== orig.account ||
+                    item.date !== orig.date ||
+                    item.linkTo !== orig.linkTo ||
+                    item.tags !== orig.tags ||
+                    item.notes !== orig.notes ||
+                    item.refId !== orig.refId
+                );
             };
 
             // Local state to keep track of edited fields and selection status
@@ -1018,6 +1038,19 @@ import { CategoryPickerModal } from './TransactionModals.jsx';
                             }
                         }
                     }
+                    out._initial = {
+                        category: out.category,
+                        narration: out.narration,
+                        amount: out.amount,
+                        type: out.type,
+                        neutralSign: out.neutralSign,
+                        account: out.account,
+                        date: out.date,
+                        linkTo: out.linkTo,
+                        tags: out.tags,
+                        notes: out.notes,
+                        refId: out.refId
+                    };
                     return out;
                 });
                 return { rows, missed: rec.missed };
@@ -1049,6 +1082,8 @@ import { CategoryPickerModal } from './TransactionModals.jsx';
                             category: cat,
                             categorySource: "manual",
                             categoryConfidence: "high",
+                            _modified: true,
+                            _reviewed: true,
                             type: newType,
                             neutralSign: newType === "neutral" ? (newSign || "-") : undefined
                         }
@@ -1059,11 +1094,11 @@ import { CategoryPickerModal } from './TransactionModals.jsx';
 
             const unlinkAuto = (tempId) => setItems(prev => prev.map(it => {
                 if (it.tempId !== tempId) return it;
-                const next = { ...it, linkTo: "" };
+                const next = { ...it, linkTo: "", _modified: true, _reviewed: true };
                 if (it._catBefore !== undefined) { next.category = it._catBefore; next.categorySource = "unknown"; delete next._catBefore; }
                 return next;
             }));
-            const linkAuto = (tempId, recurringId) => setItems(prev => prev.map(it => (it.tempId === tempId ? { ...it, linkTo: `recurring:${recurringId}`, _manualLink: true } : it)));
+            const linkAuto = (tempId, recurringId) => setItems(prev => prev.map(it => (it.tempId === tempId ? { ...it, linkTo: `recurring:${recurringId}`, _manualLink: true, _modified: true, _reviewed: true } : it)));
 
             const plan = React.useMemo(
                 () => planImport(toPlanRows(items), existingTransactions, { recurring: planRecurring }),
@@ -1090,7 +1125,14 @@ import { CategoryPickerModal } from './TransactionModals.jsx';
             const handleFieldChange = (tempId, field, value) => {
                 setItems(prev => prev.map(item =>
                     item.tempId === tempId
-                        ? { ...item, [field]: value, ...(field === "category" ? { categorySource: "manual", categoryConfidence: "high" } : {}), ...(field === "linkTo" ? { _manualLink: !!value } : {}) }
+                        ? {
+                            ...item,
+                            [field]: value,
+                            _modified: true,
+                            _reviewed: true,
+                            ...(field === "category" ? { categorySource: "manual", categoryConfidence: "high" } : {}),
+                            ...(field === "linkTo" ? { _manualLink: !!value } : {})
+                        }
                         : item
                 ));
             };
@@ -1112,7 +1154,7 @@ import { CategoryPickerModal } from './TransactionModals.jsx';
                 try {
                     const selectedItems = items
                         .filter(item => item.selected)
-                        .map(({ tempId, selected, _reconciliation, _pdfMetadata, _statement, _autoLink, _catBefore, _manualLink, ...rest }) => ({
+                        .map(({ tempId, selected, _reconciliation, _pdfMetadata, _statement, _autoLink, _catBefore, _manualLink, _initial, _reviewed, _modified, ...rest }) => ({
                             ...rest,
                             // a row the importer would skip but you ticked anyway → add it
                             forceInsert: ["duplicate", "maybe-duplicate"].includes(planByTemp[tempId]?.action) && planByTemp[tempId]?.reason !== "exact",
@@ -1168,6 +1210,7 @@ import { CategoryPickerModal } from './TransactionModals.jsx';
             const rowKinds = (item) => {
                 const st = planByTemp[item.tempId]?.action;
                 const k = [];
+                if (isReviewedOrChanged(item)) k.push("reviewed");
                 if (isNeedsAttention(item)) k.push("attention");
                 if (item._autoLink && item.linkTo === `recurring:${item._autoLink.recurringId}`) k.push("matched");
                 if (item._autoLink && !item.linkTo && st === "insert") k.push("maybe");
@@ -1397,6 +1440,7 @@ import { CategoryPickerModal } from './TransactionModals.jsx';
                                     <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
                                         {[
                                             ["all", `All (${items.length})`],
+                                            ["reviewed", "✓ Reviewed / Accepted"],
                                             ["attention", "Needs a look"],
                                             ["matched", "↻ Matched to recurring"],
                                             ["maybe", "↻ Maybe (confirm)"],
@@ -1409,7 +1453,16 @@ import { CategoryPickerModal } from './TransactionModals.jsx';
                                                 type="button"
                                                 className={`btn btn-xs ${rowFilter === k ? "btn-primary" : "btn-secondary"}`}
                                                 onClick={() => setRowFilter(k)}
-                                                style={{ fontSize: '0.75rem', padding: '3px 9px' }}
+                                                style={{
+                                                    fontSize: '0.75rem',
+                                                    padding: '3px 9px',
+                                                    ...(k === "reviewed" && rowFilter !== k ? {
+                                                        backgroundColor: '#ECFDF5',
+                                                        color: '#047857',
+                                                        borderColor: '#A7F3D0',
+                                                        fontWeight: 600
+                                                    } : {})
+                                                }}
                                             >
                                                 {label}{k !== "all" ? ` (${kindCounts[k] || 0})` : ""}
                                             </button>
@@ -1517,6 +1570,27 @@ import { CategoryPickerModal } from './TransactionModals.jsx';
                                                                 onChange={(e) => handleFieldChange(item.tempId, "narration", e.target.value)}
                                                                 title={item.narration}
                                                             />
+                                                            {/* Status Badges: Reviewed & Needs a look */}
+                                                            <div style={{ marginTop: '4px', fontSize: '0.72rem', display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                                                                {isReviewedOrChanged(item) && (
+                                                                    <span style={{ color: '#047857', background: '#D1FAE5', border: '1px solid #A7F3D0', padding: '1px 6px', borderRadius: '4px', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '3px' }}>
+                                                                        <span>✓ Reviewed</span>
+                                                                    </span>
+                                                                )}
+                                                                {isNeedsAttention(item) && (
+                                                                    <span style={{ color: '#92400E', background: '#FEF3C7', border: '1px solid #FDE68A', padding: '1px 6px', borderRadius: '4px', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                                                                        <span>⚠️ Needs a look</span>
+                                                                        <button
+                                                                            type="button"
+                                                                            onClick={() => setItems(prev => prev.map(it => it.tempId === item.tempId ? { ...it, _reviewed: true, _modified: true, categorySource: "manual" } : it))}
+                                                                            style={{ background: '#047857', color: '#FFFFFF', border: 'none', borderRadius: '3px', padding: '1px 6px', cursor: 'pointer', fontSize: '0.68rem', fontWeight: 600 }}
+                                                                            title="Accept this row as reviewed"
+                                                                        >
+                                                                            ✓ Accept
+                                                                        </button>
+                                                                    </span>
+                                                                )}
+                                                            </div>
                                                             {/* Recurring match indicator */}
                                                             {item._autoLink && (
                                                                 <div style={{ marginTop: '4px', fontSize: '0.72rem', display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
@@ -1688,6 +1762,8 @@ import { CategoryPickerModal } from './TransactionModals.jsx';
                                                                         setItems(prev => prev.map(it => it.tempId === item.tempId ? {
                                                                             ...it,
                                                                             type: val,
+                                                                            _modified: true,
+                                                                            _reviewed: true,
                                                                             neutralSign: val === "neutral" ? (it.neutralSign || (it.type === "income" ? "+" : "-")) : undefined
                                                                         } : it));
                                                                     }}
