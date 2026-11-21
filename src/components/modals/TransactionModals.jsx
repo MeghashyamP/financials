@@ -13,6 +13,15 @@ import {
             const [activeTab, setActiveTab] = React.useState("all");
             useEscapeKey(onClose);
 
+            // Lock body scroll while category picker is mounted
+            React.useEffect(() => {
+                const prevOverflow = document.body.style.overflow;
+                document.body.style.overflow = 'hidden';
+                return () => {
+                    document.body.style.overflow = prevOverflow;
+                };
+            }, []);
+
             // Navigate / scroll directly to the selected category on modal open
             React.useEffect(() => {
                 if (selected && !isMulti) {

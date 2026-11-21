@@ -2117,7 +2117,18 @@ export const SettingsPage = ({
     const [categorySearch, setCategorySearch] = React.useState("");
     const [categoryTab, setCategoryTab] = React.useState("all");
     const [showCategoryModal, setShowCategoryModal] = React.useState(false);
-    useEscapeKey(() => setShowCategoryModal(false));
+    const closeCategoryModal = React.useCallback(() => setShowCategoryModal(false), []);
+    useEscapeKey(showCategoryModal ? closeCategoryModal : null);
+
+    // Lock body scroll while category setup modal is open
+    React.useEffect(() => {
+        if (!showCategoryModal) return;
+        const prevOverflow = document.body.style.overflow;
+        document.body.style.overflow = 'hidden';
+        return () => {
+            document.body.style.overflow = prevOverflow;
+        };
+    }, [showCategoryModal]);
 
     // Tag management state
     const [newTagName, setNewTagName] = React.useState("");
@@ -2667,7 +2678,7 @@ export const SettingsPage = ({
                             </div>
 
                             {/* Modal Scrollable Content Area */}
-                            <div style={{ overflowY: 'auto', padding: '20px', flex: 1, display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                            <div style={{ overflowY: 'auto', overscrollBehavior: 'contain', padding: '20px', flex: 1, display: 'flex', flexDirection: 'column', gap: '16px' }}>
 
                                 {/* Form: Add New Category / Subcategory - Ultra-Compact Layout */}
                                 <div style={{
@@ -3702,8 +3713,8 @@ export const SettingsPage = ({
 
             {/* Category Delete Confirmation Modal */}
             {confirmDeleteCategory && (
-                <div className="modal-overlay confirm-modal-overlay">
-                    <div className="modal-container" style={{ maxWidth: '440px' }}>
+                <div className="modal-overlay confirm-modal-overlay" style={{ zIndex: 3000 }} onClick={() => setConfirmDeleteCategory(null)}>
+                    <div className="modal-container" style={{ maxWidth: '440px' }} onClick={e => e.stopPropagation()}>
                         <div className="modal-header">
                             <h3 className="modal-title" style={{ color: 'var(--danger)' }}>Confirm Category Deletion</h3>
                             <button className="modal-close-btn" onClick={() => setConfirmDeleteCategory(null)}>
@@ -3736,8 +3747,8 @@ export const SettingsPage = ({
 
             {/* Tag Delete Confirmation Modal */}
             {confirmDeleteTag && (
-                <div className="modal-overlay confirm-modal-overlay">
-                    <div className="modal-container" style={{ maxWidth: '420px' }}>
+                <div className="modal-overlay confirm-modal-overlay" style={{ zIndex: 3000 }} onClick={() => setConfirmDeleteTag(null)}>
+                    <div className="modal-container" style={{ maxWidth: '420px' }} onClick={e => e.stopPropagation()}>
                         <div className="modal-header">
                             <h3 className="modal-title" style={{ color: 'var(--danger)' }}>Confirm Tag Deletion</h3>
                             <button className="modal-close-btn" onClick={() => setConfirmDeleteTag(null)}>
