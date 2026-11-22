@@ -2,6 +2,8 @@ import React from 'react';
 import { TxColumnHeaders } from './components/TxColumnHeaders.jsx';
 import { buildDocumentPeriods, compareByPeriod } from './services/documentPeriods.js';
 import { DocumentFilterModal } from './components/DocumentFilterModal.jsx';
+import { UpdatePrompt } from './components/UpdatePrompt.jsx';
+import { parseLaunchAction, stripLaunchAction, isStandalone } from './services/pwa.js';
 import {
     Icon, DEFAULT_CATEGORIES, formatCurrencyVal, calculatePeriodDateRange,
     detectRecurringTransactions, processImportedTransaction, useEscapeKey,
@@ -365,6 +367,17 @@ const AppInner = ({ privacy }) => {
     const [showAddEntryModal, setShowAddEntryModal] = React.useState(false);
     const [showImportModal, setShowImportModal] = React.useState(false);
     const [showSyncModal, setShowSyncModal] = React.useState(false);
+
+    // Home-screen shortcuts of the installed app (?action=add | import | review): open that screen once, then
+    // clean the address so a refresh doesn't open it again.
+    React.useEffect(() => {
+        const action = parseLaunchAction(window.location.search);
+        if (!action) return;
+        if (action === "add") setShowAddEntryModal(true);
+        else if (action === "import") setShowImportModal(true);
+        else if (action === "review") setActivePage("review");
+        try { window.history.replaceState(null, "", stripLaunchAction(window.location.pathname, window.location.search, window.location.hash)); } catch (e) { /* ignore */ }
+    }, []);
     const [showAuthModal, setShowAuthModal] = React.useState(false);
     const [authModalNotice, setAuthModalNotice] = React.useState("");
     const [authModalView, setAuthModalView] = React.useState("signIn");
@@ -1698,6 +1711,9 @@ const AppInner = ({ privacy }) => {
     return (
         <div className="app-container">
 
+            {/* "New version available" card (installed app / service worker) */}
+            <UpdatePrompt />
+
             {/* Floating Toast Notification Containers */}
             <div className="toast-container">
                 {toasts.map(t => (
@@ -2938,6 +2954,23 @@ export const App = () => {
             document.removeEventListener("visibilitychange", onVisible);
         };
     }, [lockEnabled]);
+
+    // Installed app on a phone: the recent-apps preview is a screenshot of the last screen. While the app is in the
+    // background, hide amounts, then put things back exactly as they were when you return.
+    React.useEffect(() => {
+        if (!isStandalone()) return undefined;
+        let maskedByUs = false;
+        const onVisibility = () => {
+            if (document.visibilityState === "hidden") {
+                setPrivacyMode((p) => { if (!p) maskedByUs = true; return true; });
+            } else if (maskedByUs) {
+                maskedByUs = false;
+                setPrivacyMode(false);
+            }
+        };
+        document.addEventListener("visibilitychange", onVisibility);
+        return () => document.removeEventListener("visibilitychange", onVisibility);
+    }, []);
 
     const privacy = {
         privacyMode,

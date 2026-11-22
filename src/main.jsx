@@ -1,6 +1,7 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { App } from './App.jsx';
+import { startPwa } from './services/pwa.js';
 import '@fontsource/inter/latin-300.css';
 import '@fontsource/inter/latin-400.css';
 import '@fontsource/inter/latin-500.css';
@@ -26,3 +27,6 @@ if (document.readyState === 'loading') {
 } else {
   mountApp();
 }
+
+// Installable app: service worker, Install button, persistent storage (see src/services/pwa.js)
+startPwa();

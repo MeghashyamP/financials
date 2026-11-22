@@ -1,5 +1,6 @@
 import React from 'react';
 import { buildDocumentPeriods, compareByPeriod } from '../services/documentPeriods.js';
+import { AppInstallCard } from '../components/AppInstallCard.jsx';
 import { AccountsSetup } from '../components/AccountsSetup.jsx';
 import { StatementHealth } from '../components/StatementHealth.jsx';
 import { LearnedMerchants } from '../components/MerchantReview.jsx';
@@ -3832,6 +3833,9 @@ export const SettingsPage = ({
                     </div>
                 </div>
             </div>
+
+            {/* Install as an app, protect local data, show the running version */}
+            <AppInstallCard />
 
             {/* Section 4: Danger Zone Wipe */}
             <div className="section-card danger-zone-card">
