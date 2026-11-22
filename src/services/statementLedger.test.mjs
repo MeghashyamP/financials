@@ -31,9 +31,9 @@ test('records are keyed by account + period so a re-import replaces, never dupli
     assert.equal(list[0].minDue, 600);
 });
 
-test('a card period that is far too long is ignored', () => {
+test('a card period that is far too long is aligned to the monthly statement cycle', () => {
     const r = rec(card({ periodStart: '2025-12-19', periodEnd: '2026-10-18' }));
-    assert.equal(r.periodStart, null);
+    assert.equal(r.periodStart, '2026-09-19');
 });
 
 test('consecutive card statements chain when opening equals the previous closing', () => {

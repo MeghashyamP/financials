@@ -6,11 +6,13 @@
  * documentId), then the first/last date of the transactions that came from that document.
  */
 
+import { daysBetween, cycleStartFor } from './statementLedger.js';
+
 const ISO = /^\d{4}-\d{2}-\d{2}/;
 const day = (v) => (ISO.test(String(v || '')) ? String(v).slice(0, 10) : '');
 
 /** Map documentId → { start, end } (ISO dates, either may be '' when unknown). */
-export const buildDocumentPeriods = (statements = [], transactions = []) => {
+export const buildDocumentPeriods = (statements = [], transactions = [], documents = []) => {
     const fromTx = new Map();
     for (const t of transactions || []) {
         if (!t || !t.documentId) continue;
@@ -21,13 +23,34 @@ export const buildDocumentPeriods = (statements = [], transactions = []) => {
         if (d > cur.end) cur.end = d;
         fromTx.set(t.documentId, cur);
     }
+
+    const docIdByFilename = new Map();
+    for (const d of documents || []) {
+        if (d && d.id && d.filename) docIdByFilename.set(d.filename, d.id);
+    }
+
     const out = new Map();
     for (const s of statements || []) {
-        if (!s || !s.documentId) continue;
-        const tx = fromTx.get(s.documentId) || { start: '', end: '' };
-        out.set(s.documentId, {
-            start: day(s.periodStart) || tx.start,
-            end: day(s.periodEnd) || day(s.statementDate) || tx.end
+        if (!s) continue;
+        const targetDocId = s.documentId || (s.fileName && docIdByFilename.get(s.fileName));
+        if (!targetDocId) continue;
+
+        const tx = fromTx.get(targetDocId) || { start: '', end: '' };
+        let sStart = day(s.periodStart);
+        const sEnd = day(s.periodEnd) || day(s.statementDate);
+
+        // Beginning of statement period:
+        // When statement start is missing, null, or too far in the past (> 62 days),
+        // infer from sEnd (e.g. 18 Oct -> 19 Sep, or 30 Sep -> 01 Sep).
+        if (sEnd && (!sStart || daysBetween(sStart, sEnd) > 62)) {
+            const startDay = sStart ? Number(sStart.slice(8, 10)) : undefined;
+            const inferred = cycleStartFor(sEnd, startDay);
+            if (inferred) sStart = inferred;
+        }
+
+        out.set(targetDocId, {
+            start: sStart || tx.start,
+            end: sEnd || tx.end
         });
     }
     for (const [id, tx] of fromTx) if (!out.has(id)) out.set(id, { ...tx });

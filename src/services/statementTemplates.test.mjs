@@ -159,3 +159,25 @@ test('SBI Card: an undated IGST line under the annual fee is kept and audited', 
     assert.equal(igst.date, '2026-11-18', 'shares the fee row\'s date');
     assert.equal(r.audit.status, 'verified');
 });
+
+test('ICICI Credit Card: inception date range is aligned to statement cycle', () => {
+    const items = [
+        it('ICICI Bank', 40, 790, 1),
+        it('CREDIT CARD STATEMENT', 40, 785, 1),
+        it('STATEMENT DATE', 80, 648, 1),
+        it('October 18, 2026', 70, 636, 1),
+        it('Statement period : December 19, 2025 to October 18, 2026', 41, 80, 1),
+        it('Transaction Details', 100, 500, 1),
+        it('4786XXXXXXXX5004', 100, 480, 1),
+        it('30/09/2026', 35, 450, 1),
+        it('14269950509', 80, 450, 1),
+        it('RELIANCE DIGITAL', 150, 450, 1),
+        it('1,000.00', 400, 450, 1)
+    ];
+    const r = parseStatementWithTemplate(items);
+    assert.ok(r);
+    assert.equal(r.template, 'icici-credit-card');
+    assert.deepEqual(r.period, { start: '2026-09-19', end: '2026-10-18' });
+    assert.equal(r.summary.periodStart, '2026-09-19');
+    assert.equal(r.summary.periodEnd, '2026-10-18');
+});

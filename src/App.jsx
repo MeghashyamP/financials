@@ -436,7 +436,7 @@ const AppInner = ({ privacy }) => {
                 }
             }
         });
-        const periods = buildDocumentPeriods(settings?.statements, transactions);
+        const periods = buildDocumentPeriods(settings?.statements, transactions, documents);
         const list = Array.from(docMap.values()).map(doc => ({
             ...doc,
             count: counts.get(doc.id) || 0,

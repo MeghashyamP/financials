@@ -5,19 +5,21 @@ import { buildDocumentPeriods, formatPeriod, shortDate, compareByPeriod } from '
 test('period comes from the statement record, falling back to its transactions', () => {
     const statements = [
         { documentId: 'a', periodStart: '2026-09-01', periodEnd: '2026-09-30' },
-        { documentId: 'b', periodStart: null, periodEnd: '2026-10-18' }      // card: only the end is trusted
+        { documentId: 'b', periodStart: null, periodEnd: '2026-10-18' },      // missing start: inferred from statement end date
+        { documentId: 'd', periodStart: '2025-12-19', periodEnd: '2026-10-18' } // inception date: aligned to statement cycle
     ];
     const txs = [
         { documentId: 'a', date: '2026-09-05' }, { documentId: 'a', date: '2026-09-29' },
-        { documentId: 'b', date: '2026-09-20' }, { documentId: 'b', date: '2026-10-10' },
+        { documentId: 'b', date: '2026-09-30' }, { documentId: 'b', date: '2026-10-10' },
         { documentId: 'c', date: '2026-08-02' }, { documentId: 'c', date: '2026-08-20' },
         { date: '2026-01-01' }                                                  // manual entry, no document
     ];
     const m = buildDocumentPeriods(statements, txs);
     assert.deepEqual(m.get('a'), { start: '2026-09-01', end: '2026-09-30' });      // printed period wins over txn dates
-    assert.deepEqual(m.get('b'), { start: '2026-09-20', end: '2026-10-18' });      // missing start filled from txns
-    assert.deepEqual(m.get('c'), { start: '2026-08-02', end: '2026-08-20' });      // no statement record at all
-    assert.equal(m.size, 3);
+    assert.deepEqual(m.get('b'), { start: '2026-09-19', end: '2026-10-18' });      // statement beginning wins over first txn (09-30)
+    assert.deepEqual(m.get('c'), { start: '2026-08-02', end: '2026-08-20' });      // no statement record at all -> uses txn dates
+    assert.deepEqual(m.get('d'), { start: '2026-09-19', end: '2026-10-18' });      // multi-month aligned to monthly cycle
+    assert.equal(m.size, 4);
 });
 
 test('formatPeriod is compact and tolerates missing dates', () => {

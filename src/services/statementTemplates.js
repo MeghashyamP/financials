@@ -10,6 +10,7 @@
 // `rows` are the transactions. auditStatement() then proves the rows add up to the anchors.
 
 import { bankKeyFromIssuer } from './accounts.js';
+import { daysBetween, cycleStartFor } from './statementLedger.js';
 
 const r2 = (n) => Math.round(n * 100) / 100;
 
@@ -378,6 +379,17 @@ const parseIciciCard = (lines) => {
         availableCredit: moneyUnder(lines, /^Available Credit$/i, { dxMin: -15, dxMax: 55, within: 5 })
     };
 
+    let periodObj = null;
+    if (period) {
+        let pStart = textDate(period[1]);
+        const pEnd = textDate(period[2]) || (stmtDate ? textDate(stmtDate) : null);
+        if (pStart && pEnd && daysBetween(pStart, pEnd) > 62) {
+            const startDay = Number(pStart.slice(8, 10));
+            pStart = cycleStartFor(pEnd, startDay);
+        }
+        periodObj = { start: pStart, end: pEnd };
+    }
+
     return {
         template: 'icici-credit-card',
         kind: 'card',
@@ -386,7 +398,7 @@ const parseIciciCard = (lines) => {
         product: 'Credit Card',
         card: { mask: card, last4: card.slice(-4) },
         statementDate: stmtDate ? textDate(stmtDate) : null,
-        period: period ? { start: textDate(period[1]), end: textDate(period[2]) } : null,
+        period: periodObj,
         anchors: complete ? anchors : null,
         meta,
         rows

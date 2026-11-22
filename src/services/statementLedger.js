@@ -32,6 +32,30 @@ export const monthsStrictlyBetween = (fromYm, toYm) => {
 export const STALE_AFTER_DAYS = 45;
 const CHAIN_TOLERANCE = 1.01; // issuers round "total due" to the rupee
 
+/**
+ * For a statement ending on endIso (e.g. "2026-10-18"):
+ * - Month-end statements (e.g. 30/31) run from the 1st of that month (2026-09-01).
+ * - Mid-month statements ending on day D (e.g. 18) began on day D + 1 of the prior month (2026-09-19).
+ * - If a preferred start day (e.g. 19 from a printed header) is provided, it is preserved.
+ */
+export const cycleStartFor = (endIso, preferredDay) => {
+    if (!endIso || typeof endIso !== 'string' || !/^\d{4}-\d{2}-\d{2}/.test(endIso)) return '';
+    const [y, m, d] = endIso.slice(0, 10).split('-').map(Number);
+    const daysInCurrentMonth = new Date(Date.UTC(y, m, 0)).getUTCDate();
+    if (d === daysInCurrentMonth && (preferredDay === undefined || preferredDay === null)) {
+        return `${y}-${String(m).padStart(2, '0')}-01`;
+    }
+    let prevM = m - 1;
+    let prevY = y;
+    if (prevM < 1) { prevM = 12; prevY -= 1; }
+    const dayToUse = (preferredDay !== undefined && preferredDay !== null && preferredDay >= 1 && preferredDay <= 31)
+        ? preferredDay
+        : (d <= 28 ? d + 1 : 1);
+    const maxDays = new Date(Date.UTC(prevY, prevM, 0)).getUTCDate();
+    const finalDay = Math.min(dayToUse, maxDays);
+    return `${prevY}-${String(prevM).padStart(2, '0')}-${String(finalDay).padStart(2, '0')}`;
+};
+
 // ───────────────────────── records ─────────────────────────
 
 export const statementId = (account, summary) =>
@@ -41,8 +65,15 @@ export const statementId = (account, summary) =>
 export const makeStatementRecord = (summary, { account, fileName = '', importedAt = '' } = {}) => {
     let periodStart = isIso(summary.periodStart) ? summary.periodStart : null;
     const periodEnd = isIso(summary.periodEnd) ? summary.periodEnd : null;
-    // A card cycle is about a month; a wildly longer "period" is a misread header, don't trust it.
-    if (summary.kind === 'card' && periodStart && periodEnd && daysBetween(periodStart, periodEnd) > 62) periodStart = null;
+    // A card cycle is about a month: align multi-month or inception ranges to the monthly cycle ending on periodEnd
+    if (summary.kind === 'card' && periodEnd) {
+        if (periodStart && daysBetween(periodStart, periodEnd) > 62) {
+            const startDay = Number(periodStart.slice(8, 10));
+            periodStart = cycleStartFor(periodEnd, startDay);
+        } else if (!periodStart) {
+            periodStart = cycleStartFor(periodEnd);
+        }
+    }
     return {
         id: statementId(account, summary),
         account,

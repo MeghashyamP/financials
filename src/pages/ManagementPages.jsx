@@ -1717,7 +1717,7 @@ export const DocumentsPage = ({ documents, transactions, settings, onSyncFolder,
 
     // Each file's statement period (first → last date), and the list ordered by it (oldest first)
     const documentRows = React.useMemo(() => {
-        const periods = buildDocumentPeriods(settings?.statements, transactions);
+        const periods = buildDocumentPeriods(settings?.statements, transactions, documents);
         return [...(documents || [])]
             .map(d => ({ ...d, period: periods.get(d.id) || null }))
             .sort(compareByPeriod);
