@@ -21,7 +21,7 @@ export const DEFAULT_CATEGORIES = [
     "Food & Drinks - Bakery 🥐",
     "Food & Drinks - Cafes 🧋",
     "Food & Drinks - Date 👩‍❤️‍👨",
-    "Food & Drinks - Dineout 🍽️",
+    "Food & Drinks - Dineout 🥘",
     "Food & Drinks - Others ⚙️",
 
     // 2. Groceries

@@ -335,7 +335,7 @@ export const TransactionsPage = ({
             ) : (
                 <div className="table-responsive" style={{ height: 'calc(100vh - 170px)', display: 'flex', flexDirection: 'column' }}>
                     <div style={{ flex: 1, height: '100%', overflowY: 'auto', overflowX: 'auto', paddingRight: '6px', scrollbarGutter: 'stable' }}>
-                        <table className="table" style={{ width: '100%', tableLayout: 'fixed', borderCollapse: 'collapse' }}>
+                        <table className="table tx-table" style={{ width: '100%', tableLayout: 'fixed', borderCollapse: 'collapse' }}>
                             <colgroup>
                                 <col style={{ width: '120px' }} />
                                 <col style={{ width: 'auto' }} />
@@ -360,8 +360,8 @@ export const TransactionsPage = ({
 
                                     return (
                                         <tr key={t.id}>
-                                            <td style={{ fontSize: '0.82rem', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{formatDate(t.date, settings.dateFormat)}</td>
-                                            <td>
+                                            <td className="tx-cell-date" style={{ fontSize: '0.82rem', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{formatDate(t.date, settings.dateFormat)}</td>
+                                            <td className="tx-cell-narr">
                                                 <div style={{ fontWeight: 500, fontSize: '0.88rem' }}>
                                                     {highlightText(t.narration || t.merchant, searchWords)}
                                                     {t.receipt === 1 && (
@@ -394,7 +394,7 @@ export const TransactionsPage = ({
                                                 )}
                                             </td>
 
-                                            <td style={{ textAlign: 'center' }}>
+                                            <td className="tx-cell-cat" style={{ textAlign: 'center' }}>
                                                 <div
                                                     className="category-cell-clickable"
                                                     onClick={() => setCategoryPickerTx(t)}
@@ -408,9 +408,9 @@ export const TransactionsPage = ({
                                                 </div>
                                             </td>
 
-                                            <td style={{ fontSize: '0.82rem', textAlign: 'center' }}>{highlightText(t.account, searchWords)}</td>
+                                            <td className="tx-cell-acct" style={{ fontSize: '0.82rem', textAlign: 'center' }}>{highlightText(t.account, searchWords)}</td>
 
-                                            <td>
+                                            <td className="tx-cell-tags">
                                                 <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'center', gap: '3px' }}>
                                                     {(t.tags || []).map(tag => {
                                                         const foundTag = (tags || []).find(tg => tg.name.toLowerCase() === tag.toLowerCase());
@@ -434,15 +434,15 @@ export const TransactionsPage = ({
                                                 </div>
                                             </td>
 
-                                            <td style={{ fontWeight: 600, color: isNeutralTx ? "var(--info)" : (isIncomeTx ? "var(--success)" : "var(--danger)"), whiteSpace: 'nowrap', textAlign: 'center' }}>
+                                            <td className="tx-cell-amount" style={{ fontWeight: 600, color: isNeutralTx ? "var(--info)" : (isIncomeTx ? "var(--success)" : "var(--danger)"), whiteSpace: 'nowrap', textAlign: 'center' }}>
                                                 {`${isNeutralTx ? ((t.neutralSign || (t.type === "expense" ? "-" : "+")) === "-" ? "-" : "+") : (isIncomeTx ? "+" : "-")}${formatCurrency(t.amount)}`}
                                             </td>
 
-                                            <td style={{ fontSize: '0.78rem', color: 'var(--text-muted)', maxWidth: '110px', textAlign: 'center' }}>
+                                            <td className={`tx-cell-notes${t.notes ? '' : ' tx-cell-empty'}`} style={{ fontSize: '0.78rem', color: 'var(--text-muted)', maxWidth: '110px', textAlign: 'center' }}>
                                                 <span title={t.notes || ""}>{t.notes ? highlightText(t.notes.length > 35 ? t.notes.slice(0, 35) + "…" : t.notes, searchWords) : "—"}</span>
                                             </td>
 
-                                            <td style={{ textAlign: 'center', paddingRight: '8px' }}>
+                                            <td className="tx-cell-actions" style={{ textAlign: 'center', paddingRight: '8px' }}>
                                                 <div style={{ display: 'flex', gap: '4px', alignItems: 'center', justifyContent: 'center' }}>
                                                     <button
                                                         className="btn btn-secondary btn-sm"

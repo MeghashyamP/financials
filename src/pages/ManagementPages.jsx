@@ -1,4 +1,5 @@
 import React from 'react';
+import { buildDocumentPeriods, compareByPeriod } from '../services/documentPeriods.js';
 import { AccountsSetup } from '../components/AccountsSetup.jsx';
 import { StatementHealth } from '../components/StatementHealth.jsx';
 import { LearnedMerchants } from '../components/MerchantReview.jsx';
@@ -1714,6 +1715,14 @@ export const DocumentsPage = ({ documents, transactions, settings, onSyncFolder,
     const [docToDelete, setDocToDelete] = React.useState(null);
     const [deleteStep, setDeleteStep] = React.useState(1);
 
+    // Each file's statement period (first → last date), and the list ordered by it (oldest first)
+    const documentRows = React.useMemo(() => {
+        const periods = buildDocumentPeriods(settings?.statements, transactions);
+        return [...(documents || [])]
+            .map(d => ({ ...d, period: periods.get(d.id) || null }))
+            .sort(compareByPeriod);
+    }, [documents, transactions, settings?.statements]);
+
     const handleManualUpload = async (e) => {
         const files = e.target.files;
         if (!files || files.length === 0) return;
@@ -1832,12 +1841,13 @@ export const DocumentsPage = ({ documents, transactions, settings, onSyncFolder,
                                     <th>Source</th>
                                     <th>Status</th>
                                     <th style={{ textAlign: 'center' }}>Transactions</th>
+                                    <th>Statement Period</th>
                                     <th>Uploaded Date & Time</th>
                                     <th style={{ width: '60px' }}></th>
                                 </tr>
                             </thead>
                             <tbody>
-                                {documents.map(d => {
+                                {documentRows.map(d => {
                                     const count = transactions ? transactions.filter(t => t.documentId === d.id).length : 0;
                                     return (
                                         <tr key={d.id}>
@@ -1872,6 +1882,13 @@ export const DocumentsPage = ({ documents, transactions, settings, onSyncFolder,
                                                 ) : (
                                                     <span style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>0 txns</span>
                                                 )}
+                                            </td>
+                                            <td style={{ whiteSpace: 'nowrap', fontWeight: 500 }}>
+                                                {d.period && (d.period.start || d.period.end)
+                                                    ? (d.period.start && d.period.end && d.period.start !== d.period.end
+                                                        ? `${formatDate(d.period.start, settings.dateFormat)} → ${formatDate(d.period.end, settings.dateFormat)}`
+                                                        : formatDate(d.period.start || d.period.end, settings.dateFormat))
+                                                    : <span style={{ color: 'var(--text-muted)' }}>—</span>}
                                             </td>
                                             <td>{formatDateTime(d.createdAt, settings.dateFormat)}</td>
                                             <td style={{ textAlign: 'right' }}>

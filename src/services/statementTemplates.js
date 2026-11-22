@@ -241,10 +241,31 @@ const parseSbiCard = (lines) => {
     const mask = (text.match(/(X{2,4}(?:\s+X{2,4})*\s*X*\d{2,4})/) || [])[1] || '';
 
     const rows = [];
+    let prevRow = null;   // last dated row, and the line it came from
+    let prevRowLine = null;
     for (const line of lines) {
         const first = line.items[0];
         const dm = first && String(first.str).match(/^(\d{1,2}) ([A-Za-z]{3}) (\d{2,4})$/);
-        if (!dm) continue;
+        if (!dm) {
+            // A tax line printed straight under its fee ("IGST DB @ 18.00%   90.00  D") carries no date of its own:
+            // it belongs to the row above and shares its date. Without it the debits fall short of the statement.
+            const lastItem = line.items[line.items.length - 1];
+            const taxMoney = moneyTokens(line);
+            if (prevRow && prevRowLine && line.page === prevRowLine.page && (prevRowLine.y - line.y) < 16
+                && /^(IGST|CGST|SGST|UTGST|GST|CESS)\b/i.test(String(first && first.str).trim())
+                && lastItem && SBI_FLAGS.has(String(lastItem.str).trim()) && taxMoney.length) {
+                const amt = taxMoney[taxMoney.length - 1];
+                const flagT = String(lastItem.str).trim();
+                const descT = line.items.filter((i) => i !== lastItem && i !== amt).map((i) => String(i.str).trim()).join(' ').replace(/\s+/g, ' ').trim();
+                const taxRow = {
+                    date: prevRow.date, description: descT, amount: r2(toNum(amt.str)),
+                    direction: (flagT === 'C' || flagT === 'T') ? 'credit' : 'debit', flag: flagT, refId: '', page: line.page
+                };
+                rows.push(taxRow);
+                prevRowLine = line;   // so a following tax line (e.g. CGST then SGST) is picked up too
+            }
+            continue;
+        }
         const last = line.items[line.items.length - 1];
         const flag = String(last.str).trim();
         if (!SBI_FLAGS.has(flag)) continue;
@@ -263,6 +284,8 @@ const parseSbiCard = (lines) => {
             refId: '',
             page: line.page
         });
+        prevRow = rows[rows.length - 1];
+        prevRowLine = line;
     }
 
     const meta = {
@@ -461,7 +484,11 @@ const parseHdfcSavings = (lines) => {
 const parseIciciSavings = (lines) => {
     const text = lines.map((l) => l.text).join('\n');
     let hdr = null; // { partX, depR, wdrR }
-    let opening = null; let totals = null;
+    let opening = null;
+    // ICICI prints a "Total:" row under the table on EVERY page (a page subtotal), not just once at the end,
+    // so each one is collected and the page subtotals are summed after the loop.
+    const pageTotals = [];
+    let afterTotal = false;   // between a page's Total row and the next page's table
     const rows = [];
     let pending = [];     // narration lines seen since the last date row
     let prevRow = null;   // last transaction row (receives the "below" half of its narration)
@@ -481,16 +508,24 @@ const parseIciciSavings = (lines) => {
         const dep = line.items.find((it) => /^DEPOSITS$/i.test(String(it.str).trim()));
         const wdr = line.items.find((it) => /^WITHDRAWALS$/i.test(String(it.str).trim()));
         const part = line.items.find((it) => /^PARTICULARS$/i.test(String(it.str).trim()));
-        if (dep && wdr && part) { hdr = { partX: part.x, depR: rightEdge(dep), wdrR: rightEdge(wdr) }; flush(null); prevRow = null; continue; }
+        if (dep && wdr && part) { hdr = { partX: part.x, depR: rightEdge(dep), wdrR: rightEdge(wdr) }; flush(null); prevRow = null; afterTotal = false; continue; }
         if (!hdr) continue;
         const first = line.items[0];
         if (first && /^Total:?$/i.test(String(first.str).trim())) {
+            // End of this page's table. Do NOT stop: the statement may continue on the next page.
             flush(null);
             const m = moneyTokens(line).map((t) => toNum(t.str));
-            if (m.length >= 3) totals = m;
-            break;
+            if (m.length >= 3) pageTotals.push(m);
+            prevRow = null; pending = []; afterTotal = true;
+            continue;
         }
         const isRow = first && /^\d{2}-\d{2}-\d{4}$/.test(String(first.str).trim());
+        // After a Total row only a new transaction row (or a repeated table header, handled above) restarts the
+        // table; everything else (nominee info, legends, terms) is ignored so it can't leak into a narration.
+        if (afterTotal) {
+            if (!isRow) continue;
+            afterTotal = false;
+        }
         if (isRow) {
             const money = moneyTokens(line);
             if (line.items.some((it) => /^B\/F$/i.test(String(it.str).trim()))) {
@@ -526,6 +561,10 @@ const parseIciciSavings = (lines) => {
         delete r.parts; delete r.above;
     });
 
+    // Whole-statement anchors = sum of the page subtotals; closing balance is the last page's.
+    const totals = pageTotals.length
+        ? [r2(pageTotals.reduce((x, m) => x + m[0], 0)), r2(pageTotals.reduce((x, m) => x + m[1], 0)), pageTotals[pageTotals.length - 1][2]]
+        : null;
     const acct = (text.match(/Statement of Transactions in Savings\s*Account\s*([X\d]+)/i) || text.match(/Savings A\/c\s*([X\d]+)/i) || [])[1] || '';
     const per = text.match(/period\s+([A-Za-z]+ \d{1,2}, \d{4})\s*-\s*([A-Za-z]+ \d{1,2}, \d{4})/i);
     return {

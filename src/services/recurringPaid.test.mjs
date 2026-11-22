@@ -351,7 +351,7 @@ test('filtering overdue items by selectedDate (dueDate <= selectedDate) shows al
 });
 
 test('DEFAULT_CATEGORIES includes Food & Drinks - Dineout', () => {
-    assert.ok(DEFAULT_CATEGORIES.includes('Food & Drinks - Dineout 🍽️'), 'DEFAULT_CATEGORIES must include Food & Drinks - Dineout');
+    assert.ok(DEFAULT_CATEGORIES.includes('Food & Drinks - Dineout 🥘'), 'DEFAULT_CATEGORIES must include Food & Drinks - Dineout');
 });
 
 test('candidate transactions for mapping only show same main category or same price (including neutral)', () => {

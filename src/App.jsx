@@ -1,5 +1,7 @@
 import React from 'react';
 import { TxColumnHeaders } from './components/TxColumnHeaders.jsx';
+import { buildDocumentPeriods, compareByPeriod } from './services/documentPeriods.js';
+import { DocumentFilterModal } from './components/DocumentFilterModal.jsx';
 import {
     Icon, DEFAULT_CATEGORIES, formatCurrencyVal, calculatePeriodDateRange,
     detectRecurringTransactions, processImportedTransaction, useEscapeKey,
@@ -390,6 +392,7 @@ const AppInner = ({ privacy }) => {
     const [txAmountFilter, setTxAmountFilter] = React.useState("");
     const [txNotesFilter, setTxNotesFilter] = React.useState("");
     const [txDocumentFilter, setTxDocumentFilter] = React.useState("all");
+    const [showDocFilter, setShowDocFilter] = React.useState(false);
     const [activeTxPopover, setActiveTxPopover] = React.useState(null);
     const [txCustomFromDate, setTxCustomFromDate] = React.useState("");
     const [txCustomToDate, setTxCustomToDate] = React.useState("");
@@ -433,18 +436,30 @@ const AppInner = ({ privacy }) => {
                 }
             }
         });
+        const periods = buildDocumentPeriods(settings?.statements, transactions);
         const list = Array.from(docMap.values()).map(doc => ({
             ...doc,
-            count: counts.get(doc.id) || 0
+            count: counts.get(doc.id) || 0,
+            period: periods.get(doc.id) || null
         }));
-        list.sort((a, b) => {
-            const timeA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
-            const timeB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
-            if (timeA !== timeB) return timeA - timeB;
-            return (a.filename || "").localeCompare(b.filename || "");
-        });
+        // Oldest statement period first; documents without a period go last
+        list.sort(compareByPeriod);
         return list;
     }, [documents, settings?.statements, transactions]);
+
+    // "Clear Filters" button: anything narrowing the Transactions list counts (search, column filters, document, dates).
+    const txPeriodIsDefault = ["all_time", "all"].includes(String(pagePeriods.transactions || "all_time").toLowerCase().replace(/-/g, "_"));
+    const hasActiveTxFilters = !!(txSearch.trim() || txNarrationFilter || txAmountFilter || txNotesFilter
+        || txCategoryFilter.length || txAccountFilter.length || txTagFilter.length || txTypeFilter.length
+        || txDocumentFilter !== "all" || !txPeriodIsDefault);
+    const clearAllTxFilters = () => {
+        setTxSearch(""); setTxNarrationFilter(""); setTxAmountFilter(""); setTxNotesFilter("");
+        setTxCategoryFilter([]); setTxAccountFilter([]); setTxTagFilter([]); setTxTypeFilter([]);
+        setTxDocumentFilter("all");
+        setPagePeriods(prev => ({ ...prev, transactions: "all_time" }));
+        setPageCustomStarts(prev => ({ ...prev, transactions: "" }));
+        setPageCustomEnds(prev => ({ ...prev, transactions: "" }));
+    };
 
     const manualTxCount = React.useMemo(() => {
         return (transactions || []).filter(t => !t.documentId).length;
@@ -1896,13 +1911,13 @@ const AppInner = ({ privacy }) => {
                     {[
                         { id: "dashboard", label: "Dashboard", icon: "home" },
                         { id: "recurring", label: "Recurring", icon: "recurring" },
-                        { id: "transactions", label: "Txns", icon: "transactions" },
+                        { id: "transactions", label: "Transactions", icon: "transactions" },
                         { id: "review", label: "Review", icon: "alert", badge: needsReviewCount },
                         { id: "networth", label: "Net Worth", icon: "networth" },
                         { id: "budgets", label: "Budgets", icon: "budgets" },
                         { id: "goals", label: "Goals", icon: "goals" },
                         { id: "reports", label: "Reports", icon: "subscriptions" },
-                        { id: "documents", label: "Docs", icon: "documents" },
+                        { id: "documents", label: "Documents", icon: "documents" },
                         { id: "rules", label: "Rules", icon: "rules" },
                         { id: "features", label: "Guide", icon: "features" },
                         { id: "settings", label: "Settings", icon: "settings" }
@@ -1913,18 +1928,18 @@ const AppInner = ({ privacy }) => {
                             onClick={() => handleNavigatePage(item.id)}
                         >
                             <Icon name={item.icon} currency={settings.currency} />
-                            <span>{item.label}</span>
+                            <span className="mobile-nav-label">{item.label}</span>
                             {item.badge > 0 && <span className="nav-badge nav-badge-mobile">{item.badge > 99 ? "99+" : item.badge}</span>}
                         </div>
                     ))}
                     <div className="mobile-nav-item" onClick={privacy.togglePrivacy} role="button" aria-pressed={privacy.privacyMode}>
-                        <span style={{ fontSize: '1.1rem', lineHeight: 1 }}>{privacy.privacyMode ? "👁️" : "🙈"}</span>
-                        <span>{privacy.privacyMode ? "Show" : "Hide"}</span>
+                        <span className="mobile-nav-emoji" style={{ fontSize: '1.1rem', lineHeight: 1 }}>{privacy.privacyMode ? "👁️" : "🙈"}</span>
+                        <span className="mobile-nav-label">{privacy.privacyMode ? "Show" : "Hide"}</span>
                     </div>
                     {privacy.lockEnabled && (
                         <div className="mobile-nav-item" onClick={privacy.lockNow} role="button">
-                            <span style={{ fontSize: '1.1rem', lineHeight: 1 }}>🔒</span>
-                            <span>Lock</span>
+                            <span className="mobile-nav-emoji" style={{ fontSize: '1.1rem', lineHeight: 1 }}>🔒</span>
+                            <span className="mobile-nav-label">Lock</span>
                         </div>
                     )}
                 </div>
@@ -2435,49 +2450,45 @@ const AppInner = ({ privacy }) => {
                                     </div>
                                 </div>
 
-                                {/* Type Filter */}
-                                <select
-                                    className="form-control"
-                                    style={{ height: '34px', fontSize: '0.83rem', padding: '0 8px', flexShrink: 0, width: '120px' }}
-                                    value={txTypeFilter.length === 1 ? txTypeFilter[0] : (txTypeFilter.length > 1 ? 'multi' : 'all')}
-                                    onChange={(e) => setTxTypeFilter(e.target.value === 'all' || e.target.value === 'multi' ? [] : [e.target.value])}
-                                    title="Filter by Transaction Type"
-                                >
-                                    <option value="all">All Types</option>
-                                    {txTypeFilter.length > 1 && <option value="multi">Multiple types</option>}
-                                    <option value="expense">Outflow</option>
-                                    <option value="income">Inflow</option>
-                                    <option value="neutral">Neutral</option>
-                                </select>
-
-                                {/* Document Filter */}
-                                <select
-                                    className="form-control"
+                                {/* Clear all filters: active only while something is filtered */}
+                                <button
+                                    className="btn btn-secondary"
                                     style={{
-                                        height: '34px',
-                                        fontSize: '0.83rem',
-                                        padding: '0 8px',
-                                        flexShrink: 0,
-                                        maxWidth: '185px',
-                                        fontWeight: txDocumentFilter !== 'all' ? 700 : 400,
-                                        color: txDocumentFilter !== 'all' ? 'var(--primary)' : 'inherit',
-                                        borderColor: txDocumentFilter !== 'all' ? 'var(--primary)' : 'var(--border-color)',
-                                        background: txDocumentFilter !== 'all' ? 'var(--primary-light, #EEF2FF)' : 'var(--card-bg)'
+                                        height: '34px', padding: '0', width: '112px', minWidth: '112px', justifyContent: 'center', flexShrink: 0, fontSize: '0.83rem', whiteSpace: 'nowrap',
+                                        ...(hasActiveTxFilters ? { color: 'var(--primary)', borderColor: 'var(--primary)', fontWeight: 700, background: 'var(--primary-light, #EEF2FF)' } : { opacity: 0.5, cursor: 'not-allowed' })
                                     }}
-                                    value={txDocumentFilter}
-                                    onChange={(e) => setTxDocumentFilter(e.target.value)}
+                                    disabled={!hasActiveTxFilters}
+                                    onClick={clearAllTxFilters}
+                                    title={hasActiveTxFilters ? "Clear all active filters" : "No filters are active"}
+                                >
+                                    Clear Filters
+                                </button>
+
+                                {/* Document Filter: opens a pop-up listing each file with its statement period + upload date */}
+                                <button
+                                    className="btn btn-secondary"
+                                    style={{
+                                        height: '34px', padding: '0 12px', flexShrink: 0, fontSize: '0.83rem', width: '190px', minWidth: '190px', maxWidth: '190px',
+                                        display: 'block', textAlign: 'center', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                                        ...(txDocumentFilter !== 'all' ? { fontWeight: 700, color: 'var(--primary)', borderColor: 'var(--primary)', background: 'var(--primary-light, #EEF2FF)' } : {})
+                                    }}
+                                    onClick={() => setShowDocFilter(true)}
                                     title="Filter transactions by imported document / statement"
                                 >
-                                    <option value="all">📄 All Documents</option>
-                                    {documentOptions.map(doc => (
-                                        <option key={doc.id} value={doc.id}>
-                                            📄 {doc.filename} ({doc.count})
-                                        </option>
-                                    ))}
-                                    {manualTxCount > 0 && (
-                                        <option value="manual">✍️ Manual Entry ({manualTxCount})</option>
-                                    )}
-                                </select>
+                                    {txDocumentFilter === 'all' ? '📄 All Documents'
+                                        : txDocumentFilter === 'manual' ? '✍️ Manual Entry'
+                                        : `📄 ${(documentOptions.find(d => d.id === txDocumentFilter) || {}).filename || 'Selected Document'}`}
+                                </button>
+                                {showDocFilter && (
+                                    <DocumentFilterModal
+                                        options={documentOptions}
+                                        manualCount={manualTxCount}
+                                        selected={txDocumentFilter}
+                                        settings={settings}
+                                        onSelect={(id) => { setTxDocumentFilter(id); setShowDocFilter(false); }}
+                                        onClose={() => setShowDocFilter(false)}
+                                    />
+                                )}
 
                                 {/* Import */}
                                 <button className="btn btn-secondary" style={{ height: '34px', padding: '0 12px', flexShrink: 0, display: 'flex', alignItems: 'center', gap: '5px', fontSize: '0.83rem' }} onClick={() => setShowImportModal(true)}>
