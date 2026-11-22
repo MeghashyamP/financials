@@ -82,23 +82,60 @@ export const hashSyncState = ({ transactions = [], tags = [], rules = [], settin
     return `${str.length}:${(h >>> 0).toString(16)}`;
 };
 
-// In-memory key caching for active session encryption
+// The encryption key (your password) is remembered on this device so you stay signed in and syncing after a restart,
+// a new tab or the installed app being reopened. It sits next to the data it protects (the local database is not
+// encrypted either), and signing out removes it. It never leaves the device.
 let sessionEncryptionKey = null;
+const KEY_STORE = 'fin_enc_key';
+
+const safeStorage = (kind) => { try { return typeof window !== 'undefined' ? window[kind] : null; } catch (e) { return null; } };
 
 export const setSessionEncryptionKey = (passphrase) => {
-    sessionEncryptionKey = passphrase;
-    if (passphrase) {
-        sessionStorage.setItem('fin_enc_key', passphrase);
-    } else {
-        sessionStorage.removeItem('fin_enc_key');
-    }
+    sessionEncryptionKey = passphrase || null;
+    const local = safeStorage('localStorage');
+    const session = safeStorage('sessionStorage');
+    try {
+        if (passphrase) local && local.setItem(KEY_STORE, passphrase);
+        else local && local.removeItem(KEY_STORE);
+        session && session.removeItem(KEY_STORE); // older versions kept it here
+    } catch (e) { /* storage unavailable: the key then only lives in memory */ }
 };
 
 export const getSessionEncryptionKey = () => {
     if (!sessionEncryptionKey) {
-        sessionEncryptionKey = sessionStorage.getItem('fin_enc_key') || null;
+        try {
+            const local = safeStorage('localStorage');
+            const session = safeStorage('sessionStorage');
+            sessionEncryptionKey = (local && local.getItem(KEY_STORE)) || (session && session.getItem(KEY_STORE)) || null;
+            if (sessionEncryptionKey && local && !local.getItem(KEY_STORE)) local.setItem(KEY_STORE, sessionEncryptionKey); // migrate
+        } catch (e) { sessionEncryptionKey = null; }
     }
     return sessionEncryptionKey;
+};
+
+// Which cloud copy this device last downloaded or uploaded: the cloud row's own updated_at text, exactly as the server
+// returned it. If the cloud row differs from this, another device has saved since.
+const VERSION_STORE = 'fin_cloud_version';
+export const getCloudVersion = () => {
+    try { return safeStorage('localStorage')?.getItem(VERSION_STORE) || null; } catch (e) { return null; }
+};
+export const setCloudVersion = (v) => {
+    try {
+        const ls = safeStorage('localStorage');
+        if (ls && v) ls.setItem(VERSION_STORE, String(v)); else if (ls) ls.removeItem(VERSION_STORE);
+    } catch (e) { /* ignore */ }
+};
+export class CloudConflictError extends Error {
+    constructor() { super('Another device saved to the cloud first.'); this.name = 'CloudConflictError'; }
+}
+
+/** Cheap check (no download of the data): when was the cloud copy last saved, by anyone? null = nothing there yet. */
+export const fetchCloudVersion = async () => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return null;
+    const { data, error } = await supabase.from('user_financials').select('updated_at').eq('user_id', user.id).maybeSingle();
+    if (error) throw error;
+    return data ? data.updated_at : null;
 };
 
 // Authentication helpers
@@ -172,6 +209,7 @@ export const signInUser = async (email, password) => {
 
 export const signOutUser = async () => {
     setSessionEncryptionKey(null);
+    setCloudVersion(null);
     const { error } = await supabase.auth.signOut();
     if (error) throw error;
 };
@@ -182,7 +220,9 @@ export const getCurrentUser = async () => {
 };
 
 // Sync state up to Supabase (Encrypted with client AES-GCM 256-bit)
-export const saveUserDataToCloud = async (state, customKey = null) => {
+// `expectVersion` (the cloud version this device last saw, or null if none existed) makes the save conditional: if another
+// device saved in the meantime nothing is overwritten and a CloudConflictError is thrown so the caller can merge first.
+export const saveUserDataToCloud = async (state, customKey = null, { expectVersion } = {}) => {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return null;
 
@@ -217,18 +257,33 @@ export const saveUserDataToCloud = async (state, customKey = null) => {
     // If a recovery kit exists, its public key (kept in settings) seals the current password into the envelope.
     const encryptedPayload = await encryptPayload(plainPayload, encKey, { recoveryPublicKey: (state.settings || {}).recoveryPublicKey || null });
 
-    const { error } = await supabase
-        .from('user_financials')
-        .upsert({
-            user_id: user.id,
-            data: encryptedPayload,
-            updated_at: new Date().toISOString()
-        }, { onConflict: 'user_id' });
-
-    if (error) {
-        console.error("Failed to save data to Supabase:", error);
-        throw error;
+    const savedAt = new Date().toISOString();
+    let saved = null;
+    if (expectVersion === undefined) {
+        const { data: row, error } = await supabase.from('user_financials')
+            .upsert({ user_id: user.id, data: encryptedPayload, updated_at: savedAt }, { onConflict: 'user_id' })
+            .select('updated_at').maybeSingle();
+        if (error) { console.error("Failed to save data to Supabase:", error); throw error; }
+        saved = row;
+    } else if (expectVersion === null) {
+        const { data: row, error } = await supabase.from('user_financials')
+            .insert({ user_id: user.id, data: encryptedPayload, updated_at: savedAt })
+            .select('updated_at').maybeSingle();
+        if (error) {
+            if (error.code === '23505') throw new CloudConflictError();
+            console.error("Failed to save data to Supabase:", error); throw error;
+        }
+        saved = row;
+    } else {
+        const { data: rows, error } = await supabase.from('user_financials')
+            .update({ data: encryptedPayload, updated_at: savedAt })
+            .eq('user_id', user.id).eq('updated_at', expectVersion)
+            .select('updated_at');
+        if (error) { console.error("Failed to save data to Supabase:", error); throw error; }
+        if (!rows || rows.length === 0) throw new CloudConflictError();
+        saved = rows[0];
     }
+    setCloudVersion((saved && saved.updated_at) || savedAt);
     return plainPayload;
 };
 
@@ -276,6 +331,7 @@ export const fetchUserDataFromCloud = async (customKey = null, { recoveryKit = n
     }
 
     if (recoveredViaKit && payload && typeof payload === 'object') payload.recoveredViaKit = true;
+    if (payload && typeof payload === 'object') payload.cloudVersion = data.updated_at;
     return payload;
 };
 
@@ -297,7 +353,8 @@ export const testRecoveryKit = async (recoveryKit) => {
 // Restore cloud state into local IndexedDB
 export const syncCloudToLocal = async (cloudData) => {
     if (!cloudData) return;
-    return await restoreBackup(cloudData, {
+    const version = cloudData.cloudVersion;
+    const result = await restoreBackup(cloudData, {
         initDB,
         saveSettingInDB,
         saveTagInDB,
@@ -305,4 +362,6 @@ export const syncCloudToLocal = async (cloudData) => {
         saveDocumentInDB,
         wipeDatabase
     });
+    if (version) setCloudVersion(version);
+    return result;
 };

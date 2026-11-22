@@ -2317,3 +2317,38 @@
 @media (max-width: 768px) {
     .update-banner { bottom: calc(76px + env(safe-area-inset-bottom, 0px)); }   /* above the bottom tab bar */
 }
+
+        /* Cloud status pill (mobile top bar, always the right-most item) */
+        .sync-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            height: 32px;
+            padding: 0 10px;
+            border-radius: 999px;
+            border: 1px solid var(--border-color);
+            background: var(--card-bg, #fff);
+            color: var(--text-main);
+            font-size: 0.74rem;
+            font-weight: 700;
+            cursor: pointer;
+            white-space: nowrap;
+            flex-shrink: 0;
+        }
+        .sync-badge-dot {
+            width: 9px;
+            height: 9px;
+            border-radius: 50%;
+            background: #94A3B8;
+            flex-shrink: 0;
+        }
+        .sync-badge-ok { border-color: #A7F3D0; background: #ECFDF5; color: #047857; }
+        .sync-badge-ok .sync-badge-dot { background: #10B981; box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.25); }
+        .sync-badge-busy { border-color: #BFDBFE; background: #EFF6FF; color: #1D4ED8; }
+        .sync-badge-busy .sync-badge-dot { background: #3B82F6; animation: sync-badge-pulse 1s ease-in-out infinite; }
+        .sync-badge-warn { border-color: #FDE68A; background: #FFFBEB; color: #B45309; }
+        .sync-badge-warn .sync-badge-dot { background: #F59E0B; }
+        .sync-badge-bad { border-color: #FCA5A5; background: #FEF2F2; color: #B91C1C; }
+        .sync-badge-bad .sync-badge-dot { background: #EF4444; }
+        .sync-badge-off { border-style: dashed; color: var(--text-muted); }
+        @keyframes sync-badge-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }

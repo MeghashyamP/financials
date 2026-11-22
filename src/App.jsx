@@ -28,6 +28,7 @@ import { RecurringPage, DocumentsPage, RulesPage, SettingsPage } from './pages/M
 import { AddEntryModal } from './components/modals/TransactionModals.jsx';
 import { ImportFileModal, CsvMappingDialog, PdfColumnMappingDialog, PdfImportConfirmDialog } from './components/modals/ImportModals.jsx';
 import { AuthModal } from './components/modals/AuthModal.jsx';
+import { SyncBadge } from './components/SyncBadge.jsx';
 import { extractTextFromPDF, parseTransactionsFromPDFText, parseCSVText } from './services/importers.js';
 import { setCategoryMemory } from './categorizer.js';
 import { applyStatementImport } from './services/statementImport.js';
@@ -45,8 +46,13 @@ import { exportBackup } from './services/backup.js';
 import { getGlobalFileHandle, writeStateToLocalFile, restoreGlobalFileHandle } from './services/localFileSync.js';
 import {
     supabase, getCurrentUser, signOutUser, saveUserDataToCloud,
-    getSessionEncryptionKey, hashSyncState, isCloudSyncPaused
+    getSessionEncryptionKey, hashSyncState, isCloudSyncPaused,
+    fetchCloudVersion, getCloudVersion, setCloudVersion, fetchUserDataFromCloud, CloudConflictError
 } from './services/supabaseService.js';
+import { mergeSyncStates, mergeThreeWay, toSyncShape, sameData } from './services/syncMerge.js';
+import { applySyncShape } from './services/syncApply.js';
+import { loadSyncBase, saveSyncBase, getSyncLog, addSyncLog } from './services/syncState.js';
+import { stripLocalOnlySettings } from './services/categories.js';
 
 
 class ModalErrorBoundary extends React.Component {
@@ -564,14 +570,139 @@ const AppInner = ({ privacy }) => {
     const lastSyncedHashRef = React.useRef(null);
 
     // Treat the given state as already in sync (after load, restore or upload).
+    const SYNCED_HASH_KEY = 'fin_synced_hash';
     const markStateAsSynced = (state) => {
-        if (state) lastSyncedHashRef.current = hashSyncState(state);
+        if (!state) return;
+        lastSyncedHashRef.current = hashSyncState(state);
+        try { localStorage.setItem(SYNCED_HASH_KEY, lastSyncedHashRef.current); } catch (e) { /* ignore */ }
+        saveSyncBase(toSyncShape(state, stripLocalOnlySettings)); // the agreed data, for the next three-way merge
     };
+    // At start-up, trust the fingerprint saved at the last sync: edits made offline (or just before the app was closed)
+    // then still count as "not uploaded yet" instead of being taken for the baseline.
+    const markStartupBaseline = (state) => {
+        if (!state) return;
+        let stored = null;
+        try { stored = localStorage.getItem(SYNCED_HASH_KEY); } catch (e) { /* ignore */ }
+        if (stored) lastSyncedHashRef.current = stored; else markStateAsSynced(state);
+    };
+
+    // ── Real two-device sync (phone + laptop) ──
+    // Every device remembers (a) the cloud version it last synced and (b) the data as it was then. A sync run looks at
+    // this device and at the cloud and does the minimum needed:
+    //   nothing changed anywhere            → nothing
+    //   only this device changed            → upload straight away (the save is conditional: it refuses if another
+    //                                         device saved in the meantime, and the run starts again)
+    //   only the cloud changed              → download it
+    //   both changed ("sync first" case)    → tell the user, download, merge three ways (keeps both sides' changes and
+    //                                         real deletions), apply, then upload the merged result
+    const currentUserRef = React.useRef(null);
+    currentUserRef.current = currentUser;
+    const syncingRef = React.useRef(false);
+    const rerunRef = React.useRef(false);
+    const [lastSyncedAt, setLastSyncedAt] = React.useState(null);
+    const [syncLog, setSyncLog] = React.useState(() => getSyncLog());
+    const logSync = (kind, message) => { addSyncLog(kind, message); setSyncLog(getSyncLog()); };
+
+    const syncNow = async (reason = 'check') => {
+        if (isCloudSyncPaused() || !currentUserRef.current) return;
+        if (!getSessionEncryptionKey()) { setCloudSyncStatus("locked"); return; }
+        if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+            setCloudSyncStatus("offline");
+            return;
+        }
+        if (syncingRef.current) { rerunRef.current = true; return; }
+        syncingRef.current = true;
+        try {
+            for (let attempt = 0; attempt < 4; attempt++) {
+                const local = await fetchStateFromDB();
+                const localShape = toSyncShape(local, stripLocalOnlySettings);
+                const localDirty = hashSyncState(local) !== lastSyncedHashRef.current;
+                if (reason === 'edit' && !localDirty && attempt === 0) return;   // nothing to upload: skip the network
+
+                const remote = await fetchCloudVersion();
+                const cloudNewer = remote !== null && remote !== getCloudVersion();
+                if (!cloudNewer && !localDirty) {
+                    setCloudSyncStatus("idle");
+                    setLastSyncedAt(Date.now());
+                    return;
+                }
+                setCloudSyncStatus("syncing");
+
+                let toUpload = localShape;
+                let needUpload = localDirty;
+                let expect = remote;
+                let downloaded = false;
+                if (cloudNewer) {
+                    if (localDirty) {
+                        showToast("Another device changed your data. Syncing first, then your change goes up.", "info");
+                        logSync('merge', "Another device had saved newer changes: downloaded them and merged with this device's edits.");
+                    }
+                    const cloud = await fetchUserDataFromCloud();
+                    if (!cloud || cloud.needsPassword) { setCloudSyncStatus("locked"); return; }
+                    const cloudShape = toSyncShape(cloud);
+                    if (cloudShape.transactions.length === 0 && localShape.transactions.length > 0 && !localDirty) {
+                        // never let an empty cloud copy wipe a device that has data
+                        logSync('error', 'The cloud copy was empty, so it was ignored.');
+                        setCloudSyncStatus("error");
+                        return;
+                    }
+                    const base = await loadSyncBase();
+                    const merged = !localDirty ? cloudShape
+                        : base ? mergeThreeWay(base, localShape, cloudShape)
+                            : toSyncShape(mergeSyncStates(localShape, cloudShape));
+                    await applySyncShape(merged);
+                    await loadState();
+                    downloaded = true;
+                    toUpload = merged;
+                    needUpload = !sameData(merged, cloudShape);
+                    expect = cloud.cloudVersion;
+                    if (!needUpload) setCloudVersion(cloud.cloudVersion);
+                }
+
+                if (needUpload) {
+                    try {
+                        await saveUserDataToCloud(toUpload, null, { expectVersion: expect });
+                    } catch (err) {
+                        if (err instanceof CloudConflictError) {
+                            logSync('conflict', 'Another device saved at the same moment: syncing again.');
+                            continue;
+                        }
+                        throw err;
+                    }
+                    markBackup('cloud');
+                }
+
+                // Success: this state is now the agreed baseline.
+                markStateAsSynced(await fetchStateFromDB());
+                if (downloaded && !localDirty) {
+                    showToast("Updated with the latest changes from your other device.", "success");
+                    logSync('down', 'Downloaded changes from another device.');
+                } else if (needUpload) {
+                    logSync('up', downloaded ? 'Uploaded the merged data.' : 'Uploaded your changes.');
+                }
+                setCloudSyncStatus("idle");
+                setLastSyncedAt(Date.now());
+                return;
+            }
+            setCloudSyncStatus("error");
+            logSync('error', 'Could not finish syncing after several attempts; it will retry.');
+        } catch (err) {
+            console.warn("Cloud sync failed:", err);
+            logSync('error', `Sync failed: ${err.message || err}`);
+            setCloudSyncStatus("error");
+        } finally {
+            syncingRef.current = false;
+            if (rerunRef.current) { rerunRef.current = false; setTimeout(() => syncNowRef.current('check'), 300); }
+        }
+    };
+    const syncNowRef = React.useRef(syncNow);
+    syncNowRef.current = syncNow;
+
 
     React.useEffect(() => {
         // The state as loaded is the baseline: opening the app must not push this
         // device's copy over the cloud; only changes made here should be uploaded.
-        loadState().then(markStateAsSynced);
+        loadState().then(markStartupBaseline);
         requestStoragePersistence();
 
         // Restore local project file handle from IndexedDB if available
@@ -638,36 +769,10 @@ const AppInner = ({ privacy }) => {
         };
     }, []);
 
-    // Automatic Cloud Sync when logged in (debounced, content-based change detection)
+    // Changes made on this device go up almost immediately (a short pause groups quick successive edits).
     React.useEffect(() => {
         if (loading || !currentUser || lastSyncedHashRef.current === null) return;
-
-        const timer = setTimeout(async () => {
-            if (isCloudSyncPaused()) return;
-            const snapshot = { transactions, tags, rules, settings, documents };
-            const currentHash = hashSyncState(snapshot);
-            if (currentHash === lastSyncedHashRef.current) return;
-
-            // The encryption key lives in sessionStorage, so a new tab or browser restart
-            // keeps the Supabase session but loses the key. Pause instead of failing.
-            if (!getSessionEncryptionKey()) {
-                setCloudSyncStatus("locked");
-                return;
-            }
-
-            setCloudSyncStatus("syncing");
-            try {
-                await saveUserDataToCloud(snapshot);
-                lastSyncedHashRef.current = currentHash;
-                markBackup('cloud');
-                setCloudSyncStatus("synced");
-                setTimeout(() => setCloudSyncStatus(s => (s === "synced" ? "idle" : s)), 2500);
-            } catch (err) {
-                console.error("Auto cloud sync error:", err);
-                setCloudSyncStatus("error");
-            }
-        }, 1500);
-
+        const timer = setTimeout(() => syncNowRef.current('edit'), 400);
         return () => clearTimeout(timer);
     }, [transactions, tags, rules, settings, documents, currentUser, loading]);
 
@@ -675,6 +780,37 @@ const AppInner = ({ privacy }) => {
     React.useEffect(() => {
         if (currentUser && !getSessionEncryptionKey()) setCloudSyncStatus("locked");
     }, [currentUser]);
+
+    // Changes made on the other device come in: instantly through the cloud's live channel (when enabled for the table),
+    // and also whenever the app opens, comes to the front, reconnects, and every 20 seconds while it is visible.
+    React.useEffect(() => {
+        if (loading || !currentUser || lastSyncedHashRef.current === null) return;
+        const check = () => { if (document.visibilityState === 'visible') syncNowRef.current('check'); };
+        const onOnline = () => syncNowRef.current('check');
+        const onOffline = () => setCloudSyncStatus("offline");
+        check();
+        document.addEventListener('visibilitychange', check);
+        window.addEventListener('focus', check);
+        window.addEventListener('online', onOnline);
+        window.addEventListener('offline', onOffline);
+        const timer = setInterval(check, 20000);
+        let channel = null;
+        try {
+            channel = supabase.channel(`fin-sync-${currentUser.id}`)
+                .on('postgres_changes', { event: '*', schema: 'public', table: 'user_financials', filter: `user_id=eq.${currentUser.id}` },
+                    () => syncNowRef.current('remote'))
+                .subscribe();
+        } catch (e) { console.warn('Live sync channel unavailable (polling still works):', e); }
+        return () => {
+            clearInterval(timer);
+            document.removeEventListener('visibilitychange', check);
+            window.removeEventListener('focus', check);
+            window.removeEventListener('online', onOnline);
+            window.removeEventListener('offline', onOffline);
+            if (channel) supabase.removeChannel(channel);
+        };
+    }, [currentUser, loading]);
+
 
     // Real-time automatic sync to linked local project file when storage mode is project_file
     const isAutoSyncInitial = React.useRef(true);
@@ -1816,7 +1952,7 @@ const AppInner = ({ privacy }) => {
                                                 Sync paused: sign in
                                             </span>
                                         ) : (
-                                            <span>{cloudSyncStatus === "syncing" ? "Syncing..." : cloudSyncStatus === "synced" ? "Synced ✓" : cloudSyncStatus === "error" ? "Sync failed" : "Cloud Account"}</span>
+                                            <span>{cloudSyncStatus === "syncing" ? "Syncing..." : cloudSyncStatus === "error" ? "Sync failed" : cloudSyncStatus === "offline" ? "Offline" : "Synced ✓"}</span>
                                         )}
                                     </div>
                                     <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis' }} title={currentUser.email}>
@@ -1890,14 +2026,6 @@ const AppInner = ({ privacy }) => {
                     <span style={{ fontSize: '1.15rem' }}>Financials</span>
                 </div>
                 <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                    <button
-                        className="btn btn-secondary btn-sm"
-                        onClick={() => setShowAuthModal(true)}
-                        title={currentUser ? currentUser.email : "Cloud Account"}
-                        style={{ display: 'flex', alignItems: 'center', gap: '4px' }}
-                    >
-                        <span>☁️</span>
-                    </button>
                     {activePage === "documents" && (
                         <button className="btn btn-secondary btn-sm" onClick={handleSyncLocalFolder} title="Sync Folder">
                             <Icon name="sync" />
@@ -1918,6 +2046,12 @@ const AppInner = ({ privacy }) => {
                             <Icon name="plus" />
                         </button>
                     )}
+                    <SyncBadge
+                        user={currentUser}
+                        status={cloudSyncStatus}
+                        lastSyncedAt={lastSyncedAt}
+                        onClick={() => setShowAuthModal(true)}
+                    />
                 </div>
             </div>
 
@@ -2813,6 +2947,9 @@ const AppInner = ({ privacy }) => {
                             loadState={loadState}
                             currentUser={currentUser}
                             cloudSyncStatus={cloudSyncStatus}
+                            syncLog={syncLog}
+                            lastSyncedAt={lastSyncedAt}
+                            onSyncNow={() => syncNowRef.current('manual')}
                             onOpenCloudAuth={() => setShowAuthModal(true)}
                             onSignOutCloud={async () => {
                                 try {

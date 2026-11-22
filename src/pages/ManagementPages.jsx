@@ -2019,6 +2019,9 @@ export const SettingsPage = ({
     loadState,
     currentUser,
     cloudSyncStatus,
+    syncLog = [],
+    lastSyncedAt = null,
+    onSyncNow,
     onOpenCloudAuth,
     onSignOutCloud
 }) => {
@@ -3342,7 +3345,7 @@ export const SettingsPage = ({
                                 {currentUser ? (
                                     <span className="status-pill status-pill-success">
                                         <span className="pulse-dot pulse-dot-success"></span>
-                                        {cloudSyncStatus === "syncing" ? "Syncing..." : cloudSyncStatus === "synced" ? "Synced ✓" : cloudSyncStatus === "locked" ? "Paused: sign in again" : cloudSyncStatus === "error" ? "Sync failed" : "Connected"}
+                                        {cloudSyncStatus === "syncing" ? "Syncing..." : cloudSyncStatus === "locked" ? "Paused: sign in again" : cloudSyncStatus === "error" ? "Sync failed" : cloudSyncStatus === "offline" ? "Offline" : "Synced ✓"}
                                     </span>
                                 ) : (
                                     <span className="status-pill" style={{ background: '#F1F5F9', color: '#475569', border: '1px solid #E2E8F0' }}>
@@ -3378,6 +3381,27 @@ export const SettingsPage = ({
                                 </div>
                             </div>
                         </div>
+
+                        {currentUser && (
+                            <div style={{ marginBottom: '12px' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' }}>
+                                    <span style={{ fontSize: '0.76rem', fontWeight: 700 }}>
+                                        Sync log{lastSyncedAt ? ` · last checked ${new Date(lastSyncedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}` : ''}
+                                    </span>
+                                    <button type="button" className="btn btn-secondary btn-sm" onClick={onSyncNow}>Sync now</button>
+                                </div>
+                                <div style={{ maxHeight: '140px', overflowY: 'auto', fontSize: '0.72rem', border: '1px solid var(--border-color)', borderRadius: '8px', background: 'var(--bg-color)' }}>
+                                    {syncLog.length === 0 ? (
+                                        <div style={{ padding: '8px 10px', color: 'var(--text-muted)' }}>Nothing yet. Changes appear here as they sync.</div>
+                                    ) : syncLog.map((e, i) => (
+                                        <div key={i} style={{ padding: '5px 10px', borderTop: i ? '1px solid var(--border-color)' : 'none', display: 'flex', gap: '8px' }}>
+                                            <span style={{ color: 'var(--text-muted)', flexShrink: 0 }}>{new Date(e.t).toLocaleString([], { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>
+                                            <span style={{ color: e.kind === 'error' ? 'var(--danger, #B91C1C)' : e.kind === 'conflict' || e.kind === 'merge' ? 'var(--warning, #B45309)' : 'var(--text-main)' }}>{e.message}</span>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
 
                         <div style={{ display: 'flex', gap: '10px' }}>
                             {currentUser ? (
